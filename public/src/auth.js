@@ -14,7 +14,83 @@
 
 import { validateUsernameSync } from "./username-validator-client.js";
 
+const AUTH = "/api/auth";
+
+// ---- HTTP helpers -------------------------------------------------------
+
+async function signUpEmail({ email, password, username, deviceId }) {
+  const res = await fetch(`${AUTH}/sign-up/email`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email, password, name: username, username, deviceId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw Object.assign(new Error("signup failed"), {
+      status: res.status,
+      code: body.code ?? body.error ?? body.message,
+    });
+  }
+  return res.json().catch(() => ({}));
+}
+
+async function signInEmail({ email, password }) {
+  const res = await fetch(`${AUTH}/sign-in/email`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw Object.assign(new Error("signin failed"), {
+      status: res.status,
+      code: body.code ?? body.error ?? body.message,
+    });
+  }
+  return res.json().catch(() => ({}));
+}
+
+async function signOut() {
+  await fetch(`${AUTH}/sign-out`, {
+    method: "POST",
+    credentials: "include",
+  });
+}
+
 // ---- Pure helpers (testable) -------------------------------------------
+
+/**
+ * Map a server error code (or username-validator reason) into user-facing
+ * copy. Kept pure for unit testing.
+ * @param {string|undefined} code
+ */
+export function mapAuthError(code) {
+  switch (code) {
+    case "taken":
+    case "USERNAME_IS_ALREADY_TAKEN":
+      return "That username is already taken.";
+    case "banned":
+      return "That username isn't allowed.";
+    case "reserved":
+      return "That username is reserved.";
+    case "invalid_format":
+      return "Use 3-20 letters/digits/underscore, starting with a letter.";
+    case "USER_ALREADY_EXISTS":
+    case "EMAIL_ALREADY_EXISTS":
+    case "email_in_use":
+      return "An account with that email already exists.";
+    case "INVALID_EMAIL_OR_PASSWORD":
+    case "INVALID_PASSWORD":
+    case "INVALID_EMAIL":
+      return "Wrong email or password.";
+    case "PASSWORD_TOO_SHORT":
+      return "Password must be at least 8 characters.";
+    default:
+      return "Something went wrong. Please try again.";
+  }
+}
 
 /**
  * Format the inline username status string given a validator result.
@@ -82,6 +158,13 @@ function clearAllErrors(scope) {
     el.textContent = "";
   });
   scope.querySelectorAll(".auth-success").forEach((el) => (el.hidden = true));
+}
+
+function showError(formEl, message) {
+  const err = formEl.querySelector(".auth-error");
+  if (!err) return;
+  err.textContent = message;
+  err.hidden = false;
 }
 
 // ---- Markup ------------------------------------------------------------
@@ -155,9 +238,8 @@ const HTML = `
 // ---- Wiring ------------------------------------------------------------
 
 /**
- * Mount the auth modal markup into a host element and wire the open/close
- * lifecycle. Submit handlers and external auth flows are wired in M2/M3.
- * Idempotent — second call is a no-op.
+ * Mount the auth modal markup into a host element and wire all event
+ * listeners. Idempotent — second call is a no-op.
  * @param {HTMLElement} host
  */
 export function mountAuthModal(host) {
@@ -188,9 +270,94 @@ export function mountAuthModal(host) {
     btn.addEventListener("click", () => setTab(btn.dataset.tab));
   });
 
+  // ---- Inline username validation (signup pane) ---
+  const signupForm = modalEl.querySelector("#auth-pane-signup");
+  const signupUsername = signupForm.querySelector("input[name='username']");
+  const signupUsernameStatus = signupForm.querySelector(".auth-username-status");
+  signupUsername.addEventListener("input", () => {
+    const { text, ok } = formatUsernameStatus(signupUsername.value);
+    signupUsernameStatus.textContent = text;
+    signupUsernameStatus.classList.toggle("ok", ok);
+    signupUsernameStatus.classList.toggle("bad", !ok && !!signupUsername.value);
+  });
+
+  // ---- Sign-up submit ---
+  signupForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearAllErrors(modalEl);
+    const fd = new FormData(signupForm);
+    const email = String(fd.get("email") || "").trim();
+    const emailConfirm = String(fd.get("email_confirm") || "").trim();
+    const password = String(fd.get("password") || "");
+    const username = String(fd.get("username") || "").trim();
+
+    if (email !== emailConfirm) {
+      showError(signupForm, "Emails don't match.");
+      return;
+    }
+    if (password.length < 8) {
+      showError(signupForm, mapAuthError("PASSWORD_TOO_SHORT"));
+      return;
+    }
+    const usernameCheck = validateUsernameSync(username);
+    if (!usernameCheck.valid) {
+      showError(signupForm, mapAuthError(usernameCheck.reason));
+      return;
+    }
+
+    const submitBtn = signupForm.querySelector("button[type='submit']");
+    submitBtn.disabled = true;
+    try {
+      await signUpEmail({
+        email,
+        password,
+        username,
+        deviceId: localStorage.getItem("deviceId"),
+      });
+      closeModal();
+      document.dispatchEvent(new Event("auth-changed"));
+    } catch (err) {
+      showError(signupForm, mapAuthError(err.code));
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  // ---- Sign-in submit ---
+  const signinForm = modalEl.querySelector("#auth-pane-signin");
+  signinForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearAllErrors(modalEl);
+    const fd = new FormData(signinForm);
+    const email = String(fd.get("email") || "").trim();
+    const password = String(fd.get("password") || "");
+    const submitBtn = signinForm.querySelector("button[type='submit']");
+    submitBtn.disabled = true;
+    try {
+      await signInEmail({ email, password });
+      closeModal();
+      document.dispatchEvent(new Event("auth-changed"));
+    } catch (err) {
+      if (err.status === 401) {
+        showError(signinForm, "Wrong email or password.");
+      } else {
+        showError(signinForm, mapAuthError(err.code));
+      }
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
   // ---- External events from header ---
   document.addEventListener("open-signup", () => openModal("signup"));
   document.addEventListener("open-signin", () => openModal("signin"));
+  document.addEventListener("request-signout", async () => {
+    try {
+      await signOut();
+    } finally {
+      document.dispatchEvent(new Event("auth-changed"));
+    }
+  });
 
   mounted = true;
 }
