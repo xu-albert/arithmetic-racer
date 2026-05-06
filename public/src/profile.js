@@ -8,7 +8,8 @@
 // Pure helpers (fmtMs, computeHeadlineMs, fmtPct, etc.) are exported via the
 // `_internals` object for unit testing — see profile.test.js.
 
-import { getMe } from "./stats-api.js";
+import { getMe, setUsername } from "./stats-api.js";
+import { validateUsernameSync } from "./username-validator-client.js";
 
 // ---------- pure helpers ----------
 
@@ -134,15 +135,6 @@ function errorText(code) {
   }
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 // ---------- DOM templates ----------
 
 const PROFILE_HTML = `
@@ -198,6 +190,18 @@ const PROFILE_HTML = `
       <p class="profile__empty" id="profile-empty" hidden>Race a few times and your stats will show up here.</p>
     </section>
   </div>
+
+  <div class="profile__rename" id="profile-rename" hidden>
+    <div class="profile__rename-card">
+      <h3>Change username</h3>
+      <input type="text" id="profile-rename-input" maxlength="20" autocomplete="off" />
+      <span class="profile__rename-status"></span>
+      <div class="profile__rename-actions">
+        <button id="profile-rename-cancel" type="button">Cancel</button>
+        <button id="profile-rename-save" type="button">Save</button>
+      </div>
+    </div>
+  </div>
 `;
 
 // ---------- mount ----------
@@ -206,7 +210,6 @@ const MOUNT_FLAG = "__profileMounted";
 
 /**
  * Mount the profile screen into the host element. Idempotent.
- * Listens for `open-profile` (header dispatch) and `auth-changed` (refresh).
  *
  * @param {HTMLElement} host
  */
@@ -223,8 +226,7 @@ export function mountProfile(host) {
 
   // ---- screen visibility ----
   function showProfile() {
-    // Hide the other top-level screens. We don't assume their internal
-    // structure — just toggle the .hidden class the same way they do.
+    // Hide siblings that look like screens; we only know the conventional ids.
     for (const id of ["lobby", "race", "results"]) {
       const el = document.getElementById(id);
       if (el) el.classList.add("hidden");
@@ -322,6 +324,67 @@ export function mountProfile(host) {
     return inflight;
   }
 
+  // ---- rename overlay ----
+  const overlay = $("#profile-rename");
+  const renameInput = $("#profile-rename-input");
+  const renameStatus = overlay.querySelector(".profile__rename-status");
+  const renameSave = $("#profile-rename-save");
+  const renameCancel = $("#profile-rename-cancel");
+
+  function setStatus(kind, message) {
+    renameStatus.textContent = message || "";
+    renameStatus.classList.remove("ok", "bad");
+    if (kind) renameStatus.classList.add(kind);
+  }
+
+  function openRename() {
+    const current = $("#profile-username-display").textContent.trim();
+    renameInput.value = current === "—" ? "" : current;
+    setStatus(null, "");
+    overlay.hidden = false;
+    // Focus & select after the overlay paints.
+    setTimeout(() => {
+      renameInput.focus();
+      renameInput.select();
+    }, 0);
+  }
+  function closeRename() {
+    overlay.hidden = true;
+    setStatus(null, "");
+    renameSave.disabled = false;
+  }
+
+  function previewValidate() {
+    const v = validateUsernameSync(renameInput.value.trim());
+    if (v.valid) {
+      setStatus(null, "");
+    } else {
+      setStatus("bad", errorText(v.reason));
+    }
+  }
+
+  async function doSave() {
+    const next = renameInput.value.trim();
+    const v = validateUsernameSync(next);
+    if (!v.valid) {
+      setStatus("bad", errorText(v.reason));
+      return;
+    }
+    renameSave.disabled = true;
+    setStatus(null, "Saving…");
+    try {
+      await setUsername(next);
+      setStatus("ok", "Saved");
+      document.dispatchEvent(new Event("auth-changed"));
+      closeRename();
+      // Refresh local view so the new name shows immediately.
+      $("#profile-username-display").textContent = next;
+    } catch (err) {
+      setStatus("bad", errorText(err?.code));
+      renameSave.disabled = false;
+    }
+  }
+
   // ---- wiring ----
   host.addEventListener("click", (e) => {
     const t = e.target;
@@ -331,6 +394,36 @@ export function mountProfile(host) {
       e.preventDefault();
       hideProfile();
       return;
+    }
+    if (t.closest(".profile__edit")) {
+      e.preventDefault();
+      openRename();
+      return;
+    }
+    if (t.id === "profile-rename-cancel") {
+      e.preventDefault();
+      closeRename();
+      return;
+    }
+    if (t.id === "profile-rename-save") {
+      e.preventDefault();
+      doSave();
+      return;
+    }
+    // Click outside the rename card closes the overlay.
+    if (t === overlay) {
+      closeRename();
+    }
+  });
+
+  renameInput.addEventListener("input", previewValidate);
+  renameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      doSave();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeRename();
     }
   });
 
@@ -345,6 +438,17 @@ export function mountProfile(host) {
       refresh();
     }
   });
+}
+
+// ---------- helpers ----------
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ---------- test exports ----------
