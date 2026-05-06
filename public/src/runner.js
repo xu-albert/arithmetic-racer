@@ -33,6 +33,11 @@ export function createRunner({ difficulty, seed, player, bots = [], length = RAC
       finishMs: null,
       dropped: false,
       dnf: false,
+      // Stat tracking — used by main.js when POSTing the race-result.
+      // Not used for ranking; bots don't track these.
+      attempts: 0,
+      longestStreak: 0,
+      currentStreak: 0,
     },
     ...bots.map((b, i) => ({
       id: `bot-${i}`,
@@ -179,12 +184,18 @@ export function createRunner({ difficulty, seed, player, bots = [], length = RAC
       const player = racers.find((r) => !r.isBot);
       if (player.score >= length) return { correct: false, reason: 'finished' };
       const problem = sequence[player.score];
+      player.attempts++;
       if (validateAnswer(problem, input)) {
+        player.currentStreak++;
+        if (player.currentStreak > player.longestStreak) {
+          player.longestStreak = player.currentStreak;
+        }
         advance('player');
         const next = sequence[player.score] ?? null;
         if (next && state === 'racing') emit('problem', { problem: next });
         return { correct: true, next };
       }
+      player.currentStreak = 0;
       emit('wrong', { racerId: 'player' });
       return { correct: false };
     },

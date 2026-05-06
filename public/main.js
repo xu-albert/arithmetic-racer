@@ -1,10 +1,49 @@
-import { createRunner } from './src/runner.js';
+import { createRunner, RACE_LENGTH } from './src/runner.js';
 import { generateHandle } from './src/handles.js';
 import { pickBotTiers } from './src/bot.js';
 import { attachRaceUI } from './src/ui.js';
 import { mountHeader } from './src/header.js';
 import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
+import { postRaceResult } from './src/stats-api.js';
+
+function getOrCreateDeviceId() {
+  let id = localStorage.getItem('deviceId');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('deviceId', id);
+  }
+  return id;
+}
+
+function reportRaceResult({ runner, difficulty }) {
+  const player = runner.racers.find((r) => !r.isBot);
+  if (!player) return;
+  const finished = player.score >= runner.raceLength;
+  const finishTime = finished ? player.finishMs : null;
+  const attempts = player.attempts || 0;
+  const correct = player.score;
+  const accuracy = attempts > 0 ? (correct / attempts) * 100 : 0;
+  const avgPerProblem = finishTime != null && correct > 0
+    ? Math.round(finishTime / correct)
+    : 0;
+
+  postRaceResult({
+    device_id: getOrCreateDeviceId(),
+    difficulty,
+    finished,
+    finish_time_ms: finishTime,
+    problems_total: runner.raceLength,
+    problems_correct: correct,
+    problems_attempted: attempts,
+    avg_time_per_problem_ms: avgPerProblem,
+    accuracy_pct: accuracy,
+    longest_streak: player.longestStreak || 0,
+  }).catch((err) => {
+    // Non-fatal: race UX should never depend on the network call succeeding.
+    console.warn('[race-result] post failed', err);
+  });
+}
 
 mountHeader(document.getElementById('app-header'));
 mountAuthModal(document.getElementById('auth-modal-root'));
@@ -65,6 +104,14 @@ function startQuickplay() {
     seed: Math.floor(Math.random() * 1e9),
     player: { handle: playerHandle },
     bots,
+  });
+
+  // Submit the race-result once the runner emits finish. The runner emits
+  // finish for both natural completion and quit (player.dropped = true).
+  runner.on((event) => {
+    if (event === 'finish') {
+      reportRaceResult({ runner, difficulty: selectedDifficulty });
+    }
   });
 
   showScreen('race');
