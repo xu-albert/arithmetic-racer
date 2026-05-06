@@ -4,8 +4,9 @@
   "description": "Real-time multiplayer arithmetic race. Type the answer, watch your car move, beat your friends.",
   "type": "module",
   "scripts": {
-    "dev": "npx serve public -l 3000",
-    "test": "node --test public/src/*.test.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test public/src/*.test.js && vitest run --passWithNoTests"
   },
   "keywords": [
     "multiplayer",
