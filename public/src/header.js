@@ -1,15 +1,13 @@
 // Persistent app header. Owned by Agent E.
 //
-// M1: logged-out shell with anon handle + CREATE ACCOUNT / SIGN IN + stat pills.
-// Later milestones add the logged-in dropdown (M2) and live data fetching
-// + auth-changed listener + tests (M3).
+// M2: adds the logged-in dropdown (Profile / Log out) alongside the M1 shell.
+// Live data fetching + auth-changed listener + tests come in M3.
 //
 // Decoupling rule: this module MUST NOT import from auth.js or profile.js.
 // User actions are dispatched as document-level CustomEvents:
-//   open-signup, open-signin
-// (open-profile and request-signout arrive in M2 alongside the dropdown.)
+//   open-signup, open-signin, open-profile, request-signout
 
-import { getStatsByDevice } from "./stats-api.js";
+import { getMe, getStatsByDevice } from "./stats-api.js";
 import { generateHandle } from "./handles.js";
 
 // ---------- Pure helpers ----------
@@ -114,6 +112,63 @@ function renderLoggedOutCta(host) {
   });
 }
 
+function renderLoggedInCta(host, username) {
+  const ctaEl = host.querySelector("#hdr-cta");
+  if (!ctaEl) return;
+  ctaEl.innerHTML = `
+    <div class="hdr__userbox">
+      <button class="hdr__userbtn" id="hdr-userbtn" type="button" aria-haspopup="menu" aria-expanded="false">
+        <span id="hdr-username"></span>
+        <span class="hdr__caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="hdr__menu" hidden id="hdr-menu" role="menu">
+        <button class="hdr__menuitem" id="hdr-menu-profile" role="menuitem" type="button">Profile</button>
+        <button class="hdr__menuitem" id="hdr-menu-logout" role="menuitem" type="button">Log out</button>
+      </div>
+    </div>
+  `;
+  ctaEl.querySelector("#hdr-username").textContent = username;
+
+  const userBtn = ctaEl.querySelector("#hdr-userbtn");
+  const menu = ctaEl.querySelector("#hdr-menu");
+
+  function closeMenu() {
+    menu.hidden = true;
+    userBtn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", onDocClick, true);
+    document.removeEventListener("keydown", onKey);
+  }
+  function openMenu() {
+    menu.hidden = false;
+    userBtn.setAttribute("aria-expanded", "true");
+    document.addEventListener("click", onDocClick, true);
+    document.addEventListener("keydown", onKey);
+  }
+  function onDocClick(ev) {
+    if (!menu.contains(ev.target) && ev.target !== userBtn && !userBtn.contains(ev.target)) {
+      closeMenu();
+    }
+  }
+  function onKey(ev) {
+    if (ev.key === "Escape") closeMenu();
+  }
+
+  userBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    if (menu.hidden) openMenu();
+    else closeMenu();
+  });
+
+  ctaEl.querySelector("#hdr-menu-profile").addEventListener("click", () => {
+    closeMenu();
+    document.dispatchEvent(new CustomEvent("open-profile"));
+  });
+  ctaEl.querySelector("#hdr-menu-logout").addEventListener("click", () => {
+    closeMenu();
+    document.dispatchEvent(new CustomEvent("request-signout"));
+  });
+}
+
 // ---------- Public mount ----------
 
 /**
@@ -128,16 +183,26 @@ export function mountHeader(host) {
   setNameDisplay(host, getOrCreateAnonHandle());
   renderLoggedOutCta(host);
 
-  // Best-effort fetch of by-device stats so pills aren't always zero on load.
-  getStatsByDevice(getDeviceId())
-    .then((stats) => {
-      const best =
-        stats && stats.best_time_ms != null
-          ? { best_time_ms: stats.best_time_ms, best_difficulty: stats.best_difficulty }
-          : null;
-      setPills(host, best, stats ? stats.total_races : 0);
-    })
-    .catch(() => {
-      // Leave default zero/em-dash pills.
+  // Best-effort: if the user is already authenticated, swap to the logged-in
+  // dropdown. Otherwise fetch by-device stats so pills aren't always zero.
+  getMe()
+    .catch(() => null)
+    .then((me) => {
+      if (me && me.username) {
+        setNameDisplay(host, me.username);
+        renderLoggedInCta(host, me.username);
+        return;
+      }
+      return getStatsByDevice(getDeviceId())
+        .then((stats) => {
+          const best =
+            stats && stats.best_time_ms != null
+              ? { best_time_ms: stats.best_time_ms, best_difficulty: stats.best_difficulty }
+              : null;
+          setPills(host, best, stats ? stats.total_races : 0);
+        })
+        .catch(() => {
+          // Leave default zero/em-dash pills.
+        });
     });
 }
