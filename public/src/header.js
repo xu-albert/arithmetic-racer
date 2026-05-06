@@ -1,17 +1,27 @@
 // Persistent app header. Owned by Agent E.
 //
-// M2: adds the logged-in dropdown (Profile / Log out) alongside the M1 shell.
-// Live data fetching + auth-changed listener + tests come in M3.
+// Renders two states:
+//   - logged out: anon handle (next to avatar) + CREATE ACCOUNT / SIGN IN buttons
+//   - logged in:  username dropdown (Profile / Log out)
+// Always shows two stat pills: Best (mm:ss.s + difficulty letter) and Races (count).
 //
 // Decoupling rule: this module MUST NOT import from auth.js or profile.js.
 // User actions are dispatched as document-level CustomEvents:
 //   open-signup, open-signin, open-profile, request-signout
+// We listen for `auth-changed` to re-fetch and re-render.
 
 import { getMe, getStatsByDevice } from "./stats-api.js";
 import { generateHandle } from "./handles.js";
 
-// ---------- Pure helpers ----------
+// ---------- Pure helpers (exported for tests via _internals) ----------
 
+/**
+ * Format ms as `m:ss.s`. Returns "—" when ms is null/undefined.
+ *  fmtTime(48100)  -> "0:48.1"
+ *  fmtTime(65432)  -> "1:05.4"
+ *  fmtTime(0)      -> "0:00.0"
+ *  fmtTime(null)   -> "—"
+ */
 function fmtTime(ms) {
   if (ms == null) return "—";
   const totalSec = ms / 1000;
@@ -25,6 +35,23 @@ function difficultyLetter(d) {
   if (d === "medium") return "M";
   if (d === "hard") return "H";
   return "";
+}
+
+/**
+ * Pick the difficulty whose best_time_ms is the lowest non-null value.
+ * Returns { best_time_ms, best_difficulty } or null when no aggregate has a best.
+ */
+function pickBest(aggs) {
+  if (!Array.isArray(aggs)) return null;
+  let best = null;
+  for (const a of aggs) {
+    if (a && a.best_time_ms != null) {
+      if (best === null || a.best_time_ms < best.best_time_ms) {
+        best = { best_time_ms: a.best_time_ms, best_difficulty: a.difficulty };
+      }
+    }
+  }
+  return best;
 }
 
 // ---------- Local state helpers ----------
@@ -169,7 +196,43 @@ function renderLoggedInCta(host, username) {
   });
 }
 
+// ---------- Data fetch + state apply ----------
+
+async function refresh(host) {
+  // /api/me — returns null if logged out (per stats-api wrapper).
+  const me = await getMe().catch(() => null);
+  if (me && me.username) {
+    setNameDisplay(host, me.username);
+    renderLoggedInCta(host, me.username);
+    const aggregates = Array.isArray(me.aggregates) ? me.aggregates : [];
+    const best = pickBest(aggregates);
+    const totalRaces = aggregates.reduce(
+      (s, a) => s + (Number.isFinite(a && a.races_played) ? a.races_played : 0),
+      0,
+    );
+    setPills(host, best, totalRaces);
+    return;
+  }
+
+  // Logged-out: anon handle + by-device stats.
+  setNameDisplay(host, getOrCreateAnonHandle());
+  renderLoggedOutCta(host);
+  const stats = await getStatsByDevice(getDeviceId()).catch(() => ({
+    total_races: 0,
+    best_time_ms: null,
+    best_difficulty: null,
+  }));
+  const best =
+    stats && stats.best_time_ms != null
+      ? { best_time_ms: stats.best_time_ms, best_difficulty: stats.best_difficulty }
+      : null;
+  setPills(host, best, stats ? stats.total_races : 0);
+}
+
 // ---------- Public mount ----------
+
+// Track per-host listener so repeated mounts don't pile up.
+const HOST_LISTENERS = new WeakMap();
 
 /**
  * Mount the header into a host element. Idempotent — safe to call multiple times.
@@ -177,32 +240,31 @@ function renderLoggedInCta(host, username) {
  */
 export function mountHeader(host) {
   if (!host) return;
-  renderShell(host);
 
-  // Initial paint must be sync — show the logged-out shell immediately.
+  // If we previously mounted into this host, detach the old auth-changed listener
+  // before clearing the DOM.
+  const prev = HOST_LISTENERS.get(host);
+  if (prev) {
+    document.removeEventListener("auth-changed", prev);
+    HOST_LISTENERS.delete(host);
+  }
+
+  // Initial paint must be sync — show the logged-out shell immediately so there's
+  // no FOUC. refresh() will swap to the logged-in state once /api/me resolves.
+  renderShell(host);
   setNameDisplay(host, getOrCreateAnonHandle());
   renderLoggedOutCta(host);
 
-  // Best-effort: if the user is already authenticated, swap to the logged-in
-  // dropdown. Otherwise fetch by-device stats so pills aren't always zero.
-  getMe()
-    .catch(() => null)
-    .then((me) => {
-      if (me && me.username) {
-        setNameDisplay(host, me.username);
-        renderLoggedInCta(host, me.username);
-        return;
-      }
-      return getStatsByDevice(getDeviceId())
-        .then((stats) => {
-          const best =
-            stats && stats.best_time_ms != null
-              ? { best_time_ms: stats.best_time_ms, best_difficulty: stats.best_difficulty }
-              : null;
-          setPills(host, best, stats ? stats.total_races : 0);
-        })
-        .catch(() => {
-          // Leave default zero/em-dash pills.
-        });
-    });
+  refresh(host);
+
+  const handler = () => refresh(host);
+  document.addEventListener("auth-changed", handler);
+  HOST_LISTENERS.set(host, handler);
 }
+
+// Test-only export. Production callers should not depend on this surface.
+export const _internals = {
+  pickBest,
+  fmtTime,
+  difficultyLetter,
+};
