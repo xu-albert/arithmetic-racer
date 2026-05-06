@@ -11,11 +11,11 @@
 </head>
 <body>
   <div class="beta-banner" role="note">
-    <strong>Beta</strong> — solo vs bots for now. Multiplayer rooms coming soon.
+    <strong>Alpha</strong> — solo only, multiplayer and other core functionality coming soon.
   </div>
   <header class="app-header">
     <h1>Arithmetic Racer</h1>
-    <p class="tagline">Race friends with mental math. No calculator allowed.</p>
+    <p class="tagline">Return to a time when you were a gifted child.</p>
   </header>
 
   <main id="app">
@@ -34,6 +34,10 @@
 
     <section id="race" class="screen hidden">
       <div id="countdown" class="hidden" aria-live="polite"></div>
+      <div id="finish-banner" class="hidden" aria-live="polite">
+        <div class="finish-banner-place"></div>
+        <div class="finish-banner-time"></div>
+      </div>
       <div id="problem-viewport">
         <div id="problem-queue" aria-label="Problem queue"></div>
       </div>
@@ -59,10 +63,6 @@
       <button id="play-again-btn">Play again</button>
     </section>
   </main>
-
-  <footer class="app-footer">
-    <p>Built on Render. <a href="#" id="repo-link">Code</a> · <a href="#" id="post-link">Blog post</a></p>
-  </footer>
 
   <script type="module" src="main.js"></script>
 </body>

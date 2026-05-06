@@ -5,6 +5,9 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   const track = document.getElementById('track');
   const problemQueue = document.getElementById('problem-queue');
   const countdownEl = document.getElementById('countdown');
+  const finishBanner = document.getElementById('finish-banner');
+  const finishBannerPlace = finishBanner.querySelector('.finish-banner-place');
+  const finishBannerTime = finishBanner.querySelector('.finish-banner-time');
   const input = document.getElementById('answer-input');
   const scoreEl = document.getElementById('score');
   const podium = document.getElementById('podium');
@@ -63,12 +66,38 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   scoreEl.textContent = `0 / ${raceLength}`;
   input.value = '';
   input.disabled = true;
+  finishBanner.classList.add('hidden');
+  finishBanner.classList.remove('first-place');
 
   function onSubmit() {
     const raw = input.value;
     if (!raw.trim()) return;
     runner.submitAnswer(raw);
     input.value = '';
+  }
+
+  function ordinalSuffix(n) {
+    const mod100 = n % 100;
+    if (mod100 >= 11 && mod100 <= 13) return 'th';
+    switch (n % 10) {
+      case 1: return 'st';
+      case 2: return 'nd';
+      case 3: return 'rd';
+      default: return 'th';
+    }
+  }
+
+  function showFinishBanner() {
+    const place = runner.racers.filter((r) => r.finishMs != null).length;
+    const seconds = (playerRacer.finishMs / 1000).toFixed(2);
+    finishBannerPlace.textContent = `${place}${ordinalSuffix(place)} place`;
+    finishBannerTime.textContent = `${seconds}s`;
+    finishBanner.classList.remove('hidden');
+    finishBanner.classList.toggle('first-place', place === 1);
+    const playerCar = carEls.get('player');
+    if (playerCar && place === 1) {
+      playerCar.classList.add('victory');
+    }
   }
 
   function renderPodium() {
@@ -116,6 +145,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
         if (data.score >= raceLength) {
           input.disabled = true;
           input.value = '';
+          showFinishBanner();
         }
         updateQueue();
       }

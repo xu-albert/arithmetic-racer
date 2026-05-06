@@ -335,20 +335,94 @@ button[aria-pressed="true"]:hover {
    COUNTDOWN -- big, navy, confident, gentle pop
    ============================================================ */
 #countdown {
+  position: fixed;
+  top: 38%;
+  left: 50%;
+  z-index: 10;
   font-family: var(--font);
   font-weight: 900;
   font-size: 6rem;
   color: var(--navy);
   font-variant-numeric: tabular-nums;
-  height: 6.4rem;
-  line-height: 6.4rem;
+  line-height: 1;
   text-align: center;
-  text-shadow: 0 4px 0 rgba(255, 255, 255, 0.35);
+  background: var(--card);
+  padding: 1.4rem 2.8rem;
+  min-width: 9rem;
+  border-radius: 1rem;
+  box-shadow: var(--card-shadow-lift);
+  pointer-events: none;
   animation: countdown-pop 800ms var(--ease) infinite alternate;
 }
 @keyframes countdown-pop {
-  from { transform: scale(0.96); }
-  to   { transform: scale(1.04); }
+  from { transform: translate(-50%, -50%) scale(0.96); }
+  to   { transform: translate(-50%, -50%) scale(1.04); }
+}
+
+/* ============================================================
+   FINISH BANNER -- centered overlay during the post-finish grace window
+   ============================================================ */
+#finish-banner {
+  position: fixed;
+  top: 38%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  background: var(--card);
+  padding: 1.6rem 2.6rem;
+  border-radius: 1rem;
+  box-shadow: var(--card-shadow-lift);
+  text-align: center;
+  pointer-events: none;
+  animation: finish-pop 0.55s var(--ease) backwards;
+}
+.finish-banner-place {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 2.4rem;
+  color: var(--navy);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.finish-banner-time {
+  margin-top: 0.35rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--navy-mute);
+  font-variant-numeric: tabular-nums;
+}
+#finish-banner.first-place {
+  background: linear-gradient(180deg, var(--yellow-soft) 0%, #fff 100%);
+  border: 2px solid var(--yellow);
+  padding: 1.8rem 3rem;
+  animation: finish-pop-first 0.7s var(--ease) backwards;
+}
+#finish-banner.first-place .finish-banner-place {
+  font-size: 2.8rem;
+  color: #b8860b;
+  text-shadow: 0 2px 0 rgba(255, 255, 255, 0.6);
+}
+@keyframes finish-pop {
+  0%   { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
+  70%  { transform: translate(-50%, -50%) scale(1.06); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+@keyframes finish-pop-first {
+  0%   { transform: translate(-50%, -50%) scale(0.6) rotate(-3deg); opacity: 0; }
+  60%  { transform: translate(-50%, -50%) scale(1.12) rotate(2deg); opacity: 1; }
+  80%  { transform: translate(-50%, -50%) scale(0.98) rotate(-1deg); }
+  100% { transform: translate(-50%, -50%) scale(1) rotate(0); opacity: 1; }
+}
+
+/* victory bounce on the player car when they cross 1st */
+.car.you.victory {
+  animation: car-victory 0.6s var(--ease) 2 forwards;
+}
+@keyframes car-victory {
+  0%   { transform: translateY(-50%) rotate(0); }
+  30%  { transform: translateY(calc(-50% - 14px)) rotate(-4deg); }
+  60%  { transform: translateY(-50%) rotate(3deg); }
+  100% { transform: translateY(-50%) rotate(0); }
 }
 
 /* ============================================================
