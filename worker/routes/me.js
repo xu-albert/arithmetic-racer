@@ -170,3 +170,35 @@ export async function handlePostUsername(request, env) {
 
   return Response.json({ username });
 }
+
+export async function handleByDevice(request, env) {
+  const url = new URL(request.url);
+  const deviceId = decodeURIComponent(url.pathname.split("/").pop() ?? "");
+  if (!deviceId) {
+    return Response.json({ total_races: 0, best_time_ms: null, best_difficulty: null });
+  }
+
+  // Only count anon rows (user_id IS NULL). After a claim, the same
+  // device's old rows have user_id set, and the header pills should reflect
+  // only what the *current anonymous* session has accumulated since.
+  const row = await db(env)
+    .prepare(
+      `SELECT COUNT(*) AS total_races,
+              MIN(CASE WHEN finished = 1 THEN finish_time_ms END) AS best_time_ms,
+              (SELECT difficulty
+                 FROM race_results
+                WHERE user_id IS NULL AND device_id = ? AND finished = 1
+                ORDER BY finish_time_ms ASC
+                LIMIT 1) AS best_difficulty
+         FROM race_results
+        WHERE user_id IS NULL AND device_id = ?`
+    )
+    .bind(deviceId, deviceId)
+    .first();
+
+  return Response.json({
+    total_races: Number(row?.total_races ?? 0),
+    best_time_ms: row?.best_time_ms == null ? null : Number(row.best_time_ms),
+    best_difficulty: row?.best_difficulty ?? null,
+  });
+}

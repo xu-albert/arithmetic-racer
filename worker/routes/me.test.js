@@ -11,7 +11,12 @@
 
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import { handleGetMe, handlePostUsername, _setTestUserId } from "./me.js";
+import {
+  handleGetMe,
+  handlePostUsername,
+  handleByDevice,
+  _setTestUserId,
+} from "./me.js";
 
 // --- schema bootstrap & helpers --------------------------------------------
 
@@ -367,3 +372,93 @@ describe("POST /api/me/username", () => {
     expect(body.error).toBe("reserved");
   });
 });
+
+// --- GET /api/stats/by-device/:device_id ------------------------------------
+
+describe("GET /api/stats/by-device/:device_id", () => {
+  it("returns zeros for a device that has never raced", async () => {
+    const res = await handleByDevice(
+      makeRequest("http://x/api/stats/by-device/never-seen"),
+      env
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      total_races: 0,
+      best_time_ms: null,
+      best_difficulty: null,
+    });
+  });
+
+  it("counts only the requested device's anon rows", async () => {
+    await seedRace(env, {
+      device_id: "dev-1",
+      difficulty: "easy",
+      finished: 1,
+      finish_time_ms: 20000,
+    });
+    await seedRace(env, {
+      device_id: "dev-1",
+      difficulty: "medium",
+      finished: 1,
+      finish_time_ms: 40000,
+    });
+    await seedRace(env, {
+      device_id: "dev-1",
+      difficulty: "hard",
+      finished: 0,
+      finish_time_ms: null,
+    });
+    await seedRace(env, {
+      device_id: "dev-2",
+      difficulty: "easy",
+      finished: 1,
+      finish_time_ms: 30000,
+    });
+
+    const res1 = await handleByDevice(
+      makeRequest("http://x/api/stats/by-device/dev-1"),
+      env
+    );
+    const body1 = await res1.json();
+    expect(body1.total_races).toBe(3);
+    expect(body1.best_time_ms).toBe(20000);
+    expect(body1.best_difficulty).toBe("easy");
+
+    const res2 = await handleByDevice(
+      makeRequest("http://x/api/stats/by-device/dev-2"),
+      env
+    );
+    const body2 = await res2.json();
+    expect(body2.total_races).toBe(1);
+    expect(body2.best_time_ms).toBe(30000);
+    expect(body2.best_difficulty).toBe("easy");
+  });
+
+  it("excludes claimed rows (user_id IS NOT NULL)", async () => {
+    await seedUser(env, { id: "u1", email: "u1@example.com", username: "Alice" });
+
+    // Seed an anon race on dev-1, then UPDATE it to claim it for u1.
+    const r = await seedRace(env, {
+      device_id: "dev-1",
+      difficulty: "medium",
+      finished: 1,
+      finish_time_ms: 40000,
+    });
+    await env.DB.prepare(
+      `UPDATE race_results SET user_id = ? WHERE id = ?`
+    )
+      .bind("u1", r.id)
+      .run();
+
+    const res = await handleByDevice(
+      makeRequest("http://x/api/stats/by-device/dev-1"),
+      env
+    );
+    expect(await res.json()).toEqual({
+      total_races: 0,
+      best_time_ms: null,
+      best_difficulty: null,
+    });
+  });
+});
+
