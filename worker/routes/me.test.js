@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import { handleGetMe, _setTestUserId } from "./me.js";
+import { handleGetMe, handlePostUsername, _setTestUserId } from "./me.js";
 
 // --- schema bootstrap & helpers --------------------------------------------
 
@@ -277,5 +277,93 @@ describe("GET /api/me", () => {
     expect(body.recent).toHaveLength(10);
     // First entry is the most recently played (seq 12).
     expect(body.recent[0].race_seq).toBe(12);
+  });
+});
+
+// --- POST /api/me/username --------------------------------------------------
+
+describe("POST /api/me/username", () => {
+  it("returns 401 when there is no session", async () => {
+    const res = await handlePostUsername(
+      new Request("http://x/api/me/username", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "Alice" }),
+      }),
+      env
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("updates the row on a valid name (happy path)", async () => {
+    await seedUser(env, { id: "u1", email: "u1@example.com", username: "OldName" });
+    _setTestUserId("u1");
+
+    const res = await handlePostUsername(
+      new Request("http://x/api/me/username", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "NewName" }),
+      }),
+      env
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ username: "NewName" });
+
+    const row = await env.DB.prepare(
+      `SELECT username FROM "user" WHERE id = ?`
+    )
+      .bind("u1")
+      .first();
+    expect(row.username).toBe("NewName");
+  });
+
+  it("rejects a name that another user already holds (case-insensitive)", async () => {
+    await seedUser(env, { id: "u1", email: "u1@example.com", username: "Alice" });
+    await seedUser(env, { id: "u2", email: "u2@example.com", username: "Taken" });
+    _setTestUserId("u1");
+
+    const res = await handlePostUsername(
+      new Request("http://x/api/me/username", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Different casing — uniqueness must be case-insensitive.
+        body: JSON.stringify({ username: "taken" }),
+      }),
+      env
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "taken" });
+
+    // u1's username should be unchanged.
+    const row = await env.DB.prepare(
+      `SELECT username FROM "user" WHERE id = ?`
+    )
+      .bind("u1")
+      .first();
+    expect(row.username).toBe("Alice");
+  });
+
+  it("rejects a name flagged by the validator (banned/reserved/invalid_format)", async () => {
+    await seedUser(env, { id: "u1", email: "u1@example.com", username: "Alice" });
+    _setTestUserId("u1");
+
+    // "admin" is on the RESERVED set in worker/username-validator.js.
+    const res = await handlePostUsername(
+      new Request("http://x/api/me/username", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "admin" }),
+      }),
+      env
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    // The validator may classify reserved names as "reserved"; banned names
+    // hit the obscenity matcher. Either is a valid validator rejection — we
+    // assert it's one of the four documented error codes.
+    expect(["banned", "reserved", "invalid_format"]).toContain(body.error);
+    // For "admin" specifically the validator returns reserved.
+    expect(body.error).toBe("reserved");
   });
 });

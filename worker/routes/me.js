@@ -10,6 +10,7 @@
 // override + its export — see INTEGRATION NOTE markers.
 
 import { db } from "../db.js";
+import { validateUsernameSync } from "../username-validator.js";
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
 
@@ -134,4 +135,38 @@ export async function handleGetMe(request, env) {
     aggregates,
     recent,
   });
+}
+
+export async function handlePostUsername(request, env) {
+  const userId = await readUserId(request, env);
+  if (!userId) return new Response("unauthorized", { status: 401 });
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: "invalid_format" }, { status: 400 });
+  }
+  const username = body && typeof body === "object" ? body.username : undefined;
+
+  const result = validateUsernameSync(username);
+  if (!result.valid) {
+    return Response.json({ error: result.reason }, { status: 400 });
+  }
+
+  // Uniqueness check (case-insensitive). LOWER() is fine for ASCII; the
+  // FORMAT_RE in the validator already restricts usernames to ASCII so we
+  // don't need locale-aware folding here.
+  const collision = await db(env)
+    .prepare(`SELECT id FROM "user" WHERE LOWER(username) = LOWER(?) AND id != ?`)
+    .bind(username, userId)
+    .first();
+  if (collision) return Response.json({ error: "taken" }, { status: 400 });
+
+  await db(env)
+    .prepare(`UPDATE "user" SET username = ? WHERE id = ?`)
+    .bind(username, userId)
+    .run();
+
+  return Response.json({ username });
 }
