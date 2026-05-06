@@ -6,3 +6,8 @@ dist/
 *.log
 .idea/
 .vscode/
+.wrangler/
+.dev.vars
+
+# Local-only design notes, plans, and case-study session logs
+docs/superpowers/
