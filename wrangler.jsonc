@@ -1,7 +1,19 @@
 {
   "name": "arithmetic-racer",
+  "main": "worker/index.js",
   "compatibility_date": "2026-05-06",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
-    "directory": "./public"
-  }
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "arithmetic-racer",
+      // PLACEHOLDER: replace with real id from `npx wrangler d1 create arithmetic-racer`
+      // before remote deploy. Local dev (--local) ignores this value.
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ]
 }
