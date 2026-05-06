@@ -9,6 +9,17 @@
 //   DISPATCH — `auth-changed` after every transition (signin / signup /
 //              signout / oauth-return / pick-username success).
 //
+// better-auth endpoint deviations from the brief (verified against
+// node_modules/better-auth@1.6.9):
+//   - Password reset request endpoint is `/request-password-reset`
+//     (NOT `/forget-password`; that path only exists in the email-otp
+//     plugin in this version). Using the canonical endpoint here.
+//
+// stats-api.js note: the integrator may want to extend `setUsername` to
+// include `deviceId`. Per the brief we do NOT modify stats-api.js from
+// here — the pick-username flow POSTs `/api/me/username` inline below
+// with `deviceId` from localStorage.
+//
 // Idempotent: calling mountAuthModal(host) twice is a no-op on the second
 // call (host already initialized). Internal state lives in module scope.
 
@@ -59,11 +70,55 @@ async function signOut() {
   });
 }
 
+function googleSignInUrl() {
+  const callback = encodeURIComponent(location.origin + "/?auth=google");
+  return `${AUTH}/sign-in/social?provider=google&callbackURL=${callback}`;
+}
+
+async function requestPasswordReset(email) {
+  // Endpoint deviation from brief: better-auth 1.6.9 calls this
+  // `/request-password-reset`, not `/forget-password`.
+  const res = await fetch(`${AUTH}/request-password-reset`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      email,
+      redirectTo: location.origin + "/reset-password.html",
+    }),
+  });
+  if (!res.ok) {
+    throw Object.assign(new Error("forgot failed"), { status: res.status });
+  }
+}
+
+async function setUsernameForOAuth(username) {
+  // Direct POST so we can include deviceId without mutating stats-api.js.
+  const res = await fetch("/api/me/username", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      username,
+      deviceId: localStorage.getItem("deviceId"),
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw Object.assign(new Error("username failed"), {
+      status: res.status,
+      code: body.error ?? body.code,
+    });
+  }
+  return res.json().catch(() => ({}));
+}
+
 // ---- Pure helpers (testable) -------------------------------------------
 
 /**
  * Map a server error code (or username-validator reason) into user-facing
- * copy. Kept pure for unit testing.
+ * copy. Exported only as a side effect of being module-scoped — kept pure
+ * for unit testing.
  * @param {string|undefined} code
  */
 export function mapAuthError(code) {
@@ -140,6 +195,23 @@ function closeModal() {
   if (!modalEl) return;
   backdropEl.hidden = true;
   modalEl.hidden = true;
+}
+
+function openPickUsernameModal() {
+  if (!pickModalEl) return;
+  // Pick-username modal blocks the lobby — show backdrop too, but no
+  // close affordance is wired up.
+  backdropEl.hidden = false;
+  pickModalEl.hidden = false;
+  const input = pickModalEl.querySelector("input[name='username']");
+  if (input) input.focus();
+}
+
+function closePickUsernameModal() {
+  if (!pickModalEl) return;
+  pickModalEl.hidden = true;
+  // Only hide the backdrop if the regular auth modal is also closed.
+  if (modalEl && modalEl.hidden) backdropEl.hidden = true;
 }
 
 function setTab(tab) {
@@ -254,7 +326,7 @@ export function mountAuthModal(host) {
   // ---- Close behaviour (backdrop, ESC, ×) ---
   backdropEl.addEventListener("click", () => {
     // Only the regular auth modal closes on backdrop click; pick-username
-    // is non-dismissable (M3).
+    // is non-dismissable.
     if (!pickModalEl.hidden) return;
     closeModal();
   });
@@ -268,6 +340,27 @@ export function mountAuthModal(host) {
   // ---- Tab switching ---
   modalEl.querySelectorAll(".auth-tab").forEach((btn) => {
     btn.addEventListener("click", () => setTab(btn.dataset.tab));
+  });
+
+  // ---- Forgot-password sub-flow ---
+  const forgotLink = modalEl.querySelector(".auth-forgot");
+  forgotLink.addEventListener("click", (e) => {
+    e.preventDefault();
+    clearAllErrors(modalEl);
+    modalEl.querySelectorAll(".auth-pane").forEach((p) => {
+      p.hidden = p.id !== "auth-pane-forgot";
+    });
+    modalEl
+      .querySelectorAll(".auth-tab")
+      .forEach((t) => t.classList.remove("active"));
+    const input = modalEl.querySelector("#auth-pane-forgot input[name='email']");
+    if (input) input.focus();
+  });
+  const backLink = modalEl.querySelector(".auth-back");
+  backLink.addEventListener("click", (e) => {
+    e.preventDefault();
+    clearAllErrors(modalEl);
+    setTab("signin");
   });
 
   // ---- Inline username validation (signup pane) ---
@@ -348,9 +441,67 @@ export function mountAuthModal(host) {
     }
   });
 
+  // ---- Forgot-password submit ---
+  const forgotForm = modalEl.querySelector("#auth-pane-forgot");
+  forgotForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearAllErrors(modalEl);
+    const fd = new FormData(forgotForm);
+    const email = String(fd.get("email") || "").trim();
+    const submitBtn = forgotForm.querySelector("button[type='submit']");
+    submitBtn.disabled = true;
+    try {
+      await requestPasswordReset(email);
+      const success = forgotForm.querySelector(".auth-success");
+      if (success) success.hidden = false;
+    } catch (err) {
+      showError(forgotForm, mapAuthError(err.code));
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  // ---- Google sign-in ---
+  modalEl.querySelector("#auth-google").addEventListener("click", () => {
+    location.assign(googleSignInUrl());
+  });
+
+  // ---- Pick-username modal ---
+  const pickForm = pickModalEl.querySelector("#pick-username-form");
+  const pickUsername = pickForm.querySelector("input[name='username']");
+  const pickStatus = pickForm.querySelector(".auth-username-status");
+  pickUsername.addEventListener("input", () => {
+    const { text, ok } = formatUsernameStatus(pickUsername.value);
+    pickStatus.textContent = text;
+    pickStatus.classList.toggle("ok", ok);
+    pickStatus.classList.toggle("bad", !ok && !!pickUsername.value);
+  });
+  pickForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearAllErrors(pickModalEl);
+    const username = String(new FormData(pickForm).get("username") || "").trim();
+    const check = validateUsernameSync(username);
+    if (!check.valid) {
+      showError(pickForm, mapAuthError(check.reason));
+      return;
+    }
+    const submitBtn = pickForm.querySelector("button[type='submit']");
+    submitBtn.disabled = true;
+    try {
+      await setUsernameForOAuth(username);
+      closePickUsernameModal();
+      document.dispatchEvent(new Event("auth-changed"));
+    } catch (err) {
+      showError(pickForm, mapAuthError(err.code));
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
   // ---- External events from header ---
   document.addEventListener("open-signup", () => openModal("signup"));
   document.addEventListener("open-signin", () => openModal("signin"));
+  document.addEventListener("open-pick-username", () => openPickUsernameModal());
   document.addEventListener("request-signout", async () => {
     try {
       await signOut();
@@ -358,6 +509,43 @@ export function mountAuthModal(host) {
       document.dispatchEvent(new Event("auth-changed"));
     }
   });
+
+  // ---- Post-auth: prompt for username if missing ---
+  document.addEventListener("auth-changed", async () => {
+    try {
+      const { getMe } = await import("./stats-api.js");
+      const me = await getMe().catch(() => null);
+      if (me && !me.username) {
+        openPickUsernameModal();
+      } else if (!me) {
+        // Logged out — make sure pick-username is dismissed.
+        closePickUsernameModal();
+      }
+    } catch {
+      // stats-api unreachable; nothing actionable here.
+    }
+  });
+
+  // ---- OAuth-return detection ---
+  // If we landed here from /api/auth/sign-in/social with ?auth=google,
+  // dispatch auth-changed once and clean the URL.
+  try {
+    const params = new URLSearchParams(location.search);
+    if (params.get("auth") === "google") {
+      params.delete("auth");
+      const cleanQuery = params.toString();
+      const cleanUrl =
+        location.pathname + (cleanQuery ? `?${cleanQuery}` : "") + location.hash;
+      history.replaceState(null, "", cleanUrl);
+      // Defer one tick so listeners (e.g. header) attached after this
+      // module's top-level mount still receive the event.
+      setTimeout(() => {
+        document.dispatchEvent(new Event("auth-changed"));
+      }, 0);
+    }
+  } catch {
+    // location/history unavailable — non-fatal in non-browser test envs.
+  }
 
   mounted = true;
 }
