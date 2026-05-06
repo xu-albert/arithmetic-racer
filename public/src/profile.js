@@ -1,11 +1,14 @@
 // Profile screen for arithmetic-racer.
 //
-// M1: shell + pure formatting/aggregation helpers. Future milestones wire
-// the `open-profile` / `auth-changed` event listeners (M2) and the rename
-// overlay (M3).
+// Mounts into a `<section id="profile" class="screen hidden">` host element
+// provided by the integrator. Listens for `open-profile` (dispatched by the
+// header dropdown) to reveal itself, fetch /api/me, and render. Listens for
+// `auth-changed` to re-fetch when the user signs in/out or renames.
 //
 // Pure helpers (fmtMs, computeHeadlineMs, fmtPct, etc.) are exported via the
 // `_internals` object for unit testing — see profile.test.js.
+
+import { getMe } from "./stats-api.js";
 
 // ---------- pure helpers ----------
 
@@ -203,7 +206,7 @@ const MOUNT_FLAG = "__profileMounted";
 
 /**
  * Mount the profile screen into the host element. Idempotent.
- * M1: renders the static shell; data wiring + rename overlay come in M2/M3.
+ * Listens for `open-profile` (header dispatch) and `auth-changed` (refresh).
  *
  * @param {HTMLElement} host
  */
@@ -213,8 +216,135 @@ export function mountProfile(host) {
   host[MOUNT_FLAG] = true;
 
   host.innerHTML = PROFILE_HTML;
-  // Start hidden — the `open-profile` event (wired in M2) reveals us.
+  // Start hidden — the `open-profile` event reveals us.
   host.classList.add("hidden");
+
+  const $ = (sel) => host.querySelector(sel);
+
+  // ---- screen visibility ----
+  function showProfile() {
+    // Hide the other top-level screens. We don't assume their internal
+    // structure — just toggle the .hidden class the same way they do.
+    for (const id of ["lobby", "race", "results"]) {
+      const el = document.getElementById(id);
+      if (el) el.classList.add("hidden");
+    }
+    host.classList.remove("hidden");
+  }
+  function hideProfile() {
+    host.classList.add("hidden");
+    const lobby = document.getElementById("lobby");
+    if (lobby) lobby.classList.remove("hidden");
+  }
+
+  // ---- render ----
+  function renderEmpty() {
+    $("#profile-username-display").textContent = "—";
+    $("#profile-email").textContent = "";
+    $("#profile-headline-num").textContent = "—";
+    $("#t-best-easy").textContent = "—";
+    $("#t-best-medium").textContent = "—";
+    $("#t-best-hard").textContent = "—";
+    $("#t-total").textContent = "0";
+    $("#t-acc").textContent = "—";
+    $("#t-finish").textContent = "—";
+    $("#p-since").textContent = "—";
+    $("#p-email-2").textContent = "—";
+    $("#profile-races-tbody").innerHTML = "";
+    $("#profile-empty").hidden = false;
+  }
+
+  function render(me) {
+    if (!me) {
+      renderEmpty();
+      return;
+    }
+
+    $("#profile-username-display").textContent = me.username || "—";
+    $("#profile-email").textContent = me.email || "";
+    $("#p-email-2").textContent = me.email || "—";
+    $("#p-since").textContent = fmtDate(me.created_at);
+
+    const aggs = me.aggregates || [];
+    const headlineMs = computeHeadlineMs(aggs);
+    $("#profile-headline-num").textContent = fmtAvgMs(headlineMs);
+
+    $("#t-best-easy").textContent = fmtMs(findAgg(aggs, "easy")?.best_time_ms ?? null);
+    $("#t-best-medium").textContent = fmtMs(findAgg(aggs, "medium")?.best_time_ms ?? null);
+    $("#t-best-hard").textContent = fmtMs(findAgg(aggs, "hard")?.best_time_ms ?? null);
+
+    const total = computeTotalRaces(aggs);
+    $("#t-total").textContent = String(total);
+    $("#t-acc").textContent = fmtPct(computeOverallAccuracy(aggs));
+    $("#t-finish").textContent = fmtPct(computeFinishRate(aggs));
+
+    // ---- recent races table ----
+    const tbody = $("#profile-races-tbody");
+    const recent = Array.isArray(me.recent) ? me.recent : [];
+    if (recent.length === 0) {
+      tbody.innerHTML = "";
+      $("#profile-empty").hidden = false;
+    } else {
+      $("#profile-empty").hidden = true;
+      const rows = recent.map((r) => {
+        const finish = r.finish_time_ms == null ? "DNF" : fmtMs(r.finish_time_ms);
+        const diff = r.difficulty
+          ? r.difficulty[0].toUpperCase() + r.difficulty.slice(1)
+          : "—";
+        return `<tr>
+          <td>#${escapeHtml(String(r.race_seq ?? "—"))}</td>
+          <td>${escapeHtml(diff)}</td>
+          <td>${escapeHtml(finish)}</td>
+          <td>${escapeHtml(fmtPct(r.accuracy_pct))}</td>
+          <td>${escapeHtml(fmtAvgMs(r.avg_time_per_problem_ms))}</td>
+          <td>${escapeHtml(fmtRelative(r.played_at))}</td>
+        </tr>`;
+      });
+      tbody.innerHTML = rows.join("");
+    }
+  }
+
+  // ---- data fetching ----
+  let inflight = null;
+  async function refresh() {
+    if (inflight) return inflight;
+    inflight = (async () => {
+      try {
+        const me = await getMe();
+        render(me);
+      } catch (err) {
+        // Best-effort: leave skeleton in place. Don't crash the screen.
+        console.error("profile: getMe failed", err);
+      } finally {
+        inflight = null;
+      }
+    })();
+    return inflight;
+  }
+
+  // ---- wiring ----
+  host.addEventListener("click", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+
+    if (t.closest(".profile__back")) {
+      e.preventDefault();
+      hideProfile();
+      return;
+    }
+  });
+
+  document.addEventListener("open-profile", () => {
+    showProfile();
+    refresh();
+  });
+
+  document.addEventListener("auth-changed", () => {
+    // Only refresh if we're currently visible — otherwise wait until shown.
+    if (!host.classList.contains("hidden")) {
+      refresh();
+    }
+  });
 }
 
 // ---------- test exports ----------
