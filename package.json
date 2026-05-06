@@ -1,0 +1,13 @@
+{
+  "name": "arithmetic-racer",
+  "version": "0.1.0",
+  "description": "Real-time multiplayer arithmetic race. Type the answer, watch your car move, beat your friends.",
+  "type": "module",
+  "scripts": {
+    "dev": "npx serve public -l 3000",
+    "test": "node --test public/src/*.test.js"
+  },
+  "keywords": ["multiplayer", "websocket", "render", "socket.io", "game"],
+  "author": "Albert Xu",
+  "license": "MIT"
+}

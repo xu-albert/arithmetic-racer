@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arithmetic Racer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style-a.css" />
+</head>
+<body>
+  <div class="beta-banner" role="note">
+    <strong>Beta</strong> — solo vs bots for now. Multiplayer rooms coming soon.
+  </div>
+  <header class="app-header">
+    <h1>Arithmetic Racer</h1>
+    <p class="tagline">Race friends with mental math. No calculator allowed.</p>
+  </header>
+
+  <main id="app">
+    <section id="lobby" class="screen">
+      <h2>Lobby</h2>
+      <div class="difficulty-picker">
+        <button class="diff-btn" data-difficulty="easy">Easy</button>
+        <button class="diff-btn" data-difficulty="medium">Medium</button>
+        <button class="diff-btn" data-difficulty="hard">Hard</button>
+      </div>
+      <div class="lobby-actions">
+        <button id="quickplay-btn" class="primary">Quickplay</button>
+        <button id="create-room-btn">Create Private Room</button>
+      </div>
+    </section>
+
+    <section id="race" class="screen hidden">
+      <div id="countdown" class="hidden" aria-live="polite"></div>
+      <div id="problem-viewport">
+        <div id="problem-queue" aria-label="Problem queue"></div>
+      </div>
+      <input
+        type="number"
+        id="answer-input"
+        autocomplete="off"
+        inputmode="numeric"
+        placeholder="answer"
+      />
+      <div id="track" class="track">
+        <!-- Lanes injected by ui.js -->
+      </div>
+      <div id="hud">
+        <span id="score">0 / 20</span>
+        <button id="quit-race-btn" class="link-button">Quit race</button>
+      </div>
+    </section>
+
+    <section id="results" class="screen hidden">
+      <h2>Race over</h2>
+      <ol id="podium"></ol>
+      <button id="play-again-btn">Play again</button>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>Built on Render. <a href="#" id="repo-link">Code</a> · <a href="#" id="post-link">Blog post</a></p>
+  </footer>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,606 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap");
+
+/* ============================================================
+   ARITHMETIC RACER -- direction B: agar.io minimalist
+   confident type, infinite-canvas grid, single electric accent
+   ============================================================ */
+
+:root {
+  /* surface */
+  --bg: #f8f9fa;
+  --surface: #ffffff;
+  --grid-line: rgba(56, 102, 220, 0.06);
+
+  /* ink */
+  --ink: #0f1729;
+  --ink-body: #3d4863;
+  --ink-muted: #8a93a8;
+  --hairline: rgba(15, 23, 41, 0.08);
+
+  /* the one accent */
+  --accent: #3866dc;
+  --accent-soft: rgba(56, 102, 220, 0.12);
+  --accent-ring: rgba(56, 102, 220, 0.22);
+
+  /* opponent grays */
+  --opponent: #bfc7d4;
+  --opponent-deep: #9ea7b6;
+  --opponent-faint: #d8dde5;
+
+  /* state */
+  --danger: #d64545;
+  --danger-soft: rgba(214, 69, 69, 0.10);
+
+  /* motion */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --shadow-faint: 0 1px 3px rgba(15, 23, 41, 0.04);
+
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* --- reset --- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font);
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--ink-body);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+
+  font-feature-settings: "cv11", "ss03";
+
+  /* infinite-canvas grid backdrop */
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: 0 0;
+}
+
+/* --- header --- */
+.app-header {
+  padding: 4rem 1.5rem 1rem;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+}
+
+.app-header h1 {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 4rem;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--ink);
+}
+
+.tagline {
+  margin-top: 1.1rem;
+  font-family: var(--font);
+  font-weight: 400;
+  font-size: 1rem;
+  letter-spacing: -0.005em;
+  color: var(--ink-muted);
+}
+
+#app {
+  flex: 1;
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 3rem;
+  position: relative;
+  z-index: 1;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  align-items: center;
+}
+.hidden { display: none !important; }
+
+/* --- h2 --- */
+h2 {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 2rem;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+
+/* --- buttons (solid blocks, fast and confident) --- */
+button {
+  font-family: var(--font);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  padding: 0.75rem 1.4rem;
+  border: 1.5px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: 6px;
+  transition:
+    transform 180ms var(--ease),
+    background 180ms var(--ease),
+    color 180ms var(--ease),
+    border-color 180ms var(--ease);
+}
+
+button:hover {
+  transform: translateY(-2px);
+  background: var(--accent-soft);
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+button:active {
+  transform: translateY(0);
+  transition-duration: 80ms;
+}
+
+/* primary = solid block of accent blue */
+button.primary {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+button.primary:hover {
+  background: #2c55c4;
+  border-color: #2c55c4;
+}
+
+/* selected difficulty */
+button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+button[aria-pressed="true"]:hover {
+  background: #2c55c4;
+  border-color: #2c55c4;
+}
+
+.difficulty-picker {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0;
+}
+
+.lobby-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* --- countdown (massive, confident, centered) --- */
+#countdown {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 9rem;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  height: 9rem;
+  text-align: center;
+  animation: countdown-pulse 800ms var(--ease) infinite alternate;
+}
+@keyframes countdown-pulse {
+  from { opacity: 0.85; transform: scale(0.98); }
+  to   { opacity: 1;    transform: scale(1.02); }
+}
+
+/* --- problem viewport (the visual focal point) --- */
+#problem-viewport {
+  width: 100%;
+  max-width: 720px;
+  height: 13rem;
+  overflow: hidden;
+  position: relative;
+  background: transparent;
+
+  /* soft top/bottom fade so non-current items fade into the canvas */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 22%,
+    #000 78%,
+    transparent 100%
+  );
+          mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 22%,
+    #000 78%,
+    transparent 100%
+  );
+}
+
+#problem-queue {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 220ms var(--ease);
+  will-change: transform;
+}
+
+.queue-item {
+  width: 100%;
+  height: 3.25rem;
+  line-height: 3.25rem;
+  font-family: var(--font);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "cv11", "ss03", "tnum";
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--ink-muted);
+  opacity: 0;
+  transition:
+    opacity 200ms var(--ease),
+    font-size 220ms var(--ease),
+    color 200ms var(--ease),
+    font-weight 180ms var(--ease),
+    transform 220ms var(--ease);
+}
+.queue-item.current {
+  font-size: 4.75rem;
+  line-height: 3.25rem;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  color: var(--ink);
+  opacity: 1;
+}
+.queue-item.upcoming-1 { opacity: 0.55; }
+.queue-item.upcoming-2 { opacity: 0.30; }
+.queue-item.upcoming-3 { opacity: 0.14; }
+
+/* --- answer input (clean, confident, one accent ring) --- */
+#answer-input {
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+  padding: 0.75rem 1.25rem;
+  width: 16rem;
+  text-align: center;
+  border: 1.5px solid var(--hairline);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+  caret-color: var(--accent);
+  transition:
+    border-color 180ms var(--ease),
+    box-shadow 180ms var(--ease),
+    background 180ms var(--ease);
+}
+#answer-input::placeholder {
+  color: var(--ink-muted);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+#answer-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+#answer-input.wrong {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+  animation: shake 220ms var(--ease);
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25%      { transform: translateX(-5px); }
+  50%      { transform: translateX(5px); }
+  75%      { transform: translateX(-3px); }
+}
+
+#answer-input::-webkit-outer-spin-button,
+#answer-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+#answer-input[type="number"] { -moz-appearance: textfield; }
+
+/* --- track (thin lines on the canvas, no chrome) --- */
+.track {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  margin-top: 1rem;
+  padding: 0.5rem 0;
+  background: transparent;
+  position: relative;
+}
+
+.lane {
+  position: relative;
+  height: 32px;
+  padding-left: 5.5rem;
+  padding-right: 1.5rem;
+
+  /* a single hairline running through the lane */
+  background-image: linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--hairline) calc(50% - 0.5px), var(--hairline) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+.lane-handle {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  z-index: 1;
+  white-space: nowrap;
+  max-width: 5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The car: flat geometric shape, no detail */
+.car {
+  position: absolute;
+  top: 50%;
+  left: calc(5.5rem + var(--progress, 0) * (100% - 5.5rem - 1.5rem - 22px));
+  transform: translateY(-50%);
+  height: 18px;
+  width: 22px;
+  background: var(--opponent);
+  border: none;
+  border-radius: 5px;
+  transition: left 220ms var(--ease);
+  z-index: 2;
+}
+
+/* opponent gray gradient -- subtle differentiation per lane */
+.lane:nth-of-type(2) .car:not(.you) { background: #c7cfdb; }
+.lane:nth-of-type(3) .car:not(.you) { background: var(--opponent); }
+.lane:nth-of-type(4) .car:not(.you) { background: #b3bbc8; }
+.lane:nth-of-type(5) .car:not(.you) { background: var(--opponent-deep); }
+.lane:nth-of-type(6) .car:not(.you) { background: #aab2bf; }
+
+/* the player: THE blue, slightly larger, soft glow ring */
+.car.you {
+  background: var(--accent);
+  height: 22px;
+  width: 26px;
+  border-radius: 6px;
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  left: calc(5.5rem + var(--progress, 0) * (100% - 5.5rem - 1.5rem - 26px));
+  animation: you-pulse 2s var(--ease) infinite alternate;
+}
+@keyframes you-pulse {
+  from { box-shadow: 0 0 0 3px var(--accent-soft); }
+  to   { box-shadow: 0 0 0 6px var(--accent-soft); }
+}
+
+/* finish line: thin vertical accent mark */
+.lane-finish {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 24px;
+  background: var(--accent);
+  border-radius: 1px;
+  z-index: 1;
+}
+
+.lane.dropped { opacity: 0.4; }
+.lane.dropped .lane-handle { color: var(--ink-muted); text-decoration: line-through; }
+.lane.dropped .lane-handle::after {
+  content: " (left)";
+  margin-left: 0.2rem;
+  text-decoration: none;
+  font-weight: 500;
+}
+.lane.dropped .car { background: var(--opponent-faint); }
+
+/* --- HUD --- */
+#hud {
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 720px;
+  font-family: var(--font);
+  font-weight: 500;
+  color: var(--ink-muted);
+  margin-top: 0.5rem;
+}
+#score {
+  color: var(--ink);
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: none;
+  padding: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+#score::before {
+  content: "Score";
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--ink-muted);
+  font-family: var(--font);
+  font-weight: 500;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  text-decoration: none;
+  border-radius: 0;
+  transition: color 180ms var(--ease);
+}
+.link-button:hover {
+  background: none;
+  color: var(--accent);
+  transform: none;
+}
+.link-button:focus-visible {
+  outline: none;
+  color: var(--accent);
+  box-shadow: 0 1px 0 var(--accent);
+}
+.link-button:active {
+  transform: none;
+}
+
+/* --- results / podium --- */
+#podium {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  width: 100%;
+  max-width: 560px;
+  counter-reset: rank;
+}
+#podium li {
+  padding: 1rem 1.25rem 1rem 3.5rem;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  font-family: var(--font);
+  font-weight: 500;
+  font-size: 0.95rem;
+  letter-spacing: -0.005em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-body);
+  position: relative;
+  counter-increment: rank;
+}
+#podium li::before {
+  content: counter(rank);
+  position: absolute;
+  left: 1.25rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 1.25rem;
+  letter-spacing: -0.03em;
+  color: var(--ink-muted);
+  width: 1.5rem;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+#podium li:nth-child(1) {
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+#podium li:nth-child(1)::before {
+  color: var(--accent);
+}
+#podium li:nth-child(1) {
+  color: var(--ink);
+  font-weight: 700;
+}
+#podium li.unfinished {
+  color: var(--ink-muted);
+  background: transparent;
+  border-style: dashed;
+}
+
+/* --- footer --- */
+.app-footer {
+  padding: 2rem 1.5rem 2.5rem;
+  text-align: center;
+  color: var(--ink-muted);
+  font-family: var(--font);
+  font-weight: 400;
+  font-size: 0.85rem;
+  letter-spacing: 0.01em;
+  position: relative;
+  z-index: 1;
+}
+.app-footer a {
+  color: var(--ink-body);
+  text-decoration: none;
+  font-weight: 500;
+  border-bottom: 1px solid var(--hairline);
+  padding-bottom: 1px;
+  transition: color 180ms var(--ease), border-color 180ms var(--ease);
+}
+.app-footer a:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* --- selection --- */
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* --- accessibility: respect reduced motion --- */
+@media (prefers-reduced-motion: reduce) {
+  #countdown { animation: none; }
+  .car.you { animation: none; }
+  button:hover { transform: none; }
+  .queue-item { transition: opacity 180ms ease, color 180ms ease; }
+  #problem-queue { transition: none; }
+  .car { transition: left 180ms ease-out; }
+  #answer-input.wrong { animation: none; }
+}
+
+/* --- small screens --- */
+@media (max-width: 540px) {
+  .app-header { padding-top: 2.5rem; }
+  .app-header h1 { font-size: 2.75rem; letter-spacing: -0.035em; }
+  h2 { font-size: 1.75rem; }
+  #countdown { font-size: 6rem; height: 6rem; }
+  #answer-input { width: 12rem; font-size: 1.6rem; }
+  #problem-viewport { height: 11rem; }
+  .queue-item { height: 2.75rem; line-height: 2.75rem; font-size: 1.25rem; }
+  .queue-item.current { font-size: 3.5rem; line-height: 2.75rem; }
+  .lane { padding-left: 4.25rem; }
+  .car { left: calc(4.25rem + var(--progress, 0) * (100% - 4.25rem - 1.5rem - 22px)); }
+  .car.you { left: calc(4.25rem + var(--progress, 0) * (100% - 4.25rem - 1.5rem - 26px)); }
+  .lane-handle { font-size: 0.7rem; max-width: 3.75rem; }
+  #hud { flex-direction: row; }
+}

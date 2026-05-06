@@ -1,0 +1,868 @@
+@import url("https://fonts.googleapis.com/css2?family=Nunito:wght@400;700;900&display=swap");
+
+/* ============================================================
+   ARITHMETIC RACER -- DIRECTION A: TypeRacer-style
+   sky-blue + clouds + white floating cards + illustrated cars
+   confident playful, polished, illustrated
+   ============================================================ */
+
+:root {
+  /* sky */
+  --sky-top: #5a9fd9;
+  --sky-bottom: #a8cdec;
+
+  /* cards + ink */
+  --card: #ffffff;
+  --card-shadow: 0 4px 16px rgba(20, 50, 90, 0.10);
+  --card-shadow-lift: 0 8px 22px rgba(20, 50, 90, 0.16);
+
+  --navy: #1e3a5f;       /* headers, primary text */
+  --navy-soft: #2c4761;  /* body text */
+  --navy-mute: #6b829c;  /* secondary text, hints */
+  --hairline: #e1e8f1;   /* card dividers */
+
+  /* CTAs / accents */
+  --green: #5cb85c;
+  --green-hover: #4ea64e;
+  --green-press: #3f8d3f;
+
+  --orange: #e88c3a;
+  --orange-hover: #d97c2a;
+  --orange-press: #b96820;
+
+  --yellow: #fdd835;
+  --yellow-soft: #fff3b0;
+
+  /* car palette */
+  --car-red: #e63946;     /* player */
+  --car-blue: #118ab2;
+  --car-yellow: #fdd835;
+  --car-green: #52b788;
+
+  /* track */
+  --asphalt: #5e6c7a;
+  --asphalt-deep: #4a5663;
+  --lane-line: #ffffff;
+
+  /* states */
+  --danger: #d64545;
+  --danger-soft: #fde2e2;
+
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  --font: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* --- reset --- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font);
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--navy-soft);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+
+  /* sky-blue gradient background */
+  background:
+    linear-gradient(180deg, var(--sky-top) 0%, var(--sky-bottom) 100%);
+  background-attachment: fixed;
+}
+
+/* --- drifting cloud silhouettes --- */
+/* three soft white SVG clouds, drifting slowly across the sky */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  pointer-events: none;
+  z-index: 0;
+  background-repeat: no-repeat;
+  background-size: contain;
+  opacity: 0.6;
+}
+
+/* cloud cluster 1 -- low and wide, drifts left to right */
+body::before {
+  top: 18%;
+  left: -260px;
+  width: 320px;
+  height: 110px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 320 110'><g fill='%23ffffff'><ellipse cx='80' cy='70' rx='70' ry='32'/><ellipse cx='150' cy='55' rx='70' ry='40'/><ellipse cx='225' cy='65' rx='65' ry='34'/><ellipse cx='115' cy='50' rx='42' ry='28'/><ellipse cx='190' cy='42' rx='40' ry='26'/></g></svg>");
+  animation: cloud-drift-1 60s linear infinite;
+}
+
+/* cloud cluster 2 -- smaller, higher, drifts slower */
+body::after {
+  top: 55%;
+  right: -240px;
+  width: 280px;
+  height: 95px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 280 95'><g fill='%23ffffff'><ellipse cx='70' cy='60' rx='60' ry='28'/><ellipse cx='140' cy='48' rx='65' ry='34'/><ellipse cx='210' cy='58' rx='55' ry='28'/><ellipse cx='105' cy='40' rx='35' ry='22'/></g></svg>");
+  opacity: 0.5;
+  animation: cloud-drift-2 80s linear infinite;
+}
+
+/* third cloud lives on a fixed pseudo on #app::before below */
+#app::before {
+  content: "";
+  position: fixed;
+  top: 72%;
+  left: 8%;
+  width: 220px;
+  height: 75px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.45;
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 75'><g fill='%23ffffff'><ellipse cx='55' cy='50' rx='50' ry='22'/><ellipse cx='115' cy='38' rx='55' ry='28'/><ellipse cx='170' cy='48' rx='45' ry='22'/></g></svg>");
+  animation: cloud-drift-3 95s linear infinite;
+}
+
+@keyframes cloud-drift-1 {
+  from { transform: translateX(0); }
+  to   { transform: translateX(calc(100vw + 320px)); }
+}
+@keyframes cloud-drift-2 {
+  from { transform: translateX(0); }
+  to   { transform: translateX(calc(-100vw - 280px)); }
+}
+@keyframes cloud-drift-3 {
+  from { transform: translateX(0); }
+  to   { transform: translateX(calc(100vw - 220px)); }
+}
+
+/* --- beta banner --- */
+.beta-banner {
+  position: relative;
+  z-index: 2;
+  background: var(--yellow-soft);
+  color: var(--navy);
+  text-align: center;
+  font-size: 0.92rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid rgba(20, 50, 90, 0.08);
+}
+.beta-banner strong {
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-right: 0.35rem;
+}
+
+/* --- header --- */
+.app-header {
+  padding: 2.4rem 1rem 1rem;
+  text-align: center;
+  position: relative;
+  z-index: 1;
+}
+
+.app-header h1 {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 3rem;
+  color: var(--navy);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  text-shadow: 0 2px 0 rgba(255, 255, 255, 0.4);
+}
+
+.tagline {
+  margin-top: 0.5rem;
+  font-weight: 400;
+  font-size: 1.05rem;
+  color: var(--navy);
+  opacity: 0.85;
+}
+
+#app {
+  flex: 1;
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 2rem;
+  position: relative;
+  z-index: 1;
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 1.35rem;
+  align-items: center;
+}
+.hidden { display: none !important; }
+
+/* h2 -- navy, bold, no decoration */
+h2 {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 1.85rem;
+  color: var(--navy);
+  letter-spacing: -0.01em;
+}
+
+/* ============================================================
+   BUTTONS -- skeuomorphic press feel, confident colors
+   ============================================================ */
+button {
+  font-family: var(--font);
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0.7rem 1.4rem;
+  border: none;
+  background: #ffffff;
+  color: var(--navy);
+  cursor: pointer;
+  border-radius: 6px;
+  box-shadow:
+    0 2px 0 rgba(20, 50, 90, 0.18),
+    0 3px 8px rgba(20, 50, 90, 0.12);
+  transition:
+    transform 140ms var(--ease),
+    box-shadow 140ms var(--ease),
+    background 140ms var(--ease),
+    color 140ms var(--ease);
+}
+
+button:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 4px 0 rgba(20, 50, 90, 0.2),
+    0 6px 14px rgba(20, 50, 90, 0.18);
+}
+
+button:focus-visible {
+  outline: 3px solid var(--yellow);
+  outline-offset: 2px;
+}
+
+button:active {
+  transform: translateY(0);
+  box-shadow:
+    0 1px 0 rgba(20, 50, 90, 0.18),
+    0 2px 4px rgba(20, 50, 90, 0.10);
+}
+
+/* secondary action buttons (Create Room, Play again) -- warm orange */
+#create-room-btn,
+#play-again-btn {
+  background: var(--orange);
+  color: #ffffff;
+}
+#create-room-btn:hover,
+#play-again-btn:hover {
+  background: var(--orange-hover);
+}
+#create-room-btn:active,
+#play-again-btn:active {
+  background: var(--orange-press);
+}
+
+/* primary CTA (Quickplay) -- confident green */
+button.primary {
+  background: var(--green);
+  color: #ffffff;
+}
+button.primary:hover {
+  background: var(--green-hover);
+}
+button.primary:active {
+  background: var(--green-press);
+}
+
+/* selected difficulty -- golden yellow */
+button[aria-pressed="true"] {
+  background: var(--yellow);
+  color: var(--navy);
+  box-shadow:
+    0 2px 0 rgba(20, 50, 90, 0.25),
+    inset 0 0 0 2px rgba(20, 50, 90, 0.12);
+}
+button[aria-pressed="true"]:hover {
+  background: #ffe066;
+}
+
+/* ============================================================
+   LOBBY CARDS -- white tiles floating above the sky
+   ============================================================ */
+#lobby h2 {
+  margin-bottom: 0.25rem;
+}
+
+.difficulty-picker {
+  display: flex;
+  gap: 0.6rem;
+  padding: 1.1rem 1.25rem;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+  position: relative;
+}
+.difficulty-picker::before {
+  content: "Difficulty";
+  position: absolute;
+  top: -0.6rem;
+  left: 1.1rem;
+  font-weight: 900;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--card);
+  padding: 0 0.45rem;
+  color: var(--navy-mute);
+}
+
+.lobby-actions {
+  display: flex;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 1.1rem 1.25rem;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+}
+
+/* ============================================================
+   COUNTDOWN -- big, navy, confident, gentle pop
+   ============================================================ */
+#countdown {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 6rem;
+  color: var(--navy);
+  font-variant-numeric: tabular-nums;
+  height: 6.4rem;
+  line-height: 6.4rem;
+  text-align: center;
+  text-shadow: 0 4px 0 rgba(255, 255, 255, 0.35);
+  animation: countdown-pop 800ms var(--ease) infinite alternate;
+}
+@keyframes countdown-pop {
+  from { transform: scale(0.96); }
+  to   { transform: scale(1.04); }
+}
+
+/* ============================================================
+   PROBLEM QUEUE -- white card, navy headline numbers
+   ============================================================ */
+#problem-viewport {
+  width: 100%;
+  max-width: 720px;
+  height: 11.2rem;
+  overflow: hidden;
+  position: relative;
+  margin-bottom: 0.25rem;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+
+  /* soft top/bottom fade to focus eye on center */
+  background-image:
+    linear-gradient(to bottom, #ffffff 0%, rgba(255,255,255,0) 16%, rgba(255,255,255,0) 84%, #ffffff 100%);
+}
+
+#problem-queue {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 260ms var(--ease);
+  will-change: transform;
+}
+
+.queue-item {
+  width: 100%;
+  height: 2.8rem;
+  line-height: 2.8rem;
+  font-family: var(--font);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  font-size: 1.5rem;
+  color: var(--navy-mute);
+  opacity: 0;
+  transition:
+    opacity 240ms var(--ease),
+    font-size 260ms var(--ease),
+    color 200ms var(--ease),
+    font-weight 200ms var(--ease),
+    transform 260ms var(--ease);
+}
+.queue-item.current {
+  font-size: 3rem;
+  font-weight: 900;
+  color: var(--navy);
+  opacity: 1;
+}
+.queue-item.upcoming-1 { opacity: 0.6; }
+.queue-item.upcoming-2 { opacity: 0.35; }
+.queue-item.upcoming-3 { opacity: 0.18; }
+
+/* ============================================================
+   ANSWER INPUT -- white card with green focus glow
+   ============================================================ */
+#answer-input {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 2rem;
+  padding: 0.55rem 1rem;
+  width: 16rem;
+  text-align: center;
+  border: 2px solid var(--hairline);
+  background: #ffffff;
+  color: var(--navy);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+  caret-color: var(--green);
+  box-shadow: 0 2px 0 rgba(20, 50, 90, 0.08);
+  transition:
+    box-shadow 160ms var(--ease),
+    border-color 160ms var(--ease),
+    background 160ms var(--ease),
+    transform 160ms var(--ease);
+}
+#answer-input::placeholder {
+  color: var(--navy-mute);
+  opacity: 0.55;
+  font-weight: 700;
+}
+#answer-input:focus {
+  outline: none;
+  border-color: var(--green);
+  background: #ffffff;
+  box-shadow:
+    0 0 0 4px rgba(92, 184, 92, 0.22),
+    0 2px 0 rgba(20, 50, 90, 0.08);
+  transform: translateY(-1px);
+}
+#answer-input.wrong {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+  animation: shake 260ms;
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-6px); }
+  40%      { transform: translateX(6px); }
+  60%      { transform: translateX(-4px); }
+  80%      { transform: translateX(4px); }
+}
+
+/* hide number-input spinners */
+#answer-input::-webkit-outer-spin-button,
+#answer-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+#answer-input[type="number"] { -moz-appearance: textfield; }
+
+/* ============================================================
+   TRACK -- asphalt road with dashed center lines per lane
+   ============================================================ */
+.track {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 1rem;
+  padding: 1.1rem 1rem;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+  position: relative;
+}
+.track::before {
+  content: "Track";
+  position: absolute;
+  top: -0.6rem;
+  left: 1.1rem;
+  font-weight: 900;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--card);
+  padding: 0 0.45rem;
+  color: var(--navy-mute);
+}
+
+.lane {
+  position: relative;
+  height: 48px;
+  background-color: var(--asphalt);
+  border-radius: 8px;
+  padding-left: 8rem;
+  padding-right: 1.8rem;
+
+  /* dashed white center line down the middle of each lane */
+  background-image:
+    linear-gradient(to right, transparent 8rem, var(--lane-line) 8rem, var(--lane-line) calc(8rem + 16px), transparent calc(8rem + 16px), transparent calc(8rem + 32px), var(--lane-line) calc(8rem + 32px), var(--lane-line) calc(8rem + 48px), transparent calc(8rem + 48px));
+  background-size: 64px 3px;
+  background-position: 0 50%;
+  background-repeat: repeat-x;
+
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.18);
+}
+
+.lane-handle {
+  position: absolute;
+  top: 50%;
+  left: 0.6rem;
+  transform: translateY(-50%);
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #ffffff;
+  z-index: 1;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  background: rgba(20, 50, 90, 0.55);
+  padding: 0.18rem 0.45rem;
+  border-radius: 4px;
+}
+
+/* ============================================================
+   CARS -- illustrated 2D side-view racers, drawn entirely in CSS
+   rounded body, two visible wheels with darker rims, windshield strip,
+   small spoiler. No faces.
+   ============================================================ */
+.car {
+  position: absolute;
+  top: 50%;
+  left: calc(8rem + var(--progress, 0) * (100% - 8rem - 1.8rem - 48px));
+  transform: translateY(-50%);
+  height: 28px;
+  width: 48px;
+  background: var(--car-blue);
+  border-radius: 14px 22px 6px 6px / 14px 22px 6px 6px;
+  transition: left 220ms var(--ease);
+  z-index: 2;
+  box-shadow:
+    inset 0 -4px 0 rgba(0, 0, 0, 0.18),
+    inset 0 2px 0 rgba(255, 255, 255, 0.25),
+    0 2px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* windshield strip -- lighter slanted band on top-front of body */
+.car::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  width: 18px;
+  height: 9px;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 4px 8px 2px 2px;
+  transform: skewX(-18deg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* wheels -- two black circles with darker rim, plus a tiny spoiler at the back */
+.car::after {
+  content: "";
+  position: absolute;
+  /* draw both wheels using the box's box-shadow trick */
+  bottom: -5px;
+  left: 6px;
+  width: 11px;
+  height: 11px;
+  background: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  border-radius: 50%;
+  box-shadow:
+    /* second wheel */
+    25px 0 0 -2px #3a3a3a,
+    25px 0 0 -4px #1a1a1a,
+    /* spoiler -- small dark wedge behind the body */
+    -8px -7px 0 -3px rgba(0, 0, 0, 0.55);
+}
+
+/* opponent palette cycling per lane */
+.lane:nth-of-type(1) .car:not(.you) { background: var(--car-blue); }
+.lane:nth-of-type(2) .car:not(.you) { background: var(--car-yellow); }
+.lane:nth-of-type(3) .car:not(.you) { background: var(--car-green); }
+.lane:nth-of-type(4) .car:not(.you) { background: var(--car-blue); }
+.lane:nth-of-type(5) .car:not(.you) { background: var(--car-yellow); }
+.lane:nth-of-type(6) .car:not(.you) { background: var(--car-green); }
+
+/* yellow opponent gets a darker windshield for contrast */
+.lane:nth-of-type(2) .car:not(.you)::before,
+.lane:nth-of-type(5) .car:not(.you)::before {
+  background: rgba(20, 50, 90, 0.4);
+}
+
+/* PLAYER CAR -- vivid red, slightly larger, gentle bob */
+.car.you {
+  background: var(--car-red);
+  height: 32px;
+  width: 54px;
+  z-index: 3;
+  box-shadow:
+    inset 0 -5px 0 rgba(0, 0, 0, 0.22),
+    inset 0 2px 0 rgba(255, 255, 255, 0.3),
+    0 3px 6px rgba(0, 0, 0, 0.3);
+  animation: you-bob 1.4s ease-in-out infinite alternate;
+}
+.car.you::before {
+  width: 22px;
+  height: 11px;
+  top: 5px;
+  right: 9px;
+}
+.car.you::after {
+  bottom: -6px;
+  left: 7px;
+  width: 13px;
+  height: 13px;
+  box-shadow:
+    28px 0 0 -2px #3a3a3a,
+    28px 0 0 -4px #1a1a1a,
+    -9px -8px 0 -3px rgba(0, 0, 0, 0.6);
+}
+@keyframes you-bob {
+  from { transform: translateY(-50%); }
+  to   { transform: translateY(calc(-50% - 2px)); }
+}
+
+/* ============================================================
+   FINISH FLAG -- checkered pole at the right of each lane
+   ============================================================ */
+.lane-finish {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 34px;
+  border-radius: 2px;
+  background-image:
+    linear-gradient(45deg, #1a1a1a 25%, transparent 25%, transparent 75%, #1a1a1a 75%),
+    linear-gradient(45deg, #1a1a1a 25%, transparent 25%, transparent 75%, #1a1a1a 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 4px 4px;
+  background-color: #ffffff;
+  box-shadow: -2px 0 0 0 #1a1a1a;
+  z-index: 1;
+}
+
+/* dropped lane -- desaturated, muted */
+.lane.dropped { opacity: 0.5; filter: saturate(0.4); }
+.lane.dropped .lane-handle::after {
+  content: " (left)";
+  margin-left: 0.2rem;
+  opacity: 0.85;
+}
+.lane.dropped .car { background: #9aa5b1; }
+
+/* ============================================================
+   HUD -- score chip + quit link
+   ============================================================ */
+#hud {
+  display: flex;
+  gap: 1.2rem;
+  align-items: center;
+  font-family: var(--font);
+  font-weight: 700;
+  color: var(--navy);
+  font-size: 1rem;
+  margin-top: 0.6rem;
+}
+#score {
+  color: var(--navy);
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 0.25rem 0.85rem;
+  box-shadow: var(--card-shadow);
+  display: inline-block;
+}
+#score::before {
+  content: "Score ";
+  color: var(--navy-mute);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-right: 0.3rem;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--navy);
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--orange);
+  border-radius: 0;
+  box-shadow: none;
+}
+.link-button:hover {
+  background: none;
+  box-shadow: none;
+  color: var(--orange-hover);
+  text-decoration-color: var(--orange-hover);
+  transform: none;
+}
+.link-button:active {
+  transform: none;
+  box-shadow: none;
+}
+
+/* ============================================================
+   RESULTS / PODIUM
+   1st = golden yellow card, 2nd = silver-blue, 3rd = bronze-orange
+   ============================================================ */
+#podium {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  width: 100%;
+  max-width: 560px;
+  counter-reset: rank;
+}
+#podium li {
+  padding: 0.85rem 1.1rem 0.85rem 3.2rem;
+  background: var(--card);
+  border-radius: 10px;
+  font-family: var(--font);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--navy);
+  position: relative;
+  box-shadow: var(--card-shadow);
+  counter-increment: rank;
+}
+#podium li::before {
+  content: counter(rank);
+  position: absolute;
+  left: 0.7rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 1.5rem;
+  color: var(--navy-mute);
+  width: 1.8rem;
+  text-align: center;
+}
+#podium li:nth-child(1) {
+  background: linear-gradient(180deg, var(--yellow) 0%, #f5c518 100%);
+  color: var(--navy);
+  box-shadow:
+    var(--card-shadow-lift),
+    inset 0 -3px 0 rgba(20, 50, 90, 0.12);
+}
+#podium li:nth-child(1)::before {
+  content: "1";
+  color: var(--navy);
+}
+#podium li:nth-child(1)::after {
+  content: "★";
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.4rem;
+  color: var(--navy);
+}
+#podium li:nth-child(2) {
+  background: linear-gradient(180deg, #e7eef6 0%, #cfdaea 100%);
+}
+#podium li:nth-child(3) {
+  background: linear-gradient(180deg, #fde2c5 0%, #f3c89a 100%);
+}
+#podium li.unfinished {
+  color: var(--navy-mute);
+  background: #f3f6fa;
+  font-weight: 400;
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.app-footer {
+  padding: 1.25rem 1rem;
+  text-align: center;
+  color: var(--navy);
+  font-family: var(--font);
+  font-weight: 400;
+  font-size: 0.95rem;
+  position: relative;
+  z-index: 1;
+  opacity: 0.85;
+}
+.app-footer a {
+  color: var(--navy);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--orange);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+.app-footer a:hover {
+  color: var(--orange-hover);
+  text-decoration-color: var(--orange-hover);
+}
+
+/* selection */
+::selection {
+  background: var(--yellow);
+  color: var(--navy);
+}
+
+/* ============================================================
+   REDUCED MOTION -- kill clouds and decorative bobs
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after,
+  #app::before { animation: none; }
+  #countdown { animation: none; }
+  .car.you { animation: none; }
+  button:hover { transform: none; }
+  .queue-item.current { transform: none; }
+  #problem-queue { transition: none; }
+  .car { transition: left 180ms ease-out; }
+}
+
+/* ============================================================
+   SMALL SCREENS
+   ============================================================ */
+@media (max-width: 540px) {
+  .app-header h1 { font-size: 2.1rem; }
+  h2 { font-size: 1.5rem; }
+  #countdown { font-size: 4.4rem; height: 4.8rem; line-height: 4.8rem; }
+  #answer-input { width: 12rem; font-size: 1.7rem; }
+  .queue-item.current { font-size: 2.4rem; }
+  .lane { padding-left: 6.5rem; }
+  .car { left: calc(6.5rem + var(--progress, 0) * (100% - 6.5rem - 1.8rem - 48px)); }
+  .lane-handle { font-size: 0.85rem; }
+  .difficulty-picker,
+  .lobby-actions { padding: 1rem; }
+  /* simplify lane dashed line spacing on narrow screens */
+  .lane {
+    background-image:
+      linear-gradient(to right, transparent 6.5rem, var(--lane-line) 6.5rem, var(--lane-line) calc(6.5rem + 12px), transparent calc(6.5rem + 12px), transparent calc(6.5rem + 24px), var(--lane-line) calc(6.5rem + 24px), var(--lane-line) calc(6.5rem + 36px), transparent calc(6.5rem + 36px));
+    background-size: 48px 3px;
+  }
+}
