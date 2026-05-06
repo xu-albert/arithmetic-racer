@@ -2,11 +2,24 @@ import { createRunner } from './src/runner.js';
 import { generateHandle } from './src/handles.js';
 import { pickBotTiers } from './src/bot.js';
 import { attachRaceUI } from './src/ui.js';
+import { mountHeader } from './src/header.js';
+import { mountAuthModal } from './src/auth.js';
+import { mountProfile } from './src/profile.js';
+
+mountHeader(document.getElementById('app-header'));
+mountAuthModal(document.getElementById('auth-modal-root'));
+mountProfile(document.getElementById('profile'));
+
+// When the header dispatches `open-profile`, swap screens.
+document.addEventListener('open-profile', () => {
+  showScreen('profile');
+});
 
 const screens = {
   lobby: document.getElementById('lobby'),
   race: document.getElementById('race'),
   results: document.getElementById('results'),
+  profile: document.getElementById('profile'),
 };
 
 const diffButtons = document.querySelectorAll('.diff-btn');
