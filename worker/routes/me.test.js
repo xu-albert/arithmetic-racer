@@ -15,8 +15,8 @@ import {
   handleGetMe,
   handlePostUsername,
   handleByDevice,
-  _setTestUserId,
 } from "./me.js";
+import { _setTestUserId } from "../session.js";
 
 // --- schema bootstrap & helpers --------------------------------------------
 

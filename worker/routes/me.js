@@ -11,33 +11,10 @@
 
 import { db } from "../db.js";
 import { validateUsernameSync } from "../username-validator.js";
+import { readUserId } from "../session.js";
+import { runClaim } from "../auth.js";
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
-
-// INTEGRATION NOTE: this test override is here so the unit tests can run
-// before auth.js exists. Remove this variable, _setTestUserId, and the
-// branch in readUserId() when wiring real auth.
-let TEST_USER_ID_OVERRIDE = null;
-export function _setTestUserId(id) {
-  TEST_USER_ID_OVERRIDE = id;
-}
-
-/**
- * Read the user_id from the session cookie.
- * Returns null when there is no valid session (anonymous request).
- *
- * INTEGRATION NOTE: replace with better-auth, e.g.:
- *
- *   import { auth } from "../auth.js";
- *   const session = await auth.api.getSession({ headers: request.headers });
- *   return session?.user?.id ?? null;
- *
- * Do not import auth.js here yet — it is not on the branch in this phase.
- */
-async function readUserId(request, env) {
-  if (TEST_USER_ID_OVERRIDE !== null) return TEST_USER_ID_OVERRIDE;
-  return null;
-}
 
 /**
  * Coerce a value that may be a number (epoch ms) or an ISO/SQL date string
@@ -148,6 +125,10 @@ export async function handlePostUsername(request, env) {
     return Response.json({ error: "invalid_format" }, { status: 400 });
   }
   const username = body && typeof body === "object" ? body.username : undefined;
+  // deviceId is optional; only sent on first-username-set after Google OAuth
+  // signup. Used to attribute prior anon races to this user (the email/password
+  // signup path runs the claim from auth.js's databaseHooks instead).
+  const deviceId = body && typeof body === "object" ? body.deviceId : undefined;
 
   const result = validateUsernameSync(username);
   if (!result.valid) {
@@ -163,10 +144,28 @@ export async function handlePostUsername(request, env) {
     .first();
   if (collision) return Response.json({ error: "taken" }, { status: 400 });
 
+  // Detect first-username-set so we can run the OAuth claim. We check the
+  // current row before updating; if username was NULL/empty, this is the
+  // OAuth signup's username modal completing.
+  const before = await db(env)
+    .prepare(`SELECT username FROM "user" WHERE id = ?`)
+    .bind(userId)
+    .first();
+  const wasUnset = !before?.username;
+
   await db(env)
     .prepare(`UPDATE "user" SET username = ? WHERE id = ?`)
     .bind(username, userId)
     .run();
+
+  if (wasUnset && deviceId) {
+    try {
+      await runClaim(env, userId, deviceId);
+    } catch (err) {
+      // Don't fail the rename on a claim hiccup; the user has their name set.
+      console.error("[me] claim on first-username-set failed", err);
+    }
+  }
 
   return Response.json({ username });
 }

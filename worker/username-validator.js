@@ -6,22 +6,26 @@
 // must produce identical results for identical input so the inline preview in
 // the auth modal matches what the server will say on submit.
 //
-// NOTE on the import: obscenity ships an ESM wrapper (`dist/index.mjs`) that
-// does `import mod from './index.js'` and then re-exports `mod.X` for each
-// named export. In the Cloudflare Workers runtime this `mod` resolves to
-// `undefined`, so the named imports throw. Loading via `createRequire`
-// pulls the CJS file directly (`module.exports`) and works correctly under
-// `nodejs_compat`. Node's ESM loader handles the wrapper fine, so the
-// client mirror uses a normal `import`.
-
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const {
+// NOTE on the import: obscenity ships a broken ESM wrapper at `dist/index.mjs`
+// that does `import mod from "./index.js"` and re-exports `mod.X` for each
+// named symbol. In the workerd runtime, `mod` resolves to `undefined` and the
+// wrapper itself fails to evaluate (TypeError at the `export const DataSet =
+// mod.DataSet` line).
+//
+// `wrangler.jsonc` aliases `obscenity` -> `./node_modules/obscenity/dist/index.js`
+// (the CJS file) for the bundled Worker, so this regular import resolves to
+// the working module. vitest-pool-workers also picks up the same wrangler
+// config, so tests get the same alias.
+//
+// Agent A's original workaround (`createRequire(import.meta.url)`) worked in
+// the test environment but broke under `wrangler dev` because esbuild's
+// bundled entry has `import.meta.url` undefined. The alias is cleaner than
+// per-file workarounds.
+import {
   RegExpMatcher,
   englishDataset,
   englishRecommendedTransformers,
-} = require("obscenity");
+} from "obscenity";
 
 /**
  * @typedef {{ valid: true } | { valid: false, reason: 'banned'|'reserved'|'invalid_format' }} ValidationResult

@@ -15,5 +15,12 @@
       // before remote deploy. Local dev (--local) ignores this value.
       "database_id": "00000000-0000-0000-0000-000000000000"
     }
-  ]
+  ],
+  // obscenity ships a broken ESM wrapper at dist/index.mjs (does
+  // `import mod from "./index.js"` then references `mod.X`, which evaluates
+  // to undefined under workerd). Aliasing forces esbuild to resolve the CJS
+  // file directly, which works fine under nodejs_compat.
+  "alias": {
+    "obscenity": "./node_modules/obscenity/dist/index.js"
+  }
 }

@@ -12,6 +12,7 @@
 // Contract: see worker/api-contracts.js (frozen).
 
 import { db } from "../db.js";
+import { readUserId } from "../session.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
@@ -35,24 +36,6 @@ function isValidBody(b) {
     Number.isFinite(b.accuracy_pct) && b.accuracy_pct >= 0 && b.accuracy_pct <= 100 &&
     Number.isInteger(b.longest_streak) && b.longest_streak >= 0
   );
-}
-
-/**
- * Read the user_id from the session cookie.
- * Returns null when there is no valid session (anonymous request).
- *
- * INTEGRATION NOTE: this stub returns null in Agent B's handoff so the
- * route can be merged before Agent D's auth.js exists. The integrator
- * (Phase 3) replaces the body with a call to better-auth, e.g.:
- *
- *   import { auth } from "../auth.js";
- *   const session = await auth.api.getSession({ headers: request.headers });
- *   return session?.user?.id ?? null;
- *
- * Do not import auth.js here yet — it is not on the branch in this phase.
- */
-async function readUserId(request, env) {
-  return null;
 }
 
 export async function handleRaceResult(request, env) {
