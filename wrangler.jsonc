@@ -13,5 +13,23 @@
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RaceRoom"] }
-  ]
+  ],
+  "env": {
+    "preview": {
+      "name": "arithmetic-racer-preview",
+      "main": "server/server.js",
+      "assets": {
+        "directory": "./public",
+        "binding": "ASSETS"
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "RaceRoom", "class_name": "RaceRoom" }
+        ]
+      },
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["RaceRoom"] }
+      ]
+    }
+  }
 }
