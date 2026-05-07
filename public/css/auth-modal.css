@@ -157,30 +157,86 @@
   background-repeat: no-repeat;
 }
 
+/* Auth modal tabs — Option 3: card lift.
+ *
+ * Both tabs render as muted slate cards; the active one pops up with
+ * a navy fill and a drop shadow, like a pressed-forward button.
+ *
+ * Three alternatives (Options 1, 2, 4) are kept as commented blocks
+ * below in case we change our mind. The full visual side-by-side
+ * preview is at docs/superpowers/auth-tabs-options.html (gitignored,
+ * local-only). */
 .auth-tabs {
   display: flex;
-  gap: 0;
+  gap: 0.4rem;
   margin: 1rem 0;
-  border-bottom: 1px solid #e2e8f0;
 }
 
 .auth-tab {
   flex: 1;
-  background: none;
+  background: #f1f5f9;
   border: 0;
-  padding: 0.55rem 0;
+  padding: 0.65rem 0;
   font-weight: 600;
   font-family: inherit;
   font-size: 0.95rem;
   cursor: pointer;
   color: #64748b;
-  border-bottom: 2px solid transparent;
+  border-radius: 8px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease,
+    color 0.15s ease;
 }
 
 .auth-tab.active {
-  color: #1e3a5f;
-  border-bottom-color: #1e3a5f;
+  background: #1e3a5f;
+  color: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px rgba(30, 58, 95, 0.35);
 }
+
+/* ---------------------------------------------------------------------
+ * Alternative — Option 1: solid fill flush with underline divider.
+ * Closest to the original design. To switch, replace the .auth-tabs +
+ * .auth-tab + .auth-tab.active rules above with these.
+ *
+ * .auth-tabs { display: flex; gap: 0; margin: 1rem 0;
+ *              border-bottom: 1px solid #e2e8f0; }
+ * .auth-tab  { flex: 1; background: none; border: 0;
+ *              padding: 0.7rem 0; font-weight: 600;
+ *              font-family: inherit; font-size: 0.95rem;
+ *              cursor: pointer; color: #64748b; }
+ * .auth-tab.active { background: #1e3a5f; color: #fff;
+ *                    border-radius: 6px 6px 0 0; }
+ *
+ * ---------------------------------------------------------------------
+ * Alternative — Option 2: pill segmented control (iOS-style).
+ * Both tabs sit inside a slate track; active gets a navy pill.
+ *
+ * .auth-tabs { display: flex; gap: 0.25rem; margin: 1rem 0;
+ *              padding: 0.25rem; background: #f1f5f9;
+ *              border-radius: 8px; }
+ * .auth-tab  { flex: 1; background: none; border: 0;
+ *              padding: 0.55rem 0; font-weight: 600;
+ *              font-family: inherit; font-size: 0.95rem;
+ *              cursor: pointer; color: #64748b;
+ *              border-radius: 6px; }
+ * .auth-tab.active { background: #1e3a5f; color: #fff;
+ *                    box-shadow: 0 1px 3px rgba(15,23,42,0.18); }
+ *
+ * ---------------------------------------------------------------------
+ * Alternative — Option 4: solid navy + soft slate.
+ * Both tabs are full-color buttons; active = navy, inactive = slate.
+ * Strongest contrast, no track or shadow.
+ *
+ * .auth-tabs { display: flex; gap: 0.4rem; margin: 1rem 0; }
+ * .auth-tab  { flex: 1; background: #cbd5e1; border: 0;
+ *              padding: 0.65rem 0; font-weight: 600;
+ *              font-family: inherit; font-size: 0.95rem;
+ *              cursor: pointer; color: #475569;
+ *              border-radius: 8px; }
+ * .auth-tab.active { background: #1e3a5f; color: #fff; }
+ * .auth-tab:not(.active):hover { background: #b6c4d4; }
+ * --------------------------------------------------------------------- */
 
 .auth-pane label {
   display: block;
