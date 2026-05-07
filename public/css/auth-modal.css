@@ -36,23 +36,32 @@
 
 .auth-close {
   position: absolute;
-  top: 0.5rem;
-  right: 0.7rem;
+  top: 0.6rem;
+  right: 0.6rem;
   width: 1.8rem;
   height: 1.8rem;
-  background: none;
+  padding: 0;
+  background: #ef4444;
   border: 0;
-  font-size: 1.4rem;
-  line-height: 1;
+  border-radius: 999px;
   cursor: pointer;
-  color: #64748b;
-  display: grid;
-  place-items: center;
-  border-radius: 4px;
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
 }
 
 .auth-close:hover {
-  color: #1e3a5f;
+  background: #dc2626;
+}
+
+.auth-close:focus-visible {
+  outline: 2px solid #1e3a5f;
+  outline-offset: 2px;
 }
 
 .auth-google {
