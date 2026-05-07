@@ -22,7 +22,9 @@
   left: 50%;
   transform: translate(-50%, -50%);
   background: #fff;
-  padding: 1.6rem;
+  /* Extra top padding leaves room for the absolute-positioned close
+   * button so it doesn't overlap the Continue-with-Google button. */
+  padding: 2.4rem 1.6rem 1.6rem;
   border-radius: 10px;
   max-width: 24rem;
   width: 92vw;
@@ -34,14 +36,19 @@
 
 .auth-close {
   position: absolute;
-  top: 0.4rem;
-  right: 0.6rem;
+  top: 0.5rem;
+  right: 0.7rem;
+  width: 1.8rem;
+  height: 1.8rem;
   background: none;
   border: 0;
-  font-size: 1.5rem;
+  font-size: 1.4rem;
   line-height: 1;
   cursor: pointer;
   color: #64748b;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
 }
 
 .auth-close:hover {
