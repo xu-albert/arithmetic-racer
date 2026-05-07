@@ -251,17 +251,14 @@ button:active {
     0 2px 4px rgba(20, 50, 90, 0.10);
 }
 
-/* secondary action buttons (Create Room, Play again) -- warm orange */
-#create-room-btn,
+/* secondary action buttons (Play again) -- warm orange */
 #play-again-btn {
   background: var(--orange);
   color: #ffffff;
 }
-#create-room-btn:hover,
 #play-again-btn:hover {
   background: var(--orange-hover);
 }
-#create-room-btn:active,
 #play-again-btn:active {
   background: var(--orange-press);
 }

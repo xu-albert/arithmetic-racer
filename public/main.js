@@ -11,7 +11,6 @@ const screens = {
 
 const diffButtons = document.querySelectorAll('.diff-btn');
 const quickplayBtn = document.getElementById('quickplay-btn');
-const createRoomBtn = document.getElementById('create-room-btn');
 const playAgainBtn = document.getElementById('play-again-btn');
 
 let selectedDifficulty = 'easy';
@@ -64,10 +63,6 @@ diffButtons.forEach((btn) => {
 });
 
 quickplayBtn.addEventListener('click', startQuickplay);
-
-createRoomBtn.addEventListener('click', () => {
-  alert('Private rooms come in Phase 7. For now: Quickplay.');
-});
 
 playAgainBtn.addEventListener('click', () => {
   showScreen('lobby');
