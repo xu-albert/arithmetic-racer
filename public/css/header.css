@@ -3,7 +3,11 @@
  * yellow primary CTA, teal secondary CTA, darker blue stat pills.
  */
 
-.hdr {
+/* .hdr--static is for pages like reset-password.html that include the bar
+ * for visual continuity but don't mount header.js. Same look as the live
+ * .hdr; lives in the same rule so styling stays in one place. */
+.hdr,
+.hdr.hdr--static {
   display: flex;
   align-items: center;
   gap: 0.6rem;
