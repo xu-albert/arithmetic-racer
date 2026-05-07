@@ -15,8 +15,9 @@
 // Required env vars (declared in wrangler.jsonc / .dev.vars):
 //   GOOGLE_CLIENT_ID         — Google OAuth client id
 //   GOOGLE_CLIENT_SECRET     — Google OAuth client secret
-//   RESEND_API_KEY           — Resend API key (optional — email no-ops without it)
-//   RESEND_FROM              — optional; default `onboarding@resend.dev`
+//   BREVO_API_KEY            — Brevo API key (optional — email no-ops without it)
+//   BREVO_FROM               — verified `from` address (e.g. `noreply@arithmeticracer.com`).
+//                              Optionally `Display Name <addr@domain>` for inbox preview.
 //   BETTER_AUTH_SECRET       — random 32+ byte secret used by better-auth
 //   BETTER_AUTH_URL          — optional explicit base URL (better-auth derives
 //                              one from the request if absent)
