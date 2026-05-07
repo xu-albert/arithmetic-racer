@@ -1,10 +1,15 @@
-// Unit tests for worker/email.js — Brevo wrapper.
+// Unit tests for worker/email.js — Loops wrapper.
 // Runs under vitest-pool-workers (cloudflare workerd runtime).
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { sendEmail, sendResetEmail, sendWelcomeEmail } from "./email.js";
+import {
+  sendEmail,
+  sendResetEmail,
+  sendTransactional,
+  sendWelcomeEmail,
+} from "./email.js";
 
-describe("sendEmail — no API key", () => {
+describe("sendTransactional — no API key", () => {
   let warnSpy;
   beforeEach(() => {
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -14,11 +19,11 @@ describe("sendEmail — no API key", () => {
     vi.restoreAllMocks();
   });
 
-  test("no-ops when BREVO_API_KEY is missing — fetch is not called", async () => {
+  test("no-ops when LOOPS_API_KEY is missing — fetch is not called", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const result = await sendEmail(
+    const result = await sendTransactional(
       {},
-      { to: "user@example.com", subject: "Hi", html: "<p>hi</p>" },
+      { transactionalId: "welcome", to: "user@example.com" },
     );
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(result).toEqual({ skipped: true });
@@ -41,12 +46,12 @@ describe("sendEmail — no API key", () => {
   });
 });
 
-describe("sendEmail — with API key (mocked fetch)", () => {
+describe("sendTransactional — with API key (mocked fetch)", () => {
   let fetchMock;
   beforeEach(() => {
     fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ messageId: "<msg_123@brevo>" }), {
-        status: 201,
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
         headers: { "content-type": "application/json" },
       }),
     );
@@ -57,94 +62,79 @@ describe("sendEmail — with API key (mocked fetch)", () => {
     vi.restoreAllMocks();
   });
 
-  test("sends to Brevo with correct method, URL, headers, and body shape", async () => {
-    await sendEmail(
-      { BREVO_API_KEY: "xkeysib-test", BREVO_FROM: "noreply@arithmeticracer.com" },
-      { to: "user@example.com", subject: "Hello", html: "<p>hi</p>" },
+  test("posts to Loops with correct method, URL, headers, and body shape", async () => {
+    await sendTransactional(
+      { LOOPS_API_KEY: "loops_test_key" },
+      {
+        transactionalId: "welcome",
+        to: "user@example.com",
+        dataVariables: { foo: "bar" },
+      },
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://api.brevo.com/v3/smtp/email");
+    expect(url).toBe("https://app.loops.so/api/v1/transactional");
     expect(init.method).toBe("POST");
     expect(init.headers["content-type"]).toBe("application/json");
-    expect(init.headers["api-key"]).toBe("xkeysib-test");
+    expect(init.headers.authorization).toBe("Bearer loops_test_key");
     const body = JSON.parse(init.body);
     expect(body).toEqual({
-      sender: { email: "noreply@arithmeticracer.com" },
-      to: [{ email: "user@example.com" }],
-      subject: "Hello",
-      htmlContent: "<p>hi</p>",
+      transactionalId: "welcome",
+      email: "user@example.com",
+      dataVariables: { foo: "bar" },
     });
   });
 
-  test("parses 'Display Name <addr@domain>' BREVO_FROM into sender object", async () => {
-    await sendEmail(
-      {
-        BREVO_API_KEY: "k",
-        BREVO_FROM: "Arithmetic Racer <noreply@arithmeticracer.com>",
-      },
-      { to: "u@e.com", subject: "x", html: "y" },
-    );
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.sender).toEqual({
-      email: "noreply@arithmeticracer.com",
-      name: "Arithmetic Racer",
-    });
-  });
-
-  test("refuses to send when BREVO_FROM is missing (returns no_from)", async () => {
+  test("refuses to send when transactionalId is missing", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await sendEmail(
-      { BREVO_API_KEY: "k" }, // no BREVO_FROM
-      { to: "u@e.com", subject: "x", html: "y" },
+    const res = await sendTransactional(
+      { LOOPS_API_KEY: "k" },
+      { transactionalId: "", to: "u@e.com" },
     );
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(res).toEqual({ ok: false, status: 0, reason: "no_from" });
+    expect(res).toEqual({ ok: false, status: 0, reason: "no_template" });
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });
 
-  test("sendWelcomeEmail produces a welcome-shaped payload", async () => {
+  test("sendWelcomeEmail uses LOOPS_TEMPLATE_WELCOME and no variables", async () => {
     await sendWelcomeEmail(
-      { BREVO_API_KEY: "k", BREVO_FROM: "noreply@arithmeticracer.com" },
+      { LOOPS_API_KEY: "k", LOOPS_TEMPLATE_WELCOME: "welcome-tmpl" },
       { to: "newuser@example.com" },
     );
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.to).toEqual([{ email: "newuser@example.com" }]);
-    expect(body.subject).toMatch(/welcome/i);
-    expect(body.htmlContent).toMatch(/Welcome to Arithmetic Racer/);
+    expect(body.transactionalId).toBe("welcome-tmpl");
+    expect(body.email).toBe("newuser@example.com");
+    expect(body.dataVariables).toEqual({});
   });
 
-  test("sendResetEmail embeds the reset URL", async () => {
+  test("sendResetEmail uses LOOPS_TEMPLATE_RESET and passes resetUrl", async () => {
     const resetUrl = "https://racer.dev/reset-password?token=tok_xyz";
     await sendResetEmail(
-      { BREVO_API_KEY: "k", BREVO_FROM: "noreply@arithmeticracer.com" },
+      { LOOPS_API_KEY: "k", LOOPS_TEMPLATE_RESET: "password-reset-tmpl" },
       { to: "u@e.com", resetUrl },
     );
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.subject).toMatch(/reset/i);
-    expect(body.htmlContent).toContain(resetUrl);
+    expect(body.transactionalId).toBe("password-reset-tmpl");
+    expect(body.email).toBe("u@e.com");
+    expect(body.dataVariables).toEqual({ resetUrl });
   });
 
-  test("logs (does not throw) when Brevo returns a non-2xx", async () => {
+  test("logs (does not throw) when Loops returns a non-2xx", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     fetchMock.mockResolvedValueOnce(
       new Response("server boom", { status: 500 }),
     );
-    const res = await sendEmail(
-      { BREVO_API_KEY: "k", BREVO_FROM: "noreply@arithmeticracer.com" },
-      { to: "u@e.com", subject: "x", html: "y" },
+    const res = await sendTransactional(
+      { LOOPS_API_KEY: "k" },
+      { transactionalId: "x", to: "u@e.com" },
     );
     expect(res).toEqual({ ok: false, status: 500 });
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });
 
-  test("treats 201 Created as success (Brevo's normal happy-path status)", async () => {
-    const res = await sendEmail(
-      { BREVO_API_KEY: "k", BREVO_FROM: "noreply@arithmeticracer.com" },
-      { to: "u@e.com", subject: "x", html: "y" },
-    );
-    expect(res).toEqual({ ok: true });
+  test("sendEmail is a backwards-compatible alias for sendTransactional", () => {
+    expect(sendEmail).toBe(sendTransactional);
   });
 });

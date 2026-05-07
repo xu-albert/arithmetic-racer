@@ -15,9 +15,10 @@
 // Required env vars (declared in wrangler.jsonc / .dev.vars):
 //   GOOGLE_CLIENT_ID         — Google OAuth client id
 //   GOOGLE_CLIENT_SECRET     — Google OAuth client secret
-//   BREVO_API_KEY            — Brevo API key (optional — email no-ops without it)
-//   BREVO_FROM               — verified `from` address (e.g. `noreply@arithmeticracer.com`).
-//                              Optionally `Display Name <addr@domain>` for inbox preview.
+//   LOOPS_API_KEY            — Loops API key (optional — email no-ops without it)
+//   LOOPS_TEMPLATE_WELCOME   — transactionalId for the welcome template
+//   LOOPS_TEMPLATE_RESET     — transactionalId for the password-reset template
+//                              (template must declare a `resetUrl` variable)
 //   BETTER_AUTH_SECRET       — random 32+ byte secret used by better-auth
 //   BETTER_AUTH_URL          — optional explicit base URL (better-auth derives
 //                              one from the request if absent)
