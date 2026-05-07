@@ -126,11 +126,18 @@ export function mapAuthError(code) {
     case "taken":
     case "USERNAME_IS_ALREADY_TAKEN":
       return "That username is already taken.";
+    // The server's databaseHooks.user.create.before throws APIError with
+    // `code: USERNAME_BANNED|USERNAME_RESERVED|USERNAME_INVALID_FORMAT`
+    // for the email-signup path. The /api/me/username rename route returns
+    // the lowercase reason directly. Both shapes map to the same UX copy.
     case "banned":
+    case "USERNAME_BANNED":
       return "That username isn't allowed.";
     case "reserved":
+    case "USERNAME_RESERVED":
       return "That username is reserved.";
     case "invalid_format":
+    case "USERNAME_INVALID_FORMAT":
       return "Use 3-20 letters/digits/underscore, starting with a letter.";
     case "USER_ALREADY_EXISTS":
     case "EMAIL_ALREADY_EXISTS":
