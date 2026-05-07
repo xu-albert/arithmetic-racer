@@ -154,17 +154,17 @@ export function mapAuthError(code) {
   switch (code) {
     case "taken":
     case "USERNAME_IS_ALREADY_TAKEN":
-      return "That username is already taken.";
+      return "That display name is already taken.";
     // The server's databaseHooks.user.create.before throws APIError with
     // `code: USERNAME_BANNED|USERNAME_RESERVED|USERNAME_INVALID_FORMAT`
     // for the email-signup path. The /api/me/username rename route returns
     // the lowercase reason directly. Both shapes map to the same UX copy.
     case "banned":
     case "USERNAME_BANNED":
-      return "That username isn't allowed.";
+      return "That display name isn't allowed.";
     case "reserved":
     case "USERNAME_RESERVED":
-      return "That username is reserved.";
+      return "That display name is reserved.";
     case "invalid_format":
     case "USERNAME_INVALID_FORMAT":
       return "Use 3-20 letters/digits/underscore, starting with a letter.";
@@ -302,7 +302,7 @@ const HTML = `
       <label>Password
         <input type="password" name="password" autocomplete="new-password" minlength="8" required />
       </label>
-      <label>Username
+      <label>Display name
         <input type="text" name="username" autocomplete="username" required />
         <span class="auth-username-status"></span>
       </label>
@@ -333,11 +333,11 @@ const HTML = `
     </form>
   </div>
 
-  <div id="pick-username-modal" class="auth-modal" hidden role="dialog" aria-modal="true" aria-label="Pick a username">
-    <h2>Pick your username</h2>
+  <div id="pick-username-modal" class="auth-modal" hidden role="dialog" aria-modal="true" aria-label="Pick a display name">
+    <h2>Pick your display name</h2>
     <p class="auth-pick-help">This is how other racers will see you. You can change it later from your profile.</p>
     <form id="pick-username-form" novalidate>
-      <label>Username
+      <label>Display name
         <input type="text" name="username" autocomplete="username" required />
         <span class="auth-username-status"></span>
       </label>
