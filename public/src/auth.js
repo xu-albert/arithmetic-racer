@@ -331,7 +331,7 @@ const HTML = `
 
   <div id="pick-username-modal" class="auth-modal" hidden role="dialog" aria-modal="true" aria-label="Pick a username">
     <h2>Pick your username</h2>
-    <p class="auth-pick-help">This is how other racers will see you. You can't change it later in v1.</p>
+    <p class="auth-pick-help">This is how other racers will see you. You can change it later from your profile.</p>
     <form id="pick-username-form" novalidate>
       <label>Username
         <input type="text" name="username" autocomplete="username" required />
