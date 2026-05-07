@@ -1,24 +1,21 @@
-// MIRROR OF worker/username-validator.js — keep in sync.
+// Client-side username validator (browser).
 //
-// Pure-function username validator. Used in the browser by the auth modal
-// to give inline feedback without a server round trip. The server is
-// authoritative; this file must produce identical results for identical
-// input so the inline preview matches what the server will say on submit.
+// PARTIAL MIRROR of worker/username-validator.js — covers format + reserved
+// only. The browser cannot resolve the bare `obscenity` specifier without
+// a bundler (we serve vanilla ES modules), and vendoring obscenity's full
+// dataset for instant inline checks isn't worth the bytes. The Worker is
+// authoritative on profanity: when a user types a banned name, the server
+// returns { error: "banned" } at submit time and the auth modal surfaces
+// it as an inline error.
 //
-// The browser bundler will pull obscenity from node_modules; in Node.js
-// (where the test runner lives), the standard ESM wrapper at
-// `obscenity/dist/index.mjs` resolves correctly. Only the Workers runtime
-// has a quirk that requires the `createRequire` workaround in the server
-// mirror.
-
-import {
-  RegExpMatcher,
-  englishDataset,
-  englishRecommendedTransformers,
-} from "obscenity";
+// Coverage:
+//   format    : checked here (instant feedback as the user types)
+//   reserved  : checked here (instant feedback)
+//   banned    : NOT checked here. Surfaced only on submit by the server.
+//   uniqueness: server-only.
 
 /**
- * @typedef {{ valid: true } | { valid: false, reason: 'banned'|'reserved'|'invalid_format' }} ValidationResult
+ * @typedef {{ valid: true } | { valid: false, reason: 'reserved'|'invalid_format' }} ValidationResult
  */
 
 const RESERVED = new Set([
@@ -41,13 +38,8 @@ const RESERVED = new Set([
 
 const FORMAT_RE = /^[A-Za-z][A-Za-z0-9_]{2,19}$/;
 
-const matcher = new RegExpMatcher({
-  ...englishDataset.build(),
-  ...englishRecommendedTransformers,
-});
-
 /**
- * Run all pure-function checks. Does NOT check DB uniqueness.
+ * Format + reserved-name check. Does NOT check banned words or uniqueness.
  * @param {string} username
  * @returns {ValidationResult}
  */
@@ -57,9 +49,6 @@ export function validateUsernameSync(username) {
   }
   if (RESERVED.has(username.toLowerCase())) {
     return { valid: false, reason: "reserved" };
-  }
-  if (matcher.hasMatch(username)) {
-    return { valid: false, reason: "banned" };
   }
   return { valid: true };
 }

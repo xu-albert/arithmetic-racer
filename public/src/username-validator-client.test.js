@@ -1,7 +1,9 @@
 // Client username-validator tests. Runs under `node --test`.
-// Mirror tests live in worker/username-validator.test.js — both files cover
-// the same cases, since the client and server validators must agree on
-// every input.
+// The client validator covers format + reserved only; banned-word checking
+// is server-only (the browser cannot resolve the bare `obscenity` specifier
+// without a bundler, and the server is authoritative anyway). The full set
+// of cases — including banned-word checks — runs in the worker mirror at
+// worker/username-validator.test.js.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -74,32 +76,6 @@ describe("validateUsernameSync — reserved", () => {
   }
 });
 
-describe("validateUsernameSync — banned (obscenity)", () => {
-  // These words are in obscenity 0.4.6's englishDataset. Pinned exact version
-  // means the dataset is stable; if the library ever changes its dataset,
-  // this test may need updating.
-  test("rejects an obvious profanity from the english dataset", () => {
-    assert.deepEqual(validateUsernameSync("bitch"), {
-      valid: false,
-      reason: "banned",
-    });
-  });
-
-  test("rejects an obfuscated (leetspeak) form", () => {
-    // englishRecommendedTransformers includes resolveLeetSpeakTransformer,
-    // which folds digits like 1 -> i so 'b1tch' resolves to 'bitch'.
-    assert.deepEqual(validateUsernameSync("b1tch"), {
-      valid: false,
-      reason: "banned",
-    });
-  });
-
-  test("rejects when profanity is embedded in a longer name", () => {
-    // Format-valid (letters only, starts with a letter, length OK) but
-    // contains a banned substring.
-    assert.deepEqual(validateUsernameSync("BoobMaster"), {
-      valid: false,
-      reason: "banned",
-    });
-  });
-});
+// Banned-word coverage lives in worker/username-validator.test.js. The
+// server runs obscenity at submit time and returns { error: "banned" } to
+// the auth modal, which surfaces it as an inline error.
