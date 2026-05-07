@@ -219,6 +219,7 @@ let pickModalEl = null;
 
 function openModal(tab) {
   if (!modalEl) return;
+  resetAllForms();
   setTab(tab);
   clearAllErrors(modalEl);
   backdropEl.hidden = false;
@@ -226,6 +227,21 @@ function openModal(tab) {
   // Focus first input in active pane for accessibility.
   const active = modalEl.querySelector(".auth-pane:not([hidden]) input");
   if (active) active.focus();
+}
+
+/**
+ * Wipe any field values left over from a previous open of the modal — e.g.
+ * after a user signs up, logs out, then clicks CREATE ACCOUNT again.
+ * Calls form.reset() on every pane (clears values, restores defaults) and
+ * also clears the inline username-status spans which aren't form fields.
+ */
+function resetAllForms() {
+  if (!modalEl) return;
+  modalEl.querySelectorAll("form.auth-pane").forEach((f) => f.reset());
+  modalEl.querySelectorAll(".auth-username-status").forEach((s) => {
+    s.textContent = "";
+    s.classList.remove("ok", "bad");
+  });
 }
 
 function closeModal() {

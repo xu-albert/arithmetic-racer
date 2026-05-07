@@ -131,6 +131,20 @@ export function getAuth(env) {
                   code: `USERNAME_${v.reason.toUpperCase()}`,
                 });
               }
+              // Uniqueness check (case-insensitive). Without this the DB's
+              // UNIQUE constraint would fire and surface as a generic 500;
+              // we want a specific code so the modal can render
+              // "That display name is already taken." inline.
+              const collision = await env.DB
+                .prepare(`SELECT id FROM "user" WHERE LOWER(username) = LOWER(?)`)
+                .bind(incoming)
+                .first();
+              if (collision) {
+                throw new APIError("CONFLICT", {
+                  message: "username_taken",
+                  code: "USERNAME_IS_ALREADY_TAKEN",
+                });
+              }
             }
             // Don't mutate the data — return void so better-auth uses the
             // original (with `username` already in additionalUserFields).
