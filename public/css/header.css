@@ -11,6 +11,12 @@
   background: #1e3a5f;
   font-family: "Quicksand", system-ui, sans-serif;
   color: #fff;
+  /* Pin the bar height so it doesn't jump when the CTA swaps between
+   * the logged-out two-button row (.hdr__btn, 0.9rem font) and the
+   * logged-in dropdown (.hdr__userbtn, 0.95rem font). min-height lets
+   * the bar still grow on narrower viewports if buttons wrap. */
+  min-height: 3.5rem;
+  box-sizing: border-box;
 }
 
 .hdr__brand {
