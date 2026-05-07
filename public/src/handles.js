@@ -1,12 +1,12 @@
 // Anonymous handle generator. Adjective + Animal, e.g. "BraveOtter", "SilentBadger".
 
-const ADJECTIVES = [
+export const ADJECTIVES = [
   'Brave', 'Silent', 'Swift', 'Clever', 'Quick', 'Bold', 'Lucky', 'Sleepy',
   'Fierce', 'Calm', 'Quiet', 'Sharp', 'Wild', 'Sly', 'Nimble', 'Fuzzy',
   'Mighty', 'Witty', 'Eager', 'Jolly', 'Plucky', 'Stoic', 'Zesty', 'Cosmic',
 ];
 
-const ANIMALS = [
+export const ANIMALS = [
   'Otter', 'Badger', 'Panda', 'Falcon', 'Wolf', 'Lynx', 'Owl', 'Heron',
   'Fox', 'Hawk', 'Mole', 'Mantis', 'Crow', 'Toad', 'Bear', 'Stoat',
   'Raven', 'Newt', 'Hare', 'Eel', 'Mink', 'Tapir', 'Yak', 'Ibis',
