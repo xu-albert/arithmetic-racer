@@ -22,9 +22,11 @@
   left: 50%;
   transform: translate(-50%, -50%);
   background: #fff;
-  /* Extra top padding leaves room for the absolute-positioned close
-   * button so it doesn't overlap the Continue-with-Google button. */
-  padding: 2.4rem 1.6rem 1.6rem;
+  /* Top padding must clear the absolute-positioned close button so it
+   * doesn't overlap the first content row (the Continue-with-Google
+   * button). The close is 2.2rem tall at top: 0.55rem, so its bottom
+   * sits at 2.75rem — give a touch more padding than that. */
+  padding: 3.2rem 1.6rem 1.6rem;
   border-radius: 10px;
   max-width: 24rem;
   width: 92vw;
