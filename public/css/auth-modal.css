@@ -34,10 +34,14 @@
   box-sizing: border-box;
 }
 
-/* Windows XP-flavored close button: rounded red square with a vertical
- * gradient (lighter top → darker bottom), a soft specular highlight in
- * the upper-right corner, inset bevel shadows, and an outer drop shadow
- * for lift. The X is white, slightly inset via text-shadow. */
+/* Auth modal close button — Option A: flat red rounded square.
+ *
+ * The flat design matches the rest of the modal (CTAs, tabs, inputs).
+ * The red still flags it as the "close / dismiss" affordance.
+ *
+ * Two alternatives are kept in commented-out blocks below. Visit
+ * docs/superpowers/close-button-options.html (gitignored) for a
+ * side-by-side preview if you ever want to switch. */
 .auth-close {
   position: absolute;
   top: 0.55rem;
@@ -45,9 +49,10 @@
   width: 2.2rem;
   height: 2.2rem;
   padding: 0;
-  border: 1px solid #7a0d0d;
+  border: 0;
   border-radius: 6px;
   cursor: pointer;
+  background: #ef4444;
   color: #fff;
   font-size: 1.3rem;
   font-weight: 800;
@@ -56,35 +61,70 @@
   align-items: center;
   justify-content: center;
   font-family: inherit;
-  background:
-    radial-gradient(circle at 78% 22%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 38%),
-    linear-gradient(to bottom, #ff7676 0%, #d62929 55%, #a30f0f 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.45),
-    inset 0 -1px 0 rgba(0,0,0,0.25),
-    0 1px 2px rgba(0,0,0,0.3);
-  text-shadow: 0 1px 0 rgba(0,0,0,0.4);
 }
 
 .auth-close:hover {
-  background:
-    radial-gradient(circle at 78% 22%, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0) 38%),
-    linear-gradient(to bottom, #ff8a8a 0%, #e23d3d 55%, #b81616 100%);
-}
-
-.auth-close:active {
-  background:
-    radial-gradient(circle at 78% 22%, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 35%),
-    linear-gradient(to bottom, #a30f0f 0%, #d62929 100%);
-  box-shadow:
-    inset 0 1px 3px rgba(0,0,0,0.4),
-    inset 0 -1px 0 rgba(255,255,255,0.15);
+  background: #dc2626;
 }
 
 .auth-close:focus-visible {
   outline: 2px solid #1e3a5f;
   outline-offset: 2px;
 }
+
+/* ---------------------------------------------------------------------
+ * Alternative B — Ghost icon (no fill, no border).
+ * Lowest visual weight; standard pattern on Linear / Stripe / iOS.
+ * To use: replace the .auth-close block above with this one.
+ *
+ * .auth-close {
+ *   position: absolute;
+ *   top: 0.55rem;
+ *   right: 0.6rem;
+ *   width: 2.2rem;
+ *   height: 2.2rem;
+ *   padding: 0;
+ *   border: 0;
+ *   background: none;
+ *   cursor: pointer;
+ *   color: #94a3b8;
+ *   font-size: 1.5rem;
+ *   font-weight: 600;
+ *   line-height: 1;
+ *   display: inline-flex;
+ *   align-items: center;
+ *   justify-content: center;
+ *   font-family: inherit;
+ *   border-radius: 6px;
+ * }
+ * .auth-close:hover { color: #1e3a5f; background: #f1f5f9; }
+ *
+ * ---------------------------------------------------------------------
+ * Alternative C — Soft slate circle (no red, palette-native).
+ * Light slate background with navy ×; hover inverts.
+ *
+ * .auth-close {
+ *   position: absolute;
+ *   top: 0.6rem;
+ *   right: 0.6rem;
+ *   width: 2rem;
+ *   height: 2rem;
+ *   padding: 0;
+ *   border: 0;
+ *   border-radius: 999px;
+ *   background: #e2e8f0;
+ *   color: #1e3a5f;
+ *   font-size: 1.1rem;
+ *   font-weight: 700;
+ *   line-height: 1;
+ *   display: inline-flex;
+ *   align-items: center;
+ *   justify-content: center;
+ *   cursor: pointer;
+ *   font-family: inherit;
+ * }
+ * .auth-close:hover { background: #1e3a5f; color: #fff; }
+ * --------------------------------------------------------------------- */
 
 .auth-google {
   width: 100%;
