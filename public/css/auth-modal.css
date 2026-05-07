@@ -40,16 +40,16 @@
  * for lift. The X is white, slightly inset via text-shadow. */
 .auth-close {
   position: absolute;
-  top: 0.6rem;
-  right: 0.6rem;
-  width: 1.9rem;
-  height: 1.9rem;
+  top: 0.55rem;
+  right: 0.55rem;
+  width: 2.2rem;
+  height: 2.2rem;
   padding: 0;
   border: 1px solid #7a0d0d;
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
   color: #fff;
-  font-size: 1.05rem;
+  font-size: 1.3rem;
   font-weight: 800;
   line-height: 1;
   display: inline-flex;
