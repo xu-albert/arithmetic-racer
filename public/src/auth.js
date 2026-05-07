@@ -192,7 +192,8 @@ export function mapAuthError(code) {
 export function formatUsernameStatus(username) {
   if (!username) return { text: "", ok: false };
   const result = validateUsernameSync(username);
-  if (result.valid) return { text: "Looks good", ok: true };
+  // Empty status when valid — only show messages when something's wrong.
+  if (result.valid) return { text: "", ok: true };
   switch (result.reason) {
     case "banned":
       return { text: "Not allowed (banned)", ok: false };
