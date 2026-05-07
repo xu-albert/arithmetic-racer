@@ -46,7 +46,7 @@ function setPills(host, racesCount) {
   const racesEl = host.querySelector("#hdr-pill-races");
   if (racesEl) {
     const n = Number.isFinite(racesCount) ? racesCount : 0;
-    racesEl.textContent = `${n} Races`;
+    racesEl.textContent = `${n} ${n === 1 ? "Race" : "Races"}`;
   }
 }
 
@@ -135,6 +135,9 @@ async function refresh(host) {
       0,
     );
     setPills(host, totalRaces);
+    document.dispatchEvent(
+      new CustomEvent("session-ready", { detail: { username: me.username } }),
+    );
     return;
   }
 
@@ -144,6 +147,9 @@ async function refresh(host) {
     total_races: 0,
   }));
   setPills(host, stats ? stats.total_races : 0);
+  document.dispatchEvent(
+    new CustomEvent("session-ready", { detail: { username: null } }),
+  );
 }
 
 // ---------- Public mount ----------
@@ -173,7 +179,11 @@ export function mountHeader(host) {
 
   refresh(host);
 
+  // Refresh on:
+  //   - auth-changed   (sign-in/up/out — username may flip)
+  //   - race-finished  (race POSTed; total_races may have incremented)
   const handler = () => refresh(host);
   document.addEventListener("auth-changed", handler);
+  document.addEventListener("race-finished", handler);
   HOST_LISTENERS.set(host, handler);
 }

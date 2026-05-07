@@ -5,7 +5,7 @@ import { attachRaceUI } from './src/ui.js';
 import { mountHeader } from './src/header.js';
 import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
-import { postRaceResult, getMe } from './src/stats-api.js';
+import { postRaceResult } from './src/stats-api.js';
 
 function getOrCreateDeviceId() {
   let id = localStorage.getItem('deviceId');
@@ -30,15 +30,13 @@ function getOrCreateAnonHandle() {
   return h;
 }
 
-// Cache of the logged-in user's username. Refreshed on auth-changed events.
-// null means anonymous.
+// Cache of the logged-in user's username. Updated when the header dispatches
+// `session-ready` after fetching /api/me. Eliminates the duplicate /api/me
+// fetch we used to do (header + main both calling getMe on initial load).
 let currentUsername = null;
-async function refreshUsername() {
-  const me = await getMe().catch(() => null);
-  currentUsername = me?.username || null;
-}
-document.addEventListener('auth-changed', refreshUsername);
-refreshUsername();
+document.addEventListener('session-ready', (e) => {
+  currentUsername = e.detail?.username ?? null;
+});
 
 function reportRaceResult({ runner, difficulty }) {
   const player = runner.racers.find((r) => !r.isBot);
@@ -63,10 +61,17 @@ function reportRaceResult({ runner, difficulty }) {
     avg_time_per_problem_ms: avgPerProblem,
     accuracy_pct: accuracy,
     longest_streak: player.longestStreak || 0,
-  }).catch((err) => {
-    // Non-fatal: race UX should never depend on the network call succeeding.
-    console.warn('[race-result] post failed', err);
-  });
+  })
+    .then(() => {
+      // Tell the header (and anyone else interested) so the Races pill
+      // updates without a page reload. Header listens for this alongside
+      // `auth-changed`.
+      document.dispatchEvent(new Event('race-finished'));
+    })
+    .catch((err) => {
+      // Non-fatal: race UX should never depend on the network call succeeding.
+      console.warn('[race-result] post failed', err);
+    });
 }
 
 mountHeader(document.getElementById('app-header'));
