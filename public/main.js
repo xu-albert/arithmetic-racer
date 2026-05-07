@@ -5,7 +5,7 @@ import { attachRaceUI } from './src/ui.js';
 import { mountHeader } from './src/header.js';
 import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
-import { postRaceResult } from './src/stats-api.js';
+import { postRaceResult, getMe } from './src/stats-api.js';
 
 function getOrCreateDeviceId() {
   let id = localStorage.getItem('deviceId');
@@ -15,6 +15,30 @@ function getOrCreateDeviceId() {
   }
   return id;
 }
+
+// The header (header.js) writes the persistent anonymous handle to
+// localStorage.anonHandle on first visit. Reading the same key here keeps
+// the player's lane name consistent with the header. If the header hasn't
+// run yet (shouldn't happen — mountHeader is called above), generate one
+// and persist so subsequent loads stay consistent.
+function getOrCreateAnonHandle() {
+  let h = localStorage.getItem('anonHandle');
+  if (!h) {
+    h = generateHandle(Math.random);
+    localStorage.setItem('anonHandle', h);
+  }
+  return h;
+}
+
+// Cache of the logged-in user's username. Refreshed on auth-changed events.
+// null means anonymous.
+let currentUsername = null;
+async function refreshUsername() {
+  const me = await getMe().catch(() => null);
+  currentUsername = me?.username || null;
+}
+document.addEventListener('auth-changed', refreshUsername);
+refreshUsername();
 
 function reportRaceResult({ runner, difficulty }) {
   const player = runner.racers.find((r) => !r.isBot);
@@ -88,9 +112,12 @@ function startQuickplay() {
     cleanupRace = null;
   }
 
-  const taken = new Set();
-  const playerHandle = generateHandle(Math.random, taken);
-  taken.add(playerHandle);
+  // Use the logged-in username when available, else the persistent anon
+  // handle. Falls back to a fresh generated name only if both are missing
+  // (which shouldn't happen because the header populates anonHandle on
+  // first paint).
+  const playerHandle = currentUsername || getOrCreateAnonHandle();
+  const taken = new Set([playerHandle]);
 
   const tiers = pickBotTiers(selectedDifficulty, 4);
   const bots = tiers.map((tier) => {
