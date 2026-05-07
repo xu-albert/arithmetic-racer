@@ -251,14 +251,17 @@ button:active {
     0 2px 4px rgba(20, 50, 90, 0.10);
 }
 
-/* secondary action buttons (Play again) -- warm orange */
+/* secondary action buttons (Create Room, Play again) -- warm orange */
+#create-room-btn,
 #play-again-btn {
   background: var(--orange);
   color: #ffffff;
 }
+#create-room-btn:hover,
 #play-again-btn:hover {
   background: var(--orange-hover);
 }
+#create-room-btn:active,
 #play-again-btn:active {
   background: var(--orange-press);
 }
@@ -867,6 +870,231 @@ button[aria-pressed="true"]:hover {
   background: #f3f6fa;
   font-weight: 400;
 }
+
+/* ============================================================
+   LOBBY-ROOM (private rooms) -- shares the lobby card aesthetic
+   ============================================================ */
+#lobby-room h2 {
+  margin-bottom: 0.1rem;
+  font-family: var(--font);
+  letter-spacing: -0.005em;
+  text-align: center;
+}
+#room-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--navy);
+  background: var(--card);
+  padding: 0.6rem 1.1rem;
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+  font-variant-numeric: tabular-nums;
+}
+
+.room-config {
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.race-length-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.05rem 1.1rem;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+  font-weight: 700;
+  color: var(--navy);
+  font-size: 0.95rem;
+}
+#race-length-input {
+  width: 4rem;
+  padding: 0.35rem 0.5rem;
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 1rem;
+  border: 2px solid var(--hairline);
+  border-radius: 6px;
+  text-align: center;
+  color: var(--navy);
+  background: #fff;
+  font-variant-numeric: tabular-nums;
+}
+#race-length-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.players-heading {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--navy-mute);
+  margin-top: 0.4rem;
+  margin-bottom: 0.1rem;
+}
+
+#room-players {
+  list-style: none;
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.player-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  background: var(--card);
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+}
+.player-handle {
+  font-weight: 700;
+  color: var(--navy);
+  font-size: 1.05rem;
+}
+.player-handle.editable {
+  cursor: pointer;
+  border-bottom: 2px dashed transparent;
+  transition: border-color 140ms var(--ease);
+}
+.player-handle.editable:hover {
+  border-bottom-color: var(--orange);
+}
+.handle-edit {
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 1rem;
+  padding: 0.2rem 0.5rem;
+  border: 2px solid var(--green);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--navy);
+  width: 11rem;
+}
+.handle-edit:focus { outline: none; box-shadow: 0 0 0 3px rgba(92,184,92,0.22); }
+
+.badge {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+.badge-you { background: var(--yellow-soft); color: var(--navy); }
+.badge-host { background: var(--orange); color: #fff; }
+.player-status {
+  margin-left: auto;
+  color: var(--navy-mute);
+  font-size: 0.92rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.room-actions {
+  display: flex;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  padding: 1rem 1.2rem;
+  background: var(--card);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.lobby-hint {
+  color: var(--navy);
+  opacity: 0.85;
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-align: center;
+  min-height: 1.2em;
+}
+
+/* invite modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 50, 90, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  padding: 1rem;
+}
+.modal.hidden { display: none !important; }
+.modal-card {
+  background: var(--card);
+  padding: 1.6rem 1.8rem;
+  border-radius: 14px;
+  box-shadow: var(--card-shadow-lift);
+  max-width: 28rem;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.modal-card h3 {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 1.25rem;
+  color: var(--navy);
+}
+.modal-card p { color: var(--navy-soft); font-size: 0.95rem; }
+#invite-url {
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 0.6rem 0.8rem;
+  border: 2px solid var(--hairline);
+  border-radius: 8px;
+  background: #f7f9fc;
+  color: var(--navy);
+  width: 100%;
+}
+#invite-url:focus { outline: none; border-color: var(--green); }
+.modal-actions {
+  display: flex;
+  gap: 0.7rem;
+  justify-content: flex-end;
+}
+#invite-copy-btn { background: var(--green); color: #fff; }
+#invite-copy-btn:hover { background: var(--green-hover); }
+
+/* error toast */
+.error-toast {
+  position: fixed;
+  top: 1.2rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(-120%);
+  background: var(--danger);
+  color: #fff;
+  font-weight: 700;
+  padding: 0.7rem 1.2rem;
+  border-radius: 8px;
+  box-shadow: var(--card-shadow-lift);
+  z-index: 30;
+  transition: transform 220ms var(--ease);
+  max-width: 90vw;
+  text-align: center;
+}
+.error-toast.visible { transform: translateX(-50%) translateY(0); }
 
 /* ============================================================
    FOOTER
