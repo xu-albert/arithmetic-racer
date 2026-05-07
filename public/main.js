@@ -54,7 +54,9 @@ function startQuickplay() {
   const runner = createRunner({
     difficulty: selectedDifficulty,
     seed: Math.floor(Math.random() * 1e9),
-    player: { handle: playerHandle },
+    // Mirror the multiplayer "(Guest)" marker so the race screen consistently
+    // signals that you're not signed in. Bots aren't users, so they stay raw.
+    player: { handle: `${playerHandle} (Guest)` },
     bots,
   });
 

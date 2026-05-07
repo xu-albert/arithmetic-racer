@@ -4,7 +4,6 @@ import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/ga
 
 // Mirrors public/src/runner.js values; private rooms use 20 by default.
 const COUNTDOWN_SECONDS = 3;
-const GRACE_PERIOD_MS = 5000;
 const IDLE_CLEANUP_MS = 5 * 60 * 1000;
 const RECONNECT_GRACE_MS = 30 * 1000;
 const ROOM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -156,11 +155,7 @@ export class RaceRoom extends Server {
       mutated = true;
     }
 
-    // Grace deadline → finish race.
-    if (this.state.graceDeadline != null && this.state.graceDeadline <= now && this.state.state === 'racing') {
-      this.finishRace();
-      mutated = true;
-    }
+    // Grace deadline removed — each player finishes at their own pace.
 
     // Idle cleanup.
     if (this.state.idleCleanupAt != null && this.state.idleCleanupAt <= now && this.state.players.length === 0) {
@@ -313,23 +308,25 @@ export class RaceRoom extends Server {
       player.score += 1;
       if (player.score >= this.state.raceLength) {
         player.finishMs = Date.now() - this.state.raceStartedAt;
-        // First finisher (or any finisher with no grace yet) → start grace window.
-        if (this.state.graceDeadline == null) {
-          this.state.graceDeadline = Date.now() + GRACE_PERIOD_MS;
-        }
       }
       this.broadcast(JSON.stringify({
         type: 'advance', playerId: player.id, score: player.score, finishMs: player.finishMs,
       }));
 
-      // All non-dropped done? Finish immediately, skip grace.
+      // Race ends only when every non-dropped player has finished. Stragglers
+      // get to finish at their own pace; AFK risk accepted by design.
       const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
       if (allDone) {
         this.finishRace();
+        await this.persist();
+        this.broadcastState();
+        await this.scheduleNextAlarm();
+        return;
       }
+      // During active racing we skip the routine state broadcast — granular
+      // events drive the UI and the full snapshot was the main animation
+      // stutter source. Persist still runs so reconnects see latest score.
       await this.persist();
-      this.broadcastState();
-      await this.scheduleNextAlarm();
     } else {
       this.broadcast(JSON.stringify({ type: 'wrong', playerId: player.id }));
     }
@@ -343,10 +340,15 @@ export class RaceRoom extends Server {
       player.dropped = true;
       this.broadcast(JSON.stringify({ type: 'drop', playerId: player.id }));
       const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
-      if (allDone) this.finishRace();
+      if (allDone) {
+        this.finishRace();
+        await this.persist();
+        this.broadcastState();
+        await this.scheduleNextAlarm();
+        return;
+      }
+      // No state broadcast during active racing — drop event is enough.
       await this.persist();
-      this.broadcastState();
-      await this.scheduleNextAlarm();
       return;
     }
 
@@ -441,7 +443,6 @@ export class RaceRoom extends Server {
   async scheduleNextAlarm() {
     const candidates = [];
     if (this.state.countdownAt != null) candidates.push(this.state.countdownAt);
-    if (this.state.graceDeadline != null) candidates.push(this.state.graceDeadline);
     if (this.state.idleCleanupAt != null) candidates.push(this.state.idleCleanupAt);
     for (const dl of Object.values(this.state.disconnectDeadlines)) candidates.push(dl);
 

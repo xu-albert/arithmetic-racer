@@ -2,16 +2,21 @@
 // The local player's id is aliased to 'player' so ui.js's `.id === 'player'` checks Just Work.
 
 const PLAYER_ALIAS = 'player';
-const GRACE_PERIOD_MS = 5000; // mirrors runner.js
 
 function aliasId(id, youAre) {
   return id === youAre ? PLAYER_ALIAS : id;
 }
 
+// Until accounts ship, every multiplayer participant is a guest. Append the
+// marker inline so it shows up on race lanes + podium without modifying ui.js.
+function displayHandle(rawHandle) {
+  return `${rawHandle} (Guest)`;
+}
+
 function buildRacers(players, youAre) {
   return players.map((p) => ({
     id: aliasId(p.id, youAre),
-    handle: p.handle,
+    handle: displayHandle(p.handle),
     isBot: false,
     tier: null,
     score: p.score ?? 0,
@@ -62,7 +67,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           const aliased = aliasId(p.id, youAre);
           const existing = racers.find((r) => r.id === aliased);
           if (existing) {
-            existing.handle = p.handle;
+            existing.handle = displayHandle(p.handle);
             existing.score = p.score ?? existing.score;
             if (p.finishMs != null) existing.finishMs = p.finishMs;
             existing.dropped = !!p.dropped;
@@ -70,7 +75,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           } else {
             racers.push({
               id: aliased,
-              handle: p.handle,
+              handle: displayHandle(p.handle),
               isBot: false,
               tier: null,
               score: p.score ?? 0,

@@ -71,6 +71,11 @@ export function attachLobby({ roomId, screens, onRaceStart }) {
         hostBadge.textContent = '(host)';
         li.append(hostBadge);
       }
+      // Everyone is a guest until accounts ship; suppress for any future signed-in player.
+      const guestBadge = document.createElement('span');
+      guestBadge.className = 'badge badge-guest';
+      guestBadge.textContent = '(Guest)';
+      li.append(guestBadge);
 
       const status = statusFor(p);
       if (status) {
@@ -261,7 +266,13 @@ export function attachLobby({ roomId, screens, onRaceStart }) {
       }
       prevServerState = currentState.state;
 
-      render();
+      // Skip render during active racing/countdown — lobby DOM is hidden and
+      // every state event would trigger an innerHTML rebuild that competes
+      // with the race-screen car animation. Re-render fires on every other
+      // state transition (lobby/finished).
+      if (currentState.state !== 'racing' && currentState.state !== 'countdown') {
+        render();
+      }
     } else if (msg.type === 'error') {
       showError(msg.message || msg.code);
     }

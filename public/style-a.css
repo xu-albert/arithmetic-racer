@@ -993,6 +993,7 @@ button[aria-pressed="true"]:hover {
 }
 .badge-you { background: var(--yellow-soft); color: var(--navy); }
 .badge-host { background: var(--orange); color: #fff; }
+.badge-guest { background: var(--hairline); color: var(--navy-mute); }
 .player-status {
   margin-left: auto;
   color: var(--navy-mute);
