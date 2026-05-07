@@ -34,29 +34,51 @@
   box-sizing: border-box;
 }
 
+/* Windows XP-flavored close button: rounded red square with a vertical
+ * gradient (lighter top → darker bottom), a soft specular highlight in
+ * the upper-right corner, inset bevel shadows, and an outer drop shadow
+ * for lift. The X is white, slightly inset via text-shadow. */
 .auth-close {
   position: absolute;
   top: 0.6rem;
   right: 0.6rem;
-  width: 1.8rem;
-  height: 1.8rem;
+  width: 1.9rem;
+  height: 1.9rem;
   padding: 0;
-  background: #ef4444;
-  border: 0;
-  border-radius: 999px;
+  border: 1px solid #7a0d0d;
+  border-radius: 5px;
   cursor: pointer;
   color: #fff;
-  font-size: 1.1rem;
-  font-weight: 700;
+  font-size: 1.05rem;
+  font-weight: 800;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-family: inherit;
+  background:
+    radial-gradient(circle at 78% 22%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 38%),
+    linear-gradient(to bottom, #ff7676 0%, #d62929 55%, #a30f0f 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.45),
+    inset 0 -1px 0 rgba(0,0,0,0.25),
+    0 1px 2px rgba(0,0,0,0.3);
+  text-shadow: 0 1px 0 rgba(0,0,0,0.4);
 }
 
 .auth-close:hover {
-  background: #dc2626;
+  background:
+    radial-gradient(circle at 78% 22%, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0) 38%),
+    linear-gradient(to bottom, #ff8a8a 0%, #e23d3d 55%, #b81616 100%);
+}
+
+.auth-close:active {
+  background:
+    radial-gradient(circle at 78% 22%, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 35%),
+    linear-gradient(to bottom, #a30f0f 0%, #d62929 100%);
+  box-shadow:
+    inset 0 1px 3px rgba(0,0,0,0.4),
+    inset 0 -1px 0 rgba(255,255,255,0.15);
 }
 
 .auth-close:focus-visible {
