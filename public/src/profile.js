@@ -146,9 +146,9 @@ const PROFILE_HTML = `
       <div class="profile__name-block">
         <h2 class="profile__username">
           <span id="profile-username-display"></span>
-          <button class="profile__edit" aria-label="Change username">✎</button>
         </h2>
         <p class="profile__email" id="profile-email"></p>
+        <button class="profile__edit" type="button">Edit your profile</button>
       </div>
       <div class="profile__headline">
         <span id="profile-headline-num">—</span>
