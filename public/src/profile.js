@@ -193,7 +193,7 @@ const PROFILE_HTML = `
 
   <div class="profile__rename" id="profile-rename" hidden>
     <div class="profile__rename-card">
-      <h3>Change username</h3>
+      <h3>Change display name</h3>
       <input type="text" id="profile-rename-input" maxlength="20" autocomplete="off" />
       <span class="profile__rename-status"></span>
       <div class="profile__rename-actions">
