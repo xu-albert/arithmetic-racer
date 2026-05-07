@@ -1,7 +1,26 @@
 {
-  "name": "arithmetic-racer",
-  "compatibility_date": "2026-05-06",
-  "assets": {
-    "directory": "./public"
-  }
+	"name": "arithmetic-racer",
+	"main": "worker/index.js",
+	"compatibility_date": "2026-05-06",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "arithmetic-racer",
+			"database_id": "f8177dfe-30fe-4d05-931b-cfdb30a6e696"
+		}
+	],
+	// obscenity ships a broken ESM wrapper at dist/index.mjs (does
+	// `import mod from "./index.js"` then references `mod.X`, which evaluates
+	// to undefined under workerd). Aliasing forces esbuild to resolve the CJS
+	// file directly, which works fine under nodejs_compat.
+	"alias": {
+		"obscenity": "./node_modules/obscenity/dist/index.js"
+	}
 }

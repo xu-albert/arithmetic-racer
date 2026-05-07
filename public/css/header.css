@@ -1,0 +1,150 @@
+/* Persistent app header. Owned by Agent E.
+ * Visual reference: TypeRacer-style header — deep blue background,
+ * yellow primary CTA, teal secondary CTA, darker blue stat pills.
+ */
+
+.hdr {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 1rem;
+  background: #1e3a5f;
+  font-family: "Quicksand", system-ui, sans-serif;
+  color: #fff;
+}
+
+.hdr__brand {
+  /* Match the big title's font (var(--font) = Nunito) so the top-left
+   * branding and the home-screen title look like one identity. */
+  font-family: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-weight: 900;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  padding-right: 0.4rem;
+}
+
+.hdr__cta {
+  display: flex;
+  gap: 0.5rem;
+  margin-left: auto;
+  align-items: center;
+}
+
+.hdr__btn {
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  border: 0;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+  font-family: inherit;
+  transition: filter 0.12s ease;
+}
+
+.hdr__btn--primary {
+  background: #facc15;
+  color: #1e3a5f;
+}
+
+.hdr__btn:not(.hdr__btn--primary) {
+  background: #3aa691;
+  color: #fff;
+}
+
+.hdr__btn:hover {
+  filter: brightness(1.1);
+}
+
+.hdr__btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.hdr__pills {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.hdr__pill {
+  background: #2c5475;
+  padding: 0.55rem 0.9rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.hdr__userbox {
+  position: relative;
+}
+
+.hdr__userbtn {
+  background: #2c5475;
+  color: #fff;
+  border: 0;
+  padding: 0.55rem 0.9rem;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.hdr__userbtn:hover {
+  filter: brightness(1.1);
+}
+
+.hdr__userbtn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.hdr__caret {
+  font-size: 0.7rem;
+  opacity: 0.85;
+}
+
+.hdr__menu {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  background: #fff;
+  color: #1e3a5f;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  min-width: 9rem;
+  display: flex;
+  flex-direction: column;
+  padding: 0.3rem 0;
+  z-index: 5;
+}
+
+.hdr__menu[hidden] {
+  display: none;
+}
+
+.hdr__menuitem {
+  background: none;
+  border: 0;
+  text-align: left;
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+  color: inherit;
+  font-family: inherit;
+  font-weight: 600;
+}
+
+.hdr__menuitem:hover {
+  background: #f1f5f9;
+}
+
+.hdr__menuitem:focus-visible {
+  outline: 2px solid #1e3a5f;
+  outline-offset: -2px;
+}
