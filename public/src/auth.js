@@ -259,6 +259,9 @@ function setTab(tab) {
   panes.forEach((p) => {
     p.hidden = p.id !== `auth-pane-${tab}`;
   });
+  // Returning to a regular tab — make sure the forgot-password lockdown
+  // is cleared so the Google button + tab strip are visible again.
+  modalEl.classList.remove("auth-modal--forgot");
 }
 
 function clearAllErrors(scope) {
@@ -390,6 +393,8 @@ export function mountAuthModal(host) {
     modalEl
       .querySelectorAll(".auth-tab")
       .forEach((t) => t.classList.remove("active"));
+    // Lock down the modal to forgot-only — hides Google button + tabs via CSS.
+    modalEl.classList.add("auth-modal--forgot");
     const input = modalEl.querySelector("#auth-pane-forgot input[name='email']");
     if (input) input.focus();
   });

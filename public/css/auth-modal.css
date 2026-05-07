@@ -157,6 +157,14 @@
   background-repeat: no-repeat;
 }
 
+/* When the user clicks "Forgot password?" we drop the Google button and
+ * the Sign Up / Log In tab strip — the only thing relevant on that pane
+ * is "enter your email and submit". */
+.auth-modal.auth-modal--forgot .auth-google,
+.auth-modal.auth-modal--forgot .auth-tabs {
+  display: none;
+}
+
 /* Auth modal tabs — Option 3: card lift.
  *
  * Both tabs render as muted slate cards; the active one pops up with
