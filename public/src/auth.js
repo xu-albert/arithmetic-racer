@@ -64,15 +64,44 @@ async function signInEmail({ email, password }) {
 }
 
 async function signOut() {
+  // better-auth 1.6.9 returns 415 UNSUPPORTED_MEDIA_TYPE if the request
+  // doesn't include a JSON content-type, even when the body is empty.
   await fetch(`${AUTH}/sign-out`, {
     method: "POST",
+    headers: { "content-type": "application/json" },
     credentials: "include",
+    body: "{}",
   });
 }
 
-function googleSignInUrl() {
-  const callback = encodeURIComponent(location.origin + "/?auth=google");
-  return `${AUTH}/sign-in/social?provider=google&callbackURL=${callback}`;
+/**
+ * Initiate the Google OAuth flow.
+ *
+ * better-auth 1.6.9's /sign-in/social endpoint is POST-only (GET 404s).
+ * It returns 200 with a JSON body { url, redirect: true } and sets a
+ * better-auth.state cookie. We POST, read the URL, and navigate the
+ * browser to Google's consent screen.
+ */
+async function startGoogleSignIn() {
+  const res = await fetch(`${AUTH}/sign-in/social`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({
+      provider: "google",
+      callbackURL: "/?auth=google",
+    }),
+  });
+  if (!res.ok) {
+    throw Object.assign(new Error("google sign-in failed"), {
+      status: res.status,
+    });
+  }
+  const body = await res.json().catch(() => ({}));
+  if (typeof body.url !== "string") {
+    throw new Error("google sign-in: missing redirect url");
+  }
+  location.assign(body.url);
 }
 
 async function requestPasswordReset(email) {
@@ -470,7 +499,14 @@ export function mountAuthModal(host) {
 
   // ---- Google sign-in ---
   modalEl.querySelector("#auth-google").addEventListener("click", () => {
-    location.assign(googleSignInUrl());
+    startGoogleSignIn().catch((err) => {
+      console.error("[auth] google sign-in failed", err);
+      const errEl = modalEl.querySelector(".auth-pane:not([hidden]) .auth-error");
+      if (errEl) {
+        errEl.textContent = "Couldn't start Google sign-in. Try again.";
+        errEl.hidden = false;
+      }
+    });
   });
 
   // ---- Pick-username modal ---

@@ -14,10 +14,12 @@
 }
 
 .hdr__brand {
-  font-family: "Patrick Hand", "Quicksand", system-ui, sans-serif;
-  font-weight: 700;
+  /* Match the big title's font (var(--font) = Nunito) so the top-left
+   * branding and the home-screen title look like one identity. */
+  font-family: "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-weight: 900;
   font-size: 1.4rem;
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   padding-right: 0.4rem;
 }
