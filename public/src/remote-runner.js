@@ -1,6 +1,8 @@
 // Mirrors public/src/runner.js so attachRaceUI works unchanged.
 // The local player's id is aliased to 'player' so ui.js's `.id === 'player'` checks Just Work.
 
+import { validateAnswer } from './game.js';
+
 const PLAYER_ALIAS = 'player';
 
 function aliasId(id, youAre) {
@@ -33,6 +35,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   const listeners = new Set();
   let stopped = false;
   let raceStartEmitted = false;
+  let raceStartedAtMs = initialState.raceStartedAt ?? null;
   let lastCountdownN = null;
 
   function emit(event, data) {
@@ -100,6 +103,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       }
       case 'race-start': {
         sequence = msg.sequence;
+        raceStartedAtMs = msg.raceStartedAt;
         raceStartEmitted = true;
         emit('start', { problem: sequence[0] });
         break;
@@ -107,21 +111,29 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       case 'advance': {
         const r = findRacer(msg.playerId);
         if (!r) break;
+        // Suppress the local player's server-driven advance — we already
+        // applied it optimistically in submitAnswer. Only reconcile if the
+        // server is ahead of us (e.g. a dropped optimistic frame), in which
+        // case server wins.
+        if (r.id === PLAYER_ALIAS) {
+          if (msg.score > r.score) {
+            r.score = msg.score;
+            if (msg.finishMs != null) r.finishMs = msg.finishMs;
+            emit('advance', { racerId: r.id, score: r.score, finishMs: r.finishMs });
+            const next = sequence[r.score] ?? null;
+            if (next) emit('problem', { problem: next });
+          }
+          break;
+        }
+        // Opponents: update from server.
         r.score = msg.score;
         if (msg.finishMs != null) r.finishMs = msg.finishMs;
         emit('advance', { racerId: r.id, score: r.score, finishMs: r.finishMs });
-        // For the local player, push the next problem to mirror runner.js behavior.
-        if (r.id === PLAYER_ALIAS) {
-          const next = sequence[r.score] ?? null;
-          if (next) emit('problem', { problem: next });
-        }
         break;
       }
       case 'wrong': {
-        // ui.js shakes the local input on any 'wrong' event without checking racerId
-        // (runner.js only ever emits wrong for the local player). Mirror that here.
-        if (msg.playerId !== youAre) break;
-        emit('wrong', { racerId: PLAYER_ALIAS });
+        // Local player's wrong was already shown optimistically; suppress.
+        // Opponents' wrong answers don't shake anyone's input by design.
         break;
       }
       case 'drop': {
@@ -155,8 +167,27 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     on(handler) { listeners.add(handler); return () => listeners.delete(handler); },
     start() { /* no-op; server drives countdown */ },
     submitAnswer(raw) {
+      // Always relay to server; server is the source of truth.
       roomClient.send({ type: 'answer', value: raw });
-      return { correct: true }; // ui.js doesn't use the return value; events do the work.
+      // Optimistic local update — your own car moves on press, no waiting on
+      // the server round-trip. Server's later `advance`/`wrong` for self is
+      // suppressed unless server's score gets ahead of ours (rare).
+      const me = racers.find((r) => r.id === PLAYER_ALIAS);
+      if (!me || me.dropped || me.score >= raceLength) return { correct: true };
+      const problem = sequence[me.score];
+      if (!problem) return { correct: true };
+      if (validateAnswer(problem, raw)) {
+        me.score += 1;
+        if (me.score >= raceLength && me.finishMs == null && raceStartedAtMs != null) {
+          me.finishMs = Date.now() - raceStartedAtMs;
+        }
+        emit('advance', { racerId: me.id, score: me.score, finishMs: me.finishMs });
+        const next = sequence[me.score] ?? null;
+        if (next) emit('problem', { problem: next });
+        return { correct: true };
+      }
+      emit('wrong', { racerId: me.id });
+      return { correct: false };
     },
     currentProblemFor(racerId) {
       const r = racers.find((x) => x.id === racerId);

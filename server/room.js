@@ -18,7 +18,7 @@ function freshState(id) {
     id,
     createdAt: Date.now(),
     difficulty: 'medium',
-    raceLength: 20,
+    raceLength: 10,
     state: 'lobby',
     players: [],
     problemSequence: [],
