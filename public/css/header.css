@@ -14,35 +14,12 @@
 }
 
 .hdr__brand {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  min-width: 0;
-}
-
-.hdr__avatar {
-  width: 2.2rem;
-  height: 2.2rem;
-  background: #fff;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  color: #1e3a5f;
-}
-
-.hdr__avatar svg {
-  width: 1.5rem;
-  height: 1.5rem;
-  display: block;
-}
-
-.hdr__name {
+  font-family: "Patrick Hand", "Quicksand", system-ui, sans-serif;
   font-weight: 700;
-  font-size: 1.05rem;
+  font-size: 1.4rem;
+  letter-spacing: 0.01em;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding-right: 0.4rem;
 }
 
 .hdr__cta {
