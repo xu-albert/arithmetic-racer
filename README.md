@@ -20,6 +20,8 @@ Open http://localhost:3000.
 npm test
 ```
 
+See [`docs/testing.md`](./docs/testing.md) for the full manual test plan — Quickplay smoke, the two-browser multiplayer matrix, regression things to watch for, and notes on deploys.
+
 ## Stack (planned)
 
 - Node.js + Express + Socket.io (server, added in Phase 6)

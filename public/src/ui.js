@@ -47,6 +47,9 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     problemQueue.append(div);
   }
 
+  // Cache rowHeight once — reading offsetHeight on every advance forces a
+  // synchronous layout, which competes with the car-animation paint frames.
+  let cachedRowHeight = 0;
   function updateQueue() {
     const idx = playerRacer.score;
     const items = problemQueue.querySelectorAll('.queue-item');
@@ -58,8 +61,8 @@ export function attachRaceUI({ runner, raceLength, screens }) {
       else if (offset === 2) el.classList.add('upcoming-2');
       else if (offset === 3) el.classList.add('upcoming-3');
     });
-    const rowHeight = items[0]?.offsetHeight ?? 0;
-    problemQueue.style.transform = `translateY(-${idx * rowHeight}px)`;
+    if (cachedRowHeight === 0) cachedRowHeight = items[0]?.offsetHeight ?? 0;
+    problemQueue.style.transform = `translateY(-${idx * cachedRowHeight}px)`;
   }
 
   updateQueue();

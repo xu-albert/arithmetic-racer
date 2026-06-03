@@ -4,10 +4,22 @@
   "description": "Real-time multiplayer arithmetic race. Type the answer, watch your car move, beat your friends.",
   "type": "module",
   "scripts": {
-    "dev": "npx serve public -l 3000",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "vendor": "cp node_modules/partysocket/dist/index.js node_modules/partysocket/dist/index.js.map node_modules/partysocket/dist/ws.js node_modules/partysocket/dist/ws.js.map public/vendor/partysocket/",
     "test": "node --test public/src/*.test.js"
   },
-  "keywords": ["multiplayer", "websocket", "render", "socket.io", "game"],
+  "keywords": [
+    "multiplayer",
+    "websocket",
+    "render",
+    "socket.io",
+    "game"
+  ],
   "author": "Albert Xu",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "partyserver": "^0.5.5",
+    "partysocket": "^1.1.18"
+  }
 }
