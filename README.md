@@ -1,10 +1,12 @@
 # Arithmetic Racer
 
-A real-time multiplayer arithmetic race. Players join a lobby, agree on difficulty, then race to be the first to answer 20 math problems correctly. TypeRacer-style horizontal track, animated cars, live opponent positions.
+A real-time multiplayer arithmetic race. Players join a lobby, agree on difficulty, then race to be the first to answer 10 math problems correctly. TypeRacer-style horizontal track, animated cars, live opponent positions.
 
 ## Status
 
-In active development. Building local-first (single-browser solo-vs-bots), then layering on real multiplayer.
+Single-player solo-vs-bots runs locally and in production. Accounts, stats, and private multiplayer rooms are code-complete on separate branches pending merge.
+
+Live: https://arithmetic-racer.albertwxu.workers.dev
 
 ## Local development
 
@@ -12,7 +14,7 @@ In active development. Building local-first (single-browser solo-vs-bots), then 
 npm run dev
 ```
 
-Open http://localhost:3000.
+Runs `wrangler dev`. Open http://localhost:8787.
 
 ## Tests
 
@@ -20,18 +22,18 @@ Open http://localhost:3000.
 npm test
 ```
 
+Runs `node --test public/src/*.test.js` (pure game logic) and `vitest run` (Worker routes).
+
 See [`docs/testing.md`](./docs/testing.md) for the full manual test plan — Quickplay smoke, the two-browser multiplayer matrix, regression things to watch for, and notes on deploys.
 
-## Stack (planned)
+## Stack
 
-- Node.js + Express + Socket.io (server, added in Phase 6)
-- Vanilla HTML / CSS / JS (frontend)
-- Postgres (leaderboard)
-- Render (deploy target)
-
-## Architecture notes
-
-Game logic is written as pure functions with no DOM access. In local-first mode (Phases 1-5), a browser-side `runner.js` shim drives the loop. In Phase 6, that shim is replaced with a Socket.io client; the game-logic module ports straight to the server unchanged.
+- Cloudflare Workers (server entry `server/server.js`)
+- Durable Objects via PartyServer for race rooms (`server/room.js`)
+- D1 (SQLite) for users and race results
+- better-auth for email/password and Google OAuth
+- Loops for transactional email
+- Vanilla HTML / CSS / JS frontend, no framework
 
 ## Difficulty reference
 
