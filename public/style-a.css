@@ -75,13 +75,17 @@ body {
 }
 
 /* --- drifting cloud silhouettes --- */
-/* three soft white SVG clouds, drifting slowly across the sky */
+/* three soft white SVG clouds, drifting slowly across the sky.
+ * z-index: -1 keeps them above the body gradient but BEHIND any static
+ * content inside the page (otherwise positioned-pseudo at z-index 0 paints
+ * over static descendants of its stacking-context parent — see #app::before
+ * below for the same fix). */
 body::before,
 body::after {
   content: "";
   position: fixed;
   pointer-events: none;
-  z-index: 0;
+  z-index: -1;
   background-repeat: no-repeat;
   background-size: contain;
   opacity: 0.6;
@@ -108,7 +112,11 @@ body::after {
   animation: cloud-drift-2 80s linear infinite;
 }
 
-/* third cloud lives on a fixed pseudo on #app::before below */
+/* third cloud lives on a fixed pseudo on #app::before below.
+ * z-index: -1 (relative to #app's stacking context) puts the cloud behind
+ * static descendants of #app like .profile / .lobby cards. Without this,
+ * the cloud paints over the profile content and looks like a transparency
+ * bug. */
 #app::before {
   content: "";
   position: fixed;
@@ -117,7 +125,7 @@ body::after {
   width: 220px;
   height: 75px;
   pointer-events: none;
-  z-index: 0;
+  z-index: -1;
   opacity: 0.45;
   background-repeat: no-repeat;
   background-size: contain;

@@ -7,7 +7,12 @@ dist/
 .idea/
 .vscode/
 .wrangler/
-.playwright-mcp/
+.dev.vars
 
 # Local-only design notes, plans, and case-study session logs
 docs/superpowers/
+
+# Playwright MCP test artifacts (snapshots, screenshots, logs)
+.playwright-mcp/
+t*-baseline.png
+t*-final.png

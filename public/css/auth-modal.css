@@ -1,0 +1,348 @@
+/* Auth modal styles — owned by Agent F.
+ *
+ * Visual language: deep blue accent (#1e3a5f) for primary actions,
+ * matches the header palette. Modal max-width ~24rem.
+ */
+
+.auth-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  z-index: 90;
+}
+
+.auth-backdrop[hidden],
+.auth-modal[hidden] {
+  display: none !important;
+}
+
+.auth-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  /* Top padding must clear the absolute-positioned close button so it
+   * doesn't overlap the first content row (the Continue-with-Google
+   * button). The close is 2.2rem tall at top: 0.55rem, so its bottom
+   * sits at 2.75rem — give a touch more padding than that. */
+  padding: 3.2rem 1.6rem 1.6rem;
+  border-radius: 10px;
+  max-width: 24rem;
+  width: 92vw;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  font-family: "Quicksand", system-ui, sans-serif;
+  z-index: 100;
+  box-sizing: border-box;
+}
+
+/* Auth modal close button — Option A: flat red rounded square.
+ *
+ * The flat design matches the rest of the modal (CTAs, tabs, inputs).
+ * The red still flags it as the "close / dismiss" affordance.
+ *
+ * Two alternatives are kept in commented-out blocks below. Visit
+ * docs/superpowers/close-button-options.html (gitignored) for a
+ * side-by-side preview if you ever want to switch. */
+.auth-close {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  background: #ef4444;
+  color: #fff;
+  font-size: 1.3rem;
+  font-weight: 800;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+}
+
+.auth-close:hover {
+  background: #dc2626;
+}
+
+.auth-close:focus-visible {
+  outline: 2px solid #1e3a5f;
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------
+ * Alternative B — Ghost icon (no fill, no border).
+ * Lowest visual weight; standard pattern on Linear / Stripe / iOS.
+ * To use: replace the .auth-close block above with this one.
+ *
+ * .auth-close {
+ *   position: absolute;
+ *   top: 0.55rem;
+ *   right: 0.6rem;
+ *   width: 2.2rem;
+ *   height: 2.2rem;
+ *   padding: 0;
+ *   border: 0;
+ *   background: none;
+ *   cursor: pointer;
+ *   color: #94a3b8;
+ *   font-size: 1.5rem;
+ *   font-weight: 600;
+ *   line-height: 1;
+ *   display: inline-flex;
+ *   align-items: center;
+ *   justify-content: center;
+ *   font-family: inherit;
+ *   border-radius: 6px;
+ * }
+ * .auth-close:hover { color: #1e3a5f; background: #f1f5f9; }
+ *
+ * ---------------------------------------------------------------------
+ * Alternative C — Soft slate circle (no red, palette-native).
+ * Light slate background with navy ×; hover inverts.
+ *
+ * .auth-close {
+ *   position: absolute;
+ *   top: 0.6rem;
+ *   right: 0.6rem;
+ *   width: 2rem;
+ *   height: 2rem;
+ *   padding: 0;
+ *   border: 0;
+ *   border-radius: 999px;
+ *   background: #e2e8f0;
+ *   color: #1e3a5f;
+ *   font-size: 1.1rem;
+ *   font-weight: 700;
+ *   line-height: 1;
+ *   display: inline-flex;
+ *   align-items: center;
+ *   justify-content: center;
+ *   cursor: pointer;
+ *   font-family: inherit;
+ * }
+ * .auth-close:hover { background: #1e3a5f; color: #fff; }
+ * --------------------------------------------------------------------- */
+
+.auth-google {
+  width: 100%;
+  padding: 0.7rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.auth-google:hover {
+  background: #f8fafc;
+}
+
+.auth-google::before {
+  content: "";
+  width: 1rem;
+  height: 1rem;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'><path fill='%23FFC107' d='M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.8 1.1 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z'/><path fill='%23FF3D00' d='M6.3 14.1l6.6 4.8C14.7 15.2 19 12 24 12c3 0 5.8 1.1 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.1z'/><path fill='%234CAF50' d='M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2c-1.9 1.4-4.4 2.4-7.2 2.4-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z'/><path fill='%231976D2' d='M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.6l6.2 5.2C40.7 35.6 44 30.3 44 24c0-1.3-.1-2.4-.4-3.5z'/></svg>");
+  background-size: contain;
+  background-repeat: no-repeat;
+}
+
+/* When the user clicks "Forgot password?" we drop the Google button and
+ * the Sign Up / Log In tab strip — the only thing relevant on that pane
+ * is "enter your email and submit". */
+.auth-modal.auth-modal--forgot .auth-google,
+.auth-modal.auth-modal--forgot .auth-tabs {
+  display: none;
+}
+
+/* Auth modal tabs — Option 3: card lift.
+ *
+ * Both tabs render as muted slate cards; the active one pops up with
+ * a navy fill and a drop shadow, like a pressed-forward button.
+ *
+ * Three alternatives (Options 1, 2, 4) are kept as commented blocks
+ * below in case we change our mind. The full visual side-by-side
+ * preview is at docs/superpowers/auth-tabs-options.html (gitignored,
+ * local-only). */
+.auth-tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin: 1rem 0;
+}
+
+.auth-tab {
+  flex: 1;
+  background: #f1f5f9;
+  border: 0;
+  padding: 0.65rem 0;
+  font-weight: 600;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  color: #64748b;
+  border-radius: 8px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease,
+    color 0.15s ease;
+}
+
+.auth-tab.active {
+  background: #1e3a5f;
+  color: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 14px rgba(30, 58, 95, 0.35);
+}
+
+/* ---------------------------------------------------------------------
+ * Alternative — Option 1: solid fill flush with underline divider.
+ * Closest to the original design. To switch, replace the .auth-tabs +
+ * .auth-tab + .auth-tab.active rules above with these.
+ *
+ * .auth-tabs { display: flex; gap: 0; margin: 1rem 0;
+ *              border-bottom: 1px solid #e2e8f0; }
+ * .auth-tab  { flex: 1; background: none; border: 0;
+ *              padding: 0.7rem 0; font-weight: 600;
+ *              font-family: inherit; font-size: 0.95rem;
+ *              cursor: pointer; color: #64748b; }
+ * .auth-tab.active { background: #1e3a5f; color: #fff;
+ *                    border-radius: 6px 6px 0 0; }
+ *
+ * ---------------------------------------------------------------------
+ * Alternative — Option 2: pill segmented control (iOS-style).
+ * Both tabs sit inside a slate track; active gets a navy pill.
+ *
+ * .auth-tabs { display: flex; gap: 0.25rem; margin: 1rem 0;
+ *              padding: 0.25rem; background: #f1f5f9;
+ *              border-radius: 8px; }
+ * .auth-tab  { flex: 1; background: none; border: 0;
+ *              padding: 0.55rem 0; font-weight: 600;
+ *              font-family: inherit; font-size: 0.95rem;
+ *              cursor: pointer; color: #64748b;
+ *              border-radius: 6px; }
+ * .auth-tab.active { background: #1e3a5f; color: #fff;
+ *                    box-shadow: 0 1px 3px rgba(15,23,42,0.18); }
+ *
+ * ---------------------------------------------------------------------
+ * Alternative — Option 4: solid navy + soft slate.
+ * Both tabs are full-color buttons; active = navy, inactive = slate.
+ * Strongest contrast, no track or shadow.
+ *
+ * .auth-tabs { display: flex; gap: 0.4rem; margin: 1rem 0; }
+ * .auth-tab  { flex: 1; background: #cbd5e1; border: 0;
+ *              padding: 0.65rem 0; font-weight: 600;
+ *              font-family: inherit; font-size: 0.95rem;
+ *              cursor: pointer; color: #475569;
+ *              border-radius: 8px; }
+ * .auth-tab.active { background: #1e3a5f; color: #fff; }
+ * .auth-tab:not(.active):hover { background: #b6c4d4; }
+ * --------------------------------------------------------------------- */
+
+.auth-pane label {
+  display: block;
+  margin: 0.8rem 0;
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: #1e293b;
+}
+
+.auth-pane input {
+  width: 100%;
+  padding: 0.55rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-family: inherit;
+  margin-top: 0.25rem;
+  box-sizing: border-box;
+}
+
+.auth-pane input:focus {
+  outline: 2px solid #1e3a5f;
+  outline-offset: -1px;
+  border-color: #1e3a5f;
+}
+
+.auth-pane button[type="submit"] {
+  width: 100%;
+  padding: 0.7rem;
+  background: #1e3a5f;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  font-weight: 700;
+  font-family: inherit;
+  font-size: 1rem;
+  cursor: pointer;
+  margin-top: 0.4rem;
+}
+
+.auth-pane button[type="submit"]:hover {
+  background: #15294a;
+}
+
+.auth-pane button[type="submit"]:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+.auth-error {
+  color: #b91c1c;
+  margin-top: 0.8rem;
+  font-size: 0.9rem;
+}
+
+.auth-success {
+  color: #15803d;
+  margin-top: 0.8rem;
+  font-size: 0.9rem;
+}
+
+.auth-username-status {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  min-height: 1em;
+}
+
+.auth-username-status.ok {
+  color: #15803d;
+}
+
+.auth-username-status.bad {
+  color: #b91c1c;
+}
+
+.auth-forgot,
+.auth-back {
+  display: inline-block;
+  margin-top: 0.8rem;
+  color: #1e3a5f;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.auth-forgot:hover,
+.auth-back:hover {
+  text-decoration: underline;
+}
+
+#pick-username-modal h2 {
+  margin: 0 0 0.6rem 0;
+  font-size: 1.2rem;
+  color: #1e3a5f;
+}
+
+#pick-username-modal .auth-pick-help {
+  margin: 0 0 0.6rem 0;
+  font-size: 0.9rem;
+  color: #475569;
+}

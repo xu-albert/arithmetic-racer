@@ -8,6 +8,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style-a.css" />
+  <!-- Phase A: auth + profile + header stylesheets -->
+  <link rel="stylesheet" href="css/header.css" />
+  <link rel="stylesheet" href="css/auth-modal.css" />
+  <link rel="stylesheet" href="css/profile.css" />
+  <!-- Phase 6: partysocket vendored for the room WebSocket client -->
   <script type="importmap">
     {
       "imports": {
@@ -20,6 +25,7 @@
   <div class="beta-banner" role="note">
     <strong>Alpha</strong> — solo only, multiplayer and other core functionality coming soon.
   </div>
+  <div id="app-header"></div>
   <header class="app-header">
     <h1>Arithmetic Racer</h1>
     <p class="tagline">Return to a time when you were a gifted child.</p>
@@ -109,7 +115,13 @@
       <ol id="podium"></ol>
       <button id="play-again-btn">Play again</button>
     </section>
+
+    <section id="profile" class="screen hidden">
+      <!-- profile.js renders here -->
+    </section>
   </main>
+
+  <div id="auth-modal-root"></div>
 
   <script type="module" src="main.js"></script>
 </body>
