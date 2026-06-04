@@ -1,11 +1,22 @@
-import { createRunner, RACE_LENGTH } from './src/runner.js';
+// Entry point — merges Phase A (users + auth + stats) and Phase 6 (private
+// multiplayer rooms). Both branches rewrote this file; this version
+// preserves all features of each.
+//
+// Boot order: imports → identity helpers → mount Phase A UI →
+// screens/state → quickplay (solo) → rooms (multiplayer) → initial routing.
+
+import { createRunner } from './src/runner.js';
 import { generateHandle } from './src/handles.js';
 import { pickBotTiers } from './src/bot.js';
 import { attachRaceUI } from './src/ui.js';
+import { attachLobby } from './src/lobby.js';
+import { createRemoteRunner } from './src/remote-runner.js';
 import { mountHeader } from './src/header.js';
 import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
 import { postRaceResult } from './src/stats-api.js';
+
+// ---- Identity helpers --------------------------------------------------
 
 function getOrCreateDeviceId() {
   let id = localStorage.getItem('deviceId');
@@ -16,11 +27,6 @@ function getOrCreateDeviceId() {
   return id;
 }
 
-// The header (header.js) writes the persistent anonymous handle to
-// localStorage.anonHandle on first visit. Reading the same key here keeps
-// the player's lane name consistent with the header. If the header hasn't
-// run yet (shouldn't happen — mountHeader is called above), generate one
-// and persist so subsequent loads stay consistent.
 function getOrCreateAnonHandle() {
   let h = localStorage.getItem('anonHandle');
   if (!h) {
@@ -30,13 +36,20 @@ function getOrCreateAnonHandle() {
   return h;
 }
 
-// Cache of the logged-in user's username. Updated when the header dispatches
-// `session-ready` after fetching /api/me. Eliminates the duplicate /api/me
-// fetch we used to do (header + main both calling getMe on initial load).
+// Cache of the logged-in user's username — set by the `session-ready`
+// event dispatched by header.js after its /api/me fetch. Saves a duplicate
+// fetch and lets quickplay pick the right lane label.
 let currentUsername = null;
 document.addEventListener('session-ready', (e) => {
   currentUsername = e.detail?.username ?? null;
 });
+
+// ---- Race-result reporting (solo / quickplay) --------------------------
+//
+// Phase A behavior: when the local runner emits `finish`, POST the result
+// so it lands in race_results with the right user_id (or NULL for anon).
+// Room races are NOT handled here — that wiring is commit B (the room
+// Durable Object writes its own result rows).
 
 function reportRaceResult({ runner, difficulty }) {
   const player = runner.racers.find((r) => !r.isBot);
@@ -63,40 +76,44 @@ function reportRaceResult({ runner, difficulty }) {
     longest_streak: player.longestStreak || 0,
   })
     .then(() => {
-      // Tell the header (and anyone else interested) so the Races pill
-      // updates without a page reload. Header listens for this alongside
-      // `auth-changed`.
+      // Tell the header pill to refresh without a page reload.
       document.dispatchEvent(new Event('race-finished'));
     })
     .catch((err) => {
-      // Non-fatal: race UX should never depend on the network call succeeding.
+      // Best-effort: race UX never blocks on the POST.
       console.warn('[race-result] post failed', err);
     });
 }
+
+// ---- Mount Phase A UI ---------------------------------------------------
 
 mountHeader(document.getElementById('app-header'));
 mountAuthModal(document.getElementById('auth-modal-root'));
 mountProfile(document.getElementById('profile'));
 
-// When the header dispatches `open-profile`, swap screens.
 document.addEventListener('open-profile', () => {
   showScreen('profile');
 });
 
+// ---- Screens & lobby state ---------------------------------------------
+
 const screens = {
   lobby: document.getElementById('lobby'),
+  'lobby-room': document.getElementById('lobby-room'),
   race: document.getElementById('race'),
   results: document.getElementById('results'),
   profile: document.getElementById('profile'),
 };
 
-const diffButtons = document.querySelectorAll('.diff-btn');
+// Difficulty picker is scoped to #lobby — the room lobby has its own.
+const lobbyDiffButtons = document.querySelectorAll('#lobby .diff-btn');
 const quickplayBtn = document.getElementById('quickplay-btn');
 const createRoomBtn = document.getElementById('create-room-btn');
 const playAgainBtn = document.getElementById('play-again-btn');
 
 let selectedDifficulty = 'easy';
 let cleanupRace = null;
+let lobbyHandle = null;
 
 function showScreen(name) {
   for (const [key, el] of Object.entries(screens)) {
@@ -106,10 +123,12 @@ function showScreen(name) {
 
 function setDifficulty(diff) {
   selectedDifficulty = diff;
-  diffButtons.forEach((btn) => {
+  lobbyDiffButtons.forEach((btn) => {
     btn.setAttribute('aria-pressed', btn.dataset.difficulty === diff ? 'true' : 'false');
   });
 }
+
+// ---- Quickplay (solo vs bots) -------------------------------------------
 
 function startQuickplay() {
   if (cleanupRace) {
@@ -117,12 +136,13 @@ function startQuickplay() {
     cleanupRace = null;
   }
 
-  // Use the logged-in username when available, else the persistent anon
-  // handle. Falls back to a fresh generated name only if both are missing
-  // (which shouldn't happen because the header populates anonHandle on
-  // first paint).
-  const playerHandle = currentUsername || getOrCreateAnonHandle();
-  const taken = new Set([playerHandle]);
+  // Lane label: logged-in username wins. Anon players get the persistent
+  // localStorage handle PLUS "(Guest)" so the race screen consistently
+  // signals "you're not signed in" — mirrors the multiplayer room badge.
+  const isLoggedIn = !!currentUsername;
+  const baseName = currentUsername || getOrCreateAnonHandle();
+  const playerHandle = isLoggedIn ? baseName : `${baseName} (Guest)`;
+  const taken = new Set([baseName]);
 
   const tiers = pickBotTiers(selectedDifficulty, 4);
   const bots = tiers.map((tier) => {
@@ -138,8 +158,6 @@ function startQuickplay() {
     bots,
   });
 
-  // Submit the race-result once the runner emits finish. The runner emits
-  // finish for both natural completion and quit (player.dropped = true).
   runner.on((event) => {
     if (event === 'finish') {
       reportRaceResult({ runner, difficulty: selectedDifficulty });
@@ -151,19 +169,64 @@ function startQuickplay() {
   runner.start();
 }
 
-diffButtons.forEach((btn) => {
-  btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
-});
+// ---- Private rooms (Phase 6) -------------------------------------------
 
-quickplayBtn.addEventListener('click', startQuickplay);
+function handleRoomRaceStart({ roomClient, initialState, youAre }) {
+  if (cleanupRace) { cleanupRace(); cleanupRace = null; }
+  const runner = createRemoteRunner({
+    roomClient,
+    initialState,
+    youAre,
+    onLocalQuit: () => {
+      if (cleanupRace) { cleanupRace(); cleanupRace = null; }
+      showScreen('lobby-room');
+    },
+  });
+  showScreen('race');
+  cleanupRace = attachRaceUI({ runner, raceLength: initialState.raceLength, screens });
+}
 
-createRoomBtn.addEventListener('click', () => {
-  alert('Private rooms come in Phase 7. For now: Quickplay.');
+function enterRoom(roomId) {
+  history.replaceState(null, '', `/?room=${roomId}`);
+  lobbyHandle = attachLobby({ roomId, screens, onRaceStart: handleRoomRaceStart });
+  showScreen('lobby-room');
+}
+
+// ---- Initial routing ----------------------------------------------------
+
+const params = new URLSearchParams(location.search);
+const initialRoomId = params.get('room');
+
+if (initialRoomId) {
+  enterRoom(initialRoomId);
+} else {
+  lobbyDiffButtons.forEach((btn) => {
+    btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
+  });
+  quickplayBtn.addEventListener('click', startQuickplay);
+  setDifficulty('easy');
+  showScreen('lobby');
+}
+
+createRoomBtn.addEventListener('click', async () => {
+  createRoomBtn.disabled = true;
+  try {
+    const res = await fetch('/api/rooms', { method: 'POST' });
+    if (!res.ok) throw new Error(`Failed: ${res.status}`);
+    const { roomId } = await res.json();
+    enterRoom(roomId);
+  } catch (e) {
+    console.error('create room failed', e);
+    alert('Could not create room. Try again.');
+  } finally {
+    createRoomBtn.disabled = false;
+  }
 });
 
 playAgainBtn.addEventListener('click', () => {
-  showScreen('lobby');
+  if (initialRoomId || lobbyHandle) {
+    showScreen('lobby-room');
+  } else {
+    showScreen('lobby');
+  }
 });
-
-setDifficulty('easy');
-showScreen('lobby');

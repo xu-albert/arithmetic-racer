@@ -13,7 +13,7 @@
 import { generateSequence, validateAnswer } from './game.js';
 import { nextBotDelay } from './bot.js';
 
-export const RACE_LENGTH = 5;
+export const RACE_LENGTH = 10;
 export const COUNTDOWN_SECONDS = 3;
 export const DROPOUT_CHANCE_PER_ANSWER = 0.012;
 // After the player crosses the line, give close-behind racers this long to finish

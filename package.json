@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "vendor": "cp node_modules/partysocket/dist/index.js node_modules/partysocket/dist/index.js.map node_modules/partysocket/dist/ws.js node_modules/partysocket/dist/ws.js.map public/vendor/partysocket/",
     "test": "node --test public/src/*.test.js && vitest run --passWithNoTests"
   },
   "keywords": [
@@ -20,6 +21,8 @@
   "dependencies": {
     "better-auth": "^1.6.9",
     "obscenity": "0.4.6",
+    "partyserver": "^0.5.5",
+    "partysocket": "^1.1.18",
     "uuid": "^14.0.0"
   },
   "devDependencies": {

@@ -8,9 +8,18 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style-a.css" />
+  <!-- Phase A: auth + profile + header stylesheets -->
   <link rel="stylesheet" href="css/header.css" />
   <link rel="stylesheet" href="css/auth-modal.css" />
   <link rel="stylesheet" href="css/profile.css" />
+  <!-- Phase 6: partysocket vendored for the room WebSocket client -->
+  <script type="importmap">
+    {
+      "imports": {
+        "partysocket": "/vendor/partysocket/index.js"
+      }
+    }
+  </script>
 </head>
 <body>
   <div class="beta-banner" role="note">
@@ -35,6 +44,46 @@
         <button id="create-room-btn">Create Private Room</button>
       </div>
     </section>
+
+    <section id="lobby-room" class="screen hidden">
+      <h2 id="room-title">Room</h2>
+      <button id="invite-btn" class="link-button">Invite people</button>
+
+      <div class="room-config">
+        <div class="difficulty-picker">
+          <button class="diff-btn" data-difficulty="easy">Easy</button>
+          <button class="diff-btn" data-difficulty="medium">Medium</button>
+          <button class="diff-btn" data-difficulty="hard">Hard</button>
+        </div>
+        <label class="race-length-label">
+          Race length
+          <input id="race-length-input" type="number" min="5" max="50" value="10" />
+        </label>
+      </div>
+
+      <h3 class="players-heading">Who's here</h3>
+      <ul id="room-players"></ul>
+
+      <div class="room-actions">
+        <button id="start-race-btn" class="primary" disabled>Start Race</button>
+        <button id="rematch-btn" class="primary hidden">Race Again</button>
+        <button id="leave-room-btn" class="link-button">Leave</button>
+      </div>
+
+      <p id="lobby-hint" class="lobby-hint"></p>
+    </section>
+
+    <div id="invite-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="invite-modal-title">
+      <div class="modal-card">
+        <h3 id="invite-modal-title">Invite people to this race</h3>
+        <p>Share this URL:</p>
+        <input id="invite-url" type="text" readonly />
+        <div class="modal-actions">
+          <button id="invite-copy-btn">Copy</button>
+          <button id="invite-close-btn">Done</button>
+        </div>
+      </div>
+    </div>
 
     <section id="race" class="screen hidden">
       <div id="countdown" class="hidden" aria-live="polite"></div>
