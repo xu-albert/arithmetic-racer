@@ -53,6 +53,12 @@ export class PublicRaceRoom extends RaceRoom {
     await this.scheduleNextAlarm();
   }
 
+  isRaceComplete() {
+    const humans = this.state.players.filter((p) => !p.isBot);
+    if (humans.length === 0) return true;
+    return humans.every((p) => p.dropped || p.score >= this.state.raceLength);
+  }
+
   async handleStartRace(connection) {
     return this.sendError(connection, 'BAD_STATE', 'Public races auto-start; manual start not allowed');
   }

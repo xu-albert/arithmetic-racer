@@ -237,6 +237,46 @@ describe("PublicRaceRoom.removePlayer", () => {
   });
 });
 
+describe("PublicRaceRoom.isRaceComplete", () => {
+  it("returns true when all humans done, ignoring mid-race bots", async () => {
+    await withRoom("test-ircomplete-bots-" + crypto.randomUUID(), async (room) => {
+      room.state.raceLength = 10;
+      room.state.state = "racing";
+      room.state.players = [
+        { id: "h-1", isBot: false, score: 10, dropped: false, finishMs: 1234 },
+        { id: "b-1", isBot: true, score: 3, dropped: false, finishMs: null },
+        { id: "b-2", isBot: true, score: 0, dropped: false, finishMs: null },
+      ];
+      expect(room.isRaceComplete()).toBe(true);
+    });
+  });
+
+  it("returns false when at least one human is mid-race", async () => {
+    await withRoom("test-ircomplete-human-" + crypto.randomUUID(), async (room) => {
+      room.state.raceLength = 10;
+      room.state.state = "racing";
+      room.state.players = [
+        { id: "h-1", isBot: false, score: 7, dropped: false, finishMs: null },
+        { id: "h-2", isBot: false, score: 10, dropped: false, finishMs: 999 },
+        { id: "b-1", isBot: true, score: 10, dropped: false, finishMs: 500 },
+      ];
+      expect(room.isRaceComplete()).toBe(false);
+    });
+  });
+
+  it("treats dropped humans as done", async () => {
+    await withRoom("test-ircomplete-dropped-" + crypto.randomUUID(), async (room) => {
+      room.state.raceLength = 10;
+      room.state.state = "racing";
+      room.state.players = [
+        { id: "h-1", isBot: false, score: 4, dropped: true, finishMs: null },
+        { id: "h-2", isBot: false, score: 10, dropped: false, finishMs: 999 },
+      ];
+      expect(room.isRaceComplete()).toBe(true);
+    });
+  });
+});
+
 describe("PublicRaceRoom — disabled operations return BAD_STATE", () => {
   async function roomWithOnePlayer(name) {
     // Returns { room, conn } inside a withRoom callback — caller must be inside withRoom.
