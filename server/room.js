@@ -34,6 +34,9 @@ function freshState(id) {
 function resetForRace(state) {
   for (const p of state.players) {
     p.score = 0;
+    p.attempts = 0;
+    p.longestStreak = 0;
+    p.currentStreak = 0;
     p.finishMs = null;
     p.dropped = false;
     p.dnf = false;
@@ -333,6 +336,11 @@ export class RaceRoom extends Server {
 
     if (validateAnswer(problem, msg.value)) {
       player.score += 1;
+      player.attempts += 1;
+      player.currentStreak += 1;
+      if (player.currentStreak > player.longestStreak) {
+        player.longestStreak = player.currentStreak;
+      }
       if (player.score >= this.state.raceLength) {
         player.finishMs = Date.now() - this.state.raceStartedAt;
       }
@@ -355,6 +363,8 @@ export class RaceRoom extends Server {
       // stutter source. Persist still runs so reconnects see latest score.
       await this.persist();
     } else {
+      player.attempts += 1;
+      player.currentStreak = 0;
       this.broadcast(JSON.stringify({ type: 'wrong', playerId: player.id }));
     }
   }
