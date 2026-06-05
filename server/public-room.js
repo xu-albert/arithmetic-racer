@@ -7,7 +7,7 @@
 //   - Auto-start timer fires the race after a configurable countdown.
 //   - Remaining seats filled with bots; bot timelines are precomputed (no per-tick alarms).
 
-import { RaceRoom, freshState as baseFreshState } from './room.js';
+import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS } from './room.js';
 import { MAX_PLAYERS, computeAutoStartDeadline } from '../public/src/auto-start.js';
 
 const VALID_DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
@@ -63,6 +63,30 @@ export class PublicRaceRoom extends RaceRoom {
 
   async handleRematch(connection) {
     return this.sendError(connection, 'BAD_STATE', 'Public rooms are single-shot; queue again for a new match');
+  }
+
+  async removePlayer(playerId) {
+    const idx = this.state.players.findIndex((p) => p.id === playerId);
+    if (idx < 0) return false;
+
+    this.state.players.splice(idx, 1);
+    delete this.state.disconnectDeadlines[playerId];
+    this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
+
+    // Mid-race: treat removed unfinished player as drop for ranking.
+    if (this.state.state === 'racing') {
+      if (this.isRaceComplete() || this.state.players.length === 0) this.finishRace();
+    }
+
+    // If we emptied the lobby, release the router slot.
+    if (this.state.players.length === 0 && this.state.state === 'lobby') {
+      this.state.autoStartDeadline = null;
+      this.state.gatherTriggered = false;
+      if (this.state.difficulty) await this.releaseLobby();
+      this.state.idleCleanupAt = Date.now() + IDLE_CLEANUP_MS;
+    }
+
+    return true;
   }
 
   extraAlarmDeadlines() {

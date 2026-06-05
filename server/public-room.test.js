@@ -175,6 +175,68 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
   });
 });
 
+describe("PublicRaceRoom.removePlayer", () => {
+  async function withRoomNPlayers(name, n, fn) {
+    return withRoom(name, async (room) => {
+      room.state.difficulty = "easy";
+      const playerIds = [];
+      for (let i = 0; i < n; i++) {
+        const pid = crypto.randomUUID();
+        playerIds.push(pid);
+        await room.handleHello(makeConn(), {
+          type: "hello",
+          playerId: pid,
+          handle: `Player${i + 1}`,
+          difficulty: "easy",
+        });
+      }
+      return fn(room, playerIds);
+    });
+  }
+
+  it("last player leaving lobby releases LobbyRouter", async () => {
+    await withRoomNPlayers("test-release-" + crypto.randomUUID(), 1, async (room, [pid]) => {
+      await room.removePlayer(pid);
+      expect(room.releaseCalls.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("last player leaving clears autoStartDeadline and resets gatherTriggered", async () => {
+    await withRoomNPlayers("test-clear-deadline-" + crypto.randomUUID(), 1, async (room, [pid]) => {
+      // Ensure deadline and gatherTriggered are set before removal.
+      room.state.autoStartDeadline = Date.now() + 10000;
+      room.state.gatherTriggered = true;
+      await room.removePlayer(pid);
+      expect(room.state.autoStartDeadline).toBeNull();
+      expect(room.state.gatherTriggered).toBe(false);
+    });
+  });
+
+  it("non-last player leaving does not give isCreator to remaining player", async () => {
+    await withRoomNPlayers("test-no-promote-" + crypto.randomUUID(), 2, async (room, [pid1, pid2]) => {
+      await room.removePlayer(pid1);
+      // pid2 should still be in the room but must NOT have isCreator set.
+      const remaining = room.state.players.find((p) => p.id === pid2);
+      expect(remaining).toBeDefined();
+      expect(remaining.isCreator).toBeFalsy();
+    });
+  });
+
+  it("last player leaving does not release router when difficulty is null", async () => {
+    await withRoom("test-no-difficulty-" + crypto.randomUUID(), async (room) => {
+      // Add a player manually without locking difficulty.
+      const pid = crypto.randomUUID();
+      room.state.players.push({
+        id: pid, handle: "Solo", isCreator: false, joinedAt: Date.now(),
+        score: 0, finishMs: null, dropped: false, dnf: false,
+      });
+      // difficulty stays null
+      await room.removePlayer(pid);
+      expect(room.releaseCalls.length).toBe(0);
+    });
+  });
+});
+
 describe("PublicRaceRoom — disabled operations return BAD_STATE", () => {
   async function roomWithOnePlayer(name) {
     // Returns { room, conn } inside a withRoom callback — caller must be inside withRoom.
