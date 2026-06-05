@@ -29,7 +29,8 @@ beforeAll(async () => {
       "avg_time_per_problem_ms INTEGER NOT NULL, " +
       "accuracy_pct REAL NOT NULL, " +
       "longest_streak INTEGER NOT NULL, " +
-      "played_at INTEGER NOT NULL" +
+      "played_at INTEGER NOT NULL, " +
+      "room_id TEXT" +
       ")"
   );
 });

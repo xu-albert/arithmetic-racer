@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "vendor": "cp node_modules/partysocket/dist/index.js node_modules/partysocket/dist/index.js.map node_modules/partysocket/dist/ws.js node_modules/partysocket/dist/ws.js.map public/vendor/partysocket/",
-    "test": "node --test public/src/*.test.js && vitest run --passWithNoTests"
+    "test": "node --test public/src/*.test.js server/*.test.js && vitest run --passWithNoTests"
   },
   "keywords": [
     "multiplayer",
