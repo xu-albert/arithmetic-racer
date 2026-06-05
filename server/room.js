@@ -519,11 +519,17 @@ export class RaceRoom extends Server {
     await this.ctx.storage.put('state', this.state);
   }
 
+  extraAlarmDeadlines() {
+    // Subclasses can return additional ms-timestamps to coalesce into the alarm.
+    return [];
+  }
+
   async scheduleNextAlarm() {
     const candidates = [];
     if (this.state.countdownAt != null) candidates.push(this.state.countdownAt);
     if (this.state.idleCleanupAt != null) candidates.push(this.state.idleCleanupAt);
     for (const dl of Object.values(this.state.disconnectDeadlines)) candidates.push(dl);
+    for (const dl of this.extraAlarmDeadlines()) if (dl != null) candidates.push(dl);
 
     if (candidates.length === 0) {
       const cur = await this.ctx.storage.getAlarm();
