@@ -5,17 +5,17 @@ import { insertRaceResult } from '../worker/race-result-store.js';
 import { buildRaceResultPayload } from './room-stats.js';
 
 // Mirrors public/src/runner.js values; private rooms use 20 by default.
-const COUNTDOWN_SECONDS = 3;
-const IDLE_CLEANUP_MS = 5 * 60 * 1000;
-const RECONNECT_GRACE_MS = 30 * 1000;
-const ROOM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const COUNTDOWN_SECONDS = 3;
+export const IDLE_CLEANUP_MS = 5 * 60 * 1000;
+export const RECONNECT_GRACE_MS = 30 * 1000;
+export const ROOM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MAX_HANDLE_LEN = 24;
-const MIN_RACE_LENGTH = 5;
-const MAX_RACE_LENGTH = 50;
+export const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const MAX_HANDLE_LEN = 24;
+export const MIN_RACE_LENGTH = 5;
+export const MAX_RACE_LENGTH = 50;
 
-function freshState(id) {
+export function freshState(id) {
   return {
     id,
     createdAt: Date.now(),
@@ -33,7 +33,7 @@ function freshState(id) {
   };
 }
 
-function resetForRace(state) {
+export function resetForRace(state) {
   for (const p of state.players) {
     p.score = 0;
     p.attempts = 0;
@@ -54,7 +54,7 @@ function isValidDeviceId(s) {
   return typeof s === 'string' && s.length > 0 && s.length <= 128;
 }
 
-function isValidHandle(s) {
+export function isValidHandle(s) {
   if (typeof s !== 'string') return false;
   const t = s.trim();
   if (t.length === 0 || t.length > MAX_HANDLE_LEN) return false;
@@ -71,7 +71,7 @@ function publicPlayer(p) {
 }
 
 // Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
-function rankPlayers(players) {
+export function rankPlayers(players) {
   const tier = (r) => (r.dropped || r.dnf ? 3 : r.finishMs != null ? 1 : 2);
   return [...players].sort((a, b) => {
     const ta = tier(a);
