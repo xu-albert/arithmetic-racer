@@ -102,7 +102,8 @@ npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, 
 |---|---|---|
 | R1 | Two anon browsers, both finish a 10-problem race | Two rows; both `user_id NULL`, `room_id = <slug>`, `finished = 1`, distinct `device_id`s |
 | R2 | Two logged-in browsers (different accounts), both finish | Two rows; both `user_id` set to the respective account ids, `room_id = <slug>` |
-| R3 | Two players, one quits mid-race (clicks Quit or closes tab past reconnect grace) | Two rows; quitter has `finished = 0`, `finish_time_ms = NULL` |
+| R3a | Two players racing; one clicks **Quit race** mid-race | Two rows; quitter has `finished = 0`, `finish_time_ms = NULL` |
+| R3b | Two players racing; one closes their tab and waits past the 30s reconnect grace | Two rows; the disconnected player has `finished = 0`, `finish_time_ms = NULL` (covers the `removePlayer` path, distinct from R3a's `handleQuit` path) |
 | R4 | One logged-in + one anon, both finish | Two rows; logged-in player's row has `user_id` set, anon has `user_id NULL` |
 | R5 | After R2, the logged-in player visits Profile | Their Recent Races list includes the just-finished room race |
 | R6 | Solo Quickplay race (regression check) | One row written via the route; `room_id = NULL`; existing solo stats behavior unchanged |

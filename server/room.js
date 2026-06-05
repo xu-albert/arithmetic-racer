@@ -446,9 +446,25 @@ export class RaceRoom extends Server {
   async removePlayer(playerId) {
     const idx = this.state.players.findIndex((p) => p.id === playerId);
     if (idx < 0) return false;
-    const wasCreator = this.state.players[idx].isCreator;
-    this.state.players.splice(idx, 1);
+    const player = this.state.players[idx];
     delete this.state.disconnectDeadlines[playerId];
+
+    // Mid-race: keep the player in state.players so finishRace persists their
+    // DNF row. Mark dropped (idempotent) and re-check allDone. Cleanup happens
+    // naturally when the room is destroyed or a rematch resets per-race fields.
+    if (this.state.state === 'racing') {
+      if (!player.dropped) {
+        player.dropped = true;
+        this.broadcast(JSON.stringify({ type: 'drop', playerId }));
+      }
+      const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
+      if (allDone) await this.finishRace();
+      return true;
+    }
+
+    // Non-racing (lobby / countdown / finished): actually remove.
+    const wasCreator = player.isCreator;
+    this.state.players.splice(idx, 1);
 
     // Promote next-joined player if creator left.
     if (wasCreator && this.state.players.length > 0) {
@@ -457,12 +473,6 @@ export class RaceRoom extends Server {
     }
 
     this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
-
-    // Mid-race cleanup: if removed player was unfinished, treat as drop for ranking.
-    if (this.state.state === 'racing') {
-      const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
-      if (allDone || this.state.players.length === 0) await this.finishRace();
-    }
 
     if (this.state.players.length === 0) {
       this.state.idleCleanupAt = Date.now() + IDLE_CLEANUP_MS;
