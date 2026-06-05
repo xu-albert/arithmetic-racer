@@ -19,6 +19,7 @@ const USER_ID_HEADER = "x-arithmetic-user-id";
 
 export { RaceRoom } from "./room.js";
 export { LobbyRouter } from "./lobby-router.js";
+export { PublicRaceRoom } from "./public-room.js";
 
 // Cache the auth instance per-isolate. better-auth construction is non-trivial
 // (kysely + dialect detection + plugin wiring); initializing once per cold

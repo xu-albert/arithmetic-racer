@@ -88,9 +88,13 @@ export class RaceRoom extends Server {
 
   state = null;
 
+  freshState(id) {
+    return freshState(id);
+  }
+
   async onStart() {
     const stored = await this.ctx.storage.get('state');
-    this.state = stored ?? freshState(this.name);
+    this.state = stored ?? this.freshState(this.name);
     if (!stored) await this.persist();
   }
 
@@ -182,7 +186,7 @@ export class RaceRoom extends Server {
     // Idle cleanup.
     if (this.state.idleCleanupAt != null && this.state.idleCleanupAt <= now && this.state.players.length === 0) {
       await this.ctx.storage.delete('state');
-      this.state = freshState(this.name);
+      this.state = this.freshState(this.name);
       // Don't broadcast; nobody's listening.
       return;
     }
@@ -190,7 +194,7 @@ export class RaceRoom extends Server {
     // Hard ceiling: 24h.
     if (now - this.state.createdAt > ROOM_MAX_AGE_MS && this.state.players.length === 0) {
       await this.ctx.storage.delete('state');
-      this.state = freshState(this.name);
+      this.state = this.freshState(this.name);
       return;
     }
 
