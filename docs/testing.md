@@ -89,3 +89,20 @@ Useful scenarios to probe:
 - Disconnect mid-race, reconnect within 30 seconds → score preserved.
 - Disconnect, wait 35 seconds → treated as a brand-new player on next hello.
 - During racing, count `type: 'state'` messages received — should stay low (~1–2 per race, only on state transitions).
+
+## Room races → race_results persistence
+
+These verify that each room race writes one row per player to `race_results`. Run against `npx wrangler dev`. Inspect with:
+
+```bash
+npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, device_id, finished, finish_time_ms, room_id, played_at FROM race_results ORDER BY played_at DESC LIMIT 10"
+```
+
+| # | Scenario | Expected |
+|---|---|---|
+| R1 | Two anon browsers, both finish a 10-problem race | Two rows; both `user_id NULL`, `room_id = <slug>`, `finished = 1`, distinct `device_id`s |
+| R2 | Two logged-in browsers (different accounts), both finish | Two rows; both `user_id` set to the respective account ids, `room_id = <slug>` |
+| R3 | Two players, one quits mid-race (clicks Quit or closes tab past reconnect grace) | Two rows; quitter has `finished = 0`, `finish_time_ms = NULL` |
+| R4 | One logged-in + one anon, both finish | Two rows; logged-in player's row has `user_id` set, anon has `user_id NULL` |
+| R5 | After R2, the logged-in player visits Profile | Their Recent Races list includes the just-finished room race |
+| R6 | Solo Quickplay race (regression check) | One row written via the route; `room_id = NULL`; existing solo stats behavior unchanged |
