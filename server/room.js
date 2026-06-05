@@ -1,6 +1,8 @@
 import { Server } from 'partyserver';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
+import { insertRaceResult } from '../worker/race-result-store.js';
+import { buildRaceResultPayload } from './room-stats.js';
 
 // Mirrors public/src/runner.js values; private rooms use 20 by default.
 const COUNTDOWN_SECONDS = 3;
@@ -352,7 +354,7 @@ export class RaceRoom extends Server {
       // get to finish at their own pace; AFK risk accepted by design.
       const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
       if (allDone) {
-        this.finishRace();
+        await this.finishRace();
         await this.persist();
         this.broadcastState();
         await this.scheduleNextAlarm();
@@ -378,7 +380,7 @@ export class RaceRoom extends Server {
       this.broadcast(JSON.stringify({ type: 'drop', playerId: player.id }));
       const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
       if (allDone) {
-        this.finishRace();
+        await this.finishRace();
         await this.persist();
         this.broadcastState();
         await this.scheduleNextAlarm();
@@ -412,7 +414,7 @@ export class RaceRoom extends Server {
 
   // ---------- helpers ----------
 
-  finishRace() {
+  async finishRace() {
     if (this.state.state === 'finished') return;
     for (const p of this.state.players) {
       if (!p.dropped && p.finishMs == null) p.dnf = true;
@@ -420,7 +422,25 @@ export class RaceRoom extends Server {
     this.state.state = 'finished';
     this.state.graceDeadline = null;
     const rankings = rankPlayers(this.state.players);
-    this.broadcast(JSON.stringify({ type: 'finish', rankings }));
+    this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
+
+    await this.persistRaceResults();
+  }
+
+  async persistRaceResults() {
+    for (const p of this.state.players) {
+      if (!p.deviceId) {
+        // Defensive: shouldn't happen since the client always sends deviceId
+        // in `hello`, but skip rather than violate the NOT NULL constraint.
+        console.error('persistRaceResults: skipping player with no deviceId', { playerId: p.id });
+        continue;
+      }
+      try {
+        await insertRaceResult(this.env, buildRaceResultPayload(p, this.state));
+      } catch (e) {
+        console.error('persistRaceResults: insert failed', { playerId: p.id, error: String(e) });
+      }
+    }
   }
 
   async removePlayer(playerId) {
@@ -441,7 +461,7 @@ export class RaceRoom extends Server {
     // Mid-race cleanup: if removed player was unfinished, treat as drop for ranking.
     if (this.state.state === 'racing') {
       const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
-      if (allDone || this.state.players.length === 0) this.finishRace();
+      if (allDone || this.state.players.length === 0) await this.finishRace();
     }
 
     if (this.state.players.length === 0) {
