@@ -337,6 +337,36 @@ describe("PublicRaceRoom auto-start sequence", () => {
   });
 });
 
+describe("PublicRaceRoom.finishRace — bot finalization", () => {
+  it("finalizes bot scores from botTimelines at race end", async () => {
+    await withRoom("test-finish-room-" + crypto.randomUUID(), async (room) => {
+      room.state.raceLength = 10;
+      room.state.raceStartedAt = 1000;
+      room.state.state = "racing";
+      room.state.botTimelines = [
+        [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+        [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000],
+      ];
+      room.state.players = [
+        { id: "h-1", isBot: false, score: 10, dropped: false, finishMs: 1100, dnf: false },
+        { id: "b-1", isBot: true, score: 0, dropped: false, finishMs: null, dnf: false },
+        { id: "b-2", isBot: true, score: 0, dropped: false, finishMs: null, dnf: false },
+      ];
+      room.finishRace(1100); // explicit raceEndOffset for determinism
+
+      const b1 = room.state.players.find((p) => p.id === "b-1");
+      const b2 = room.state.players.find((p) => p.id === "b-2");
+      expect(b1.score).toBe(10);
+      expect(b1.finishMs).toBe(1000);
+      expect(b1.dnf).toBe(false);
+      expect(b2.score).toBe(5);
+      expect(b2.finishMs).toBeNull();
+      expect(b2.dnf).toBe(true);
+      expect(room.state.state).toBe("finished");
+    });
+  });
+});
+
 describe("PublicRaceRoom — disabled operations return BAD_STATE", () => {
   async function roomWithOnePlayer(name) {
     // Returns { room, conn } inside a withRoom callback — caller must be inside withRoom.

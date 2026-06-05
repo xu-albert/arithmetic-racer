@@ -7,10 +7,10 @@
 //   - Auto-start timer fires the race after a configurable countdown.
 //   - Remaining seats filled with bots; bot timelines are precomputed (no per-tick alarms).
 
-import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS, COUNTDOWN_SECONDS } from './room.js';
+import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS, COUNTDOWN_SECONDS, rankPlayers } from './room.js';
 import { MAX_PLAYERS, computeAutoStartDeadline } from '../public/src/auto-start.js';
 import { pickBotTiers } from '../public/src/bot.js';
-import { computeBotTimelines } from '../public/src/bot-timeline.js';
+import { computeBotTimelines, scoreBotAt } from '../public/src/bot-timeline.js';
 import { seededRng } from '../public/src/seeded-rng.js';
 import { generateSequence } from '../public/src/game.js';
 
@@ -122,6 +122,38 @@ export class PublicRaceRoom extends RaceRoom {
 
     await this.persist();
     this.broadcastState();
+  }
+
+  finishRace(raceEndOffsetMs) {
+    if (this.state.state === 'finished') return;
+
+    const raceEnd = raceEndOffsetMs ?? (Date.now() - this.state.raceStartedAt);
+
+    // Finalize bot scores from timelines.
+    const bots = this.state.players.filter((p) => p.isBot);
+    for (let i = 0; i < bots.length; i++) {
+      const tl = this.state.botTimelines[i];
+      if (!tl) continue;
+      const score = scoreBotAt(tl, raceEnd);
+      bots[i].score = score;
+      if (score >= this.state.raceLength) {
+        bots[i].finishMs = tl[this.state.raceLength - 1];
+        bots[i].dnf = false;
+      } else {
+        bots[i].finishMs = null;
+        bots[i].dnf = true;
+      }
+    }
+
+    // Mark unfinished humans as DNF (mirror base finishRace semantics).
+    for (const p of this.state.players) {
+      if (!p.isBot && !p.dropped && p.finishMs == null) p.dnf = true;
+    }
+
+    this.state.state = 'finished';
+    this.state.graceDeadline = null;
+    const rankings = rankPlayers(this.state.players);
+    this.broadcast(JSON.stringify({ type: 'finish', rankings }));
   }
 
   isRaceComplete() {
