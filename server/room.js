@@ -352,7 +352,7 @@ export class RaceRoom extends Server {
 
       // Race ends only when every non-dropped player has finished. Stragglers
       // get to finish at their own pace; AFK risk accepted by design.
-      const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
+      const allDone = this.isRaceComplete();
       if (allDone) {
         await this.finishRace();
         await this.persist();
@@ -378,7 +378,7 @@ export class RaceRoom extends Server {
     if (this.state.state === 'racing') {
       player.dropped = true;
       this.broadcast(JSON.stringify({ type: 'drop', playerId: player.id }));
-      const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
+      const allDone = this.isRaceComplete();
       if (allDone) {
         await this.finishRace();
         await this.persist();
@@ -457,7 +457,7 @@ export class RaceRoom extends Server {
         player.dropped = true;
         this.broadcast(JSON.stringify({ type: 'drop', playerId }));
       }
-      const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
+      const allDone = this.isRaceComplete();
       if (allDone) await this.finishRace();
       return true;
     }
@@ -484,6 +484,14 @@ export class RaceRoom extends Server {
     const pid = connection.state?.playerId;
     if (!pid) return null;
     return this.state.players.find((p) => p.id === pid) ?? null;
+  }
+
+  /**
+   * Hook: returns true when the race should be ended. Default implementation
+   * counts every player. PublicRaceRoom overrides this to ignore bots.
+   */
+  isRaceComplete() {
+    return this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
   }
 
   publicState() {
