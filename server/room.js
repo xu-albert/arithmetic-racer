@@ -45,6 +45,10 @@ function resetForRace(state) {
   state.countdownAt = null;
 }
 
+function isValidDeviceId(s) {
+  return typeof s === 'string' && s.length > 0 && s.length <= 128;
+}
+
 function isValidHandle(s) {
   if (typeof s !== 'string') return false;
   const t = s.trim();
@@ -55,6 +59,13 @@ function isValidHandle(s) {
 }
 
 // Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
+function publicPlayer(p) {
+  // Strip server-only bookkeeping (attempts/streak counters, identity)
+  // before broadcasting to WS clients. Clients don't render these.
+  const { attempts, longestStreak, currentStreak, deviceId, userId, ...rest } = p;
+  return rest;
+}
+
 function rankPlayers(players) {
   const tier = (r) => (r.dropped || r.dnf ? 3 : r.finishMs != null ? 1 : 2);
   return [...players].sort((a, b) => {
@@ -78,7 +89,13 @@ export class RaceRoom extends Server {
     if (!stored) await this.persist();
   }
 
-  async onConnect(connection) {
+  async onConnect(connection, ctx) {
+    // Capture user_id from the upgrade-request header set by the Worker
+    // entry. Client-supplied values are stripped/overwritten there, so this
+    // is trustworthy. Null for anon users.
+    const userId = ctx?.request?.headers?.get('x-arithmetic-user-id') ?? null;
+    connection.setState({ ...(connection.state ?? {}), userId });
+
     // Don't add player yet — wait for `hello`.
     connection.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre: null }));
   }
@@ -191,7 +208,11 @@ export class RaceRoom extends Server {
     if (existing) {
       // Reconnect — preserve all per-race fields.
       delete this.state.disconnectDeadlines[playerId];
-      connection.setState({ playerId });
+      const currentConnState = connection.state ?? {};
+      connection.setState({ ...currentConnState, playerId });
+      // Refresh identity from this connection (cookie may have changed).
+      if (isValidDeviceId(msg.deviceId)) existing.deviceId = msg.deviceId;
+      existing.userId = currentConnState.userId ?? null;
       // Optionally update handle if client sent a non-null one.
       if (typeof msg.handle === 'string' && isValidHandle(msg.handle)) {
         existing.handle = msg.handle.trim();
@@ -219,22 +240,28 @@ export class RaceRoom extends Server {
     }
 
     const isCreator = this.state.players.length === 0;
+    const currentConnState = connection.state ?? {};
     const player = {
       id: playerId,
       handle,
       isCreator,
       joinedAt: Date.now(),
       score: 0,
+      attempts: 0,
+      longestStreak: 0,
+      currentStreak: 0,
       finishMs: null,
       dropped: false,
       dnf: false,
+      deviceId: isValidDeviceId(msg.deviceId) ? msg.deviceId : null,
+      userId: currentConnState.userId ?? null,
     };
     this.state.players.push(player);
     this.state.idleCleanupAt = null;
 
-    connection.setState({ playerId });
+    connection.setState({ ...currentConnState, playerId });
     connection.send(JSON.stringify({ type: 'hello-ack', playerId, handle }));
-    this.broadcast(JSON.stringify({ type: 'player-joined', player }));
+    this.broadcast(JSON.stringify({ type: 'player-joined', player: publicPlayer(player) }));
     await this.persist();
     this.broadcastState();
     await this.scheduleNextAlarm();
@@ -420,8 +447,8 @@ export class RaceRoom extends Server {
   }
 
   publicState() {
-    // Send the full state — clients need it. (No secrets in here.)
-    return this.state;
+    // Strip server-only Player fields (attempts/streak counters, identity).
+    return { ...this.state, players: this.state.players.map(publicPlayer) };
   }
 
   broadcastState() {

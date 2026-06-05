@@ -13,6 +13,9 @@ import { generateRoomId } from "./room-id.js";
 import { handleRaceResult } from "../worker/routes/race-result.js";
 import { handleGetMe, handlePostUsername, handleByDevice } from "../worker/routes/me.js";
 import { getAuth } from "../worker/auth.js";
+import { readUserId } from "../worker/session.js";
+
+const USER_ID_HEADER = "x-arithmetic-user-id";
 
 export { RaceRoom } from "./room.js";
 
@@ -52,7 +55,26 @@ export default {
       const roomId = generateRoomId();
       return Response.json({ roomId });
     }
-    const partyResponse = await routePartykitRequest(request, env);
+
+    // Stamp the resolved user_id on race-room upgrades so the DO can
+    // attribute race-result rows. Cookie-bound auth = unspoofable; we
+    // unconditionally overwrite/delete any client-supplied header value.
+    let upgradeRequest = request;
+    if (pathname.startsWith("/parties/race-room/")) {
+      const userId = await readUserId(request, env);
+      const headers = new Headers(request.headers);
+      if (userId) headers.set(USER_ID_HEADER, userId);
+      else headers.delete(USER_ID_HEADER);
+      upgradeRequest = new Request(request.url, {
+        method: request.method,
+        headers,
+        body: request.body,
+        // WebSocket upgrades require these to flow through.
+        cf: request.cf,
+        redirect: request.redirect,
+      });
+    }
+    const partyResponse = await routePartykitRequest(upgradeRequest, env);
     if (partyResponse) return partyResponse;
 
     // Static assets (HTML, CSS, JS, etc.)
