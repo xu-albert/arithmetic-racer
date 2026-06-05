@@ -53,6 +53,18 @@ export class PublicRaceRoom extends RaceRoom {
     await this.scheduleNextAlarm();
   }
 
+  async handleStartRace(connection) {
+    return this.sendError(connection, 'BAD_STATE', 'Public races auto-start; manual start not allowed');
+  }
+
+  async handleSetConfig(connection /* , msg */) {
+    return this.sendError(connection, 'BAD_STATE', 'Public room config is locked');
+  }
+
+  async handleRematch(connection) {
+    return this.sendError(connection, 'BAD_STATE', 'Public rooms are single-shot; queue again for a new match');
+  }
+
   extraAlarmDeadlines() {
     return [this.state.autoStartDeadline];
   }

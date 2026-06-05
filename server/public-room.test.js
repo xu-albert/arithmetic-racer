@@ -174,3 +174,52 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
     });
   });
 });
+
+describe("PublicRaceRoom — disabled operations return BAD_STATE", () => {
+  async function roomWithOnePlayer(name) {
+    // Returns { room, conn } inside a withRoom callback — caller must be inside withRoom.
+    // We return a factory so each test drives withRoom itself.
+    throw new Error("use withRoomAndPlayer directly");
+  }
+
+  async function withRoomAndPlayer(name, fn) {
+    return withRoom(name, async (room) => {
+      const playerId = "p-" + crypto.randomUUID();
+      const conn1 = makeConn();
+      await room.handleHello(conn1, {
+        type: "hello",
+        playerId,
+        handle: "Alice",
+        difficulty: "easy",
+      });
+      // Build a conn whose state resolves to the player we just added.
+      const conn = makeConn();
+      conn.state = { playerId };
+      return fn(room, conn);
+    });
+  }
+
+  it("handleStartRace sends BAD_STATE", async () => {
+    await withRoomAndPlayer("test-start-" + crypto.randomUUID(), async (room, conn) => {
+      await room.handleStartRace(conn);
+      const err = conn.sent.find((m) => m.type === "error");
+      expect(err?.code).toBe("BAD_STATE");
+    });
+  });
+
+  it("handleSetConfig sends BAD_STATE", async () => {
+    await withRoomAndPlayer("test-config-" + crypto.randomUUID(), async (room, conn) => {
+      await room.handleSetConfig(conn, { type: "set_config", difficulty: "hard" });
+      const err = conn.sent.find((m) => m.type === "error");
+      expect(err?.code).toBe("BAD_STATE");
+    });
+  });
+
+  it("handleRematch sends BAD_STATE", async () => {
+    await withRoomAndPlayer("test-rematch-" + crypto.randomUUID(), async (room, conn) => {
+      await room.handleRematch(conn);
+      const err = conn.sent.find((m) => m.type === "error");
+      expect(err?.code).toBe("BAD_STATE");
+    });
+  });
+});
