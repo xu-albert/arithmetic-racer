@@ -7,8 +7,12 @@
 //   - Auto-start timer fires the race after a configurable countdown.
 //   - Remaining seats filled with bots; bot timelines are precomputed (no per-tick alarms).
 
-import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS } from './room.js';
+import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS, COUNTDOWN_SECONDS } from './room.js';
 import { MAX_PLAYERS, computeAutoStartDeadline } from '../public/src/auto-start.js';
+import { pickBotTiers } from '../public/src/bot.js';
+import { computeBotTimelines } from '../public/src/bot-timeline.js';
+import { seededRng } from '../public/src/seeded-rng.js';
+import { generateSequence } from '../public/src/game.js';
 
 const VALID_DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
 
@@ -51,6 +55,73 @@ export class PublicRaceRoom extends RaceRoom {
 
     await this.persist();
     await this.scheduleNextAlarm();
+  }
+
+  synthHandle(tier, n) {
+    return `Bot-${tier}-${n}`;
+  }
+
+  async onAlarm() {
+    const now = Date.now();
+    const wasLobby = this.state.state === 'lobby';
+    const wasCountdown = this.state.state === 'countdown';
+
+    // 1) Auto-start sequence: fire if deadline elapsed in lobby.
+    if (wasLobby && this.state.autoStartDeadline != null && this.state.autoStartDeadline <= now) {
+      await this.runAutoStart();
+      // Fall through to base onAlarm so countdown ticks can begin firing.
+    }
+
+    await super.onAlarm();
+
+    // 2) On countdown→racing transition, compute bot timelines once.
+    if (wasCountdown && this.state.state === 'racing' && this.state.botTimelines.length === 0) {
+      this.state.botTimelines = computeBotTimelines({
+        botSeed: this.state.botSeed,
+        botTiers: this.state.botTiers,
+        difficulty: this.state.difficulty,
+        raceLength: this.state.raceLength,
+      });
+      await this.persist();
+    }
+  }
+
+  async runAutoStart() {
+    // Idempotent router release.
+    if (this.state.difficulty) await this.releaseLobby();
+
+    const humanCount = this.state.players.length;
+    const botCount = Math.max(0, MAX_PLAYERS - humanCount);
+    this.state.botSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
+    this.state.botTiers = pickBotTiers(this.state.difficulty, botCount, seededRng(this.state.botSeed));
+
+    for (let i = 0; i < botCount; i++) {
+      const tier = this.state.botTiers[i];
+      this.state.players.push({
+        id: `bot-${i + 1}`,
+        handle: this.synthHandle(tier, i + 1),
+        isCreator: false,
+        isBot: true,
+        tier,
+        joinedAt: Date.now(),
+        score: 0,
+        finishMs: null,
+        dropped: false,
+        dnf: false,
+      });
+    }
+
+    // Transition to countdown — mirrors base handleStartRace's tail.
+    const seed = (Date.now() & 0xffffffff) >>> 0;
+    this.state.problemSequence = generateSequence(this.state.difficulty, this.state.raceLength, seed);
+    this.state.state = 'countdown';
+    this.state.countdownN = COUNTDOWN_SECONDS;
+    this.state.countdownAt = Date.now();
+    this.state.autoStartDeadline = null;
+    this.state.gatherTriggered = false;
+
+    await this.persist();
+    this.broadcastState();
   }
 
   isRaceComplete() {

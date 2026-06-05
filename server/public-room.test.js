@@ -277,6 +277,66 @@ describe("PublicRaceRoom.isRaceComplete", () => {
   });
 });
 
+import { computeBotTimelines } from "../public/src/bot-timeline.js";
+
+describe("PublicRaceRoom auto-start sequence", () => {
+  it("fires auto-start when autoStartDeadline elapses: bots added, router released, state→countdown", async () => {
+    await withRoom("test-autostart-" + crypto.randomUUID(), async (room) => {
+      const playerId = crypto.randomUUID();
+      const conn = makeConn();
+      await room.handleHello(conn, { type: "hello", playerId, handle: "A", difficulty: "medium" });
+      // Force the deadline into the past.
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+      expect(room.state.state).toBe("countdown");
+      expect(room.state.players.length).toBe(6); // 1 human + 5 bots
+      const bots = room.state.players.filter((p) => p.isBot);
+      expect(bots.length).toBe(5);
+      expect(typeof room.state.botSeed).toBe("number");
+      expect(room.state.botTiers.length).toBe(5);
+      expect(room.state.autoStartDeadline).toBeNull();
+      expect(room.releaseCalls.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("computes botTimelines when countdown→racing transition fires", async () => {
+    await withRoom("test-timeline-" + crypto.randomUUID(), async (room) => {
+      const playerId = crypto.randomUUID();
+      await room.handleHello(makeConn(), { type: "hello", playerId, handle: "A", difficulty: "medium" });
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+      // Drive countdown ticks to completion by advancing the alarm.
+      while (room.state.state === "countdown") {
+        room.state.countdownAt = Date.now() - 10;
+        await room.onAlarm();
+      }
+      expect(room.state.state).toBe("racing");
+      expect(room.state.botTimelines.length).toBe(5);
+      for (const tl of room.state.botTimelines) expect(tl.length).toBe(room.state.raceLength);
+    });
+  });
+
+  it("computed botTimelines match the pure helper", async () => {
+    await withRoom("test-match-" + crypto.randomUUID(), async (room) => {
+      const playerId = crypto.randomUUID();
+      await room.handleHello(makeConn(), { type: "hello", playerId, handle: "A", difficulty: "easy" });
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+      while (room.state.state === "countdown") {
+        room.state.countdownAt = Date.now() - 10;
+        await room.onAlarm();
+      }
+      const expected = computeBotTimelines({
+        botSeed: room.state.botSeed,
+        botTiers: room.state.botTiers,
+        difficulty: room.state.difficulty,
+        raceLength: room.state.raceLength,
+      });
+      expect(room.state.botTimelines).toEqual(expected);
+    });
+  });
+});
+
 describe("PublicRaceRoom — disabled operations return BAD_STATE", () => {
   async function roomWithOnePlayer(name) {
     // Returns { room, conn } inside a withRoom callback — caller must be inside withRoom.
