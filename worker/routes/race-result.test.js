@@ -75,7 +75,7 @@ describe("POST /api/race-result — happy path", () => {
     const { results } = await env.DB.prepare(
       "SELECT id, user_id, device_id, difficulty, finished, finish_time_ms, " +
         "problems_total, problems_correct, problems_attempted, " +
-        "avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at " +
+        "avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at, room_id " +
         "FROM race_results"
     ).all();
 
@@ -95,6 +95,7 @@ describe("POST /api/race-result — happy path", () => {
     expect(row.longest_streak).toBe(7);
     expect(typeof row.played_at).toBe("number");
     expect(row.played_at).toBeGreaterThan(0);
+    expect(row.room_id).toBeNull();
   });
 
   it("accepts unfinished races (quit) with finish_time_ms NULL", async () => {
