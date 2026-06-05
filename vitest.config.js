@@ -21,6 +21,6 @@ export default defineConfig({
   test: {
     // Worker tests only. The `public/src/*.test.js` files use node:test
     // and are run separately via `node --test`.
-    include: ["worker/**/*.test.js"],
+    include: ["worker/**/*.test.js", "server/**/*.test.js"],
   },
 });
