@@ -1,5 +1,5 @@
 import PartySocket from 'partysocket';
-import { getOrCreateRacerId, getStoredHandle, setStoredHandle } from './identity.js';
+import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDeviceId } from './identity.js';
 
 export function createRoomClient(roomId) {
   const ws = new PartySocket({
@@ -14,6 +14,7 @@ export function createRoomClient(roomId) {
       type: 'hello',
       playerId: getOrCreateRacerId(),
       handle: getStoredHandle(),
+      deviceId: getOrCreateDeviceId(),
     }));
   });
 
