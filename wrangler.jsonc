@@ -16,11 +16,17 @@
   ],
   "durable_objects": {
     "bindings": [
-      { "name": "RaceRoom", "class_name": "RaceRoom" }
+      { "name": "RaceRoom",       "class_name": "RaceRoom" },
+      { "name": "PublicRaceRoom", "class_name": "PublicRaceRoom" },
+      { "name": "LobbyRouter",    "class_name": "LobbyRouter" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["RaceRoom"] }
+    { "tag": "v1", "new_sqlite_classes": ["RaceRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["PublicRaceRoom", "LobbyRouter"] }
+  ],
+  "kv_namespaces": [
+    { "binding": "MATCHMAKING_LIMITS", "id": "11bbfc11f5504dab944ebc4d69bb91f0" }
   ],
   // obscenity ships a broken ESM wrapper at dist/index.mjs (does
   // `import mod from "./index.js"` then references `mod.X`, which evaluates
@@ -47,11 +53,17 @@
       ],
       "durable_objects": {
         "bindings": [
-          { "name": "RaceRoom", "class_name": "RaceRoom" }
+          { "name": "RaceRoom",       "class_name": "RaceRoom" },
+          { "name": "PublicRaceRoom", "class_name": "PublicRaceRoom" },
+          { "name": "LobbyRouter",    "class_name": "LobbyRouter" }
         ]
       },
       "migrations": [
-        { "tag": "v1", "new_sqlite_classes": ["RaceRoom"] }
+        { "tag": "v1", "new_sqlite_classes": ["RaceRoom"] },
+        { "tag": "v2", "new_sqlite_classes": ["PublicRaceRoom", "LobbyRouter"] }
+      ],
+      "kv_namespaces": [
+        { "binding": "MATCHMAKING_LIMITS", "id": "89de56ccf71f43da91064d59d010f2c1" }
       ],
       "alias": {
         "obscenity": "./node_modules/obscenity/dist/index.js"
