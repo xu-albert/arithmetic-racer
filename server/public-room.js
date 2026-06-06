@@ -82,7 +82,8 @@ export class PublicRaceRoom extends RaceRoom {
 
     await super.onAlarm();
 
-    // 2) On countdown→racing transition, compute bot timelines once.
+    // 2) On countdown→racing transition, compute bot timelines once and
+    //    broadcast them so the client can animate bots locally.
     if (wasCountdown && this.state.state === 'racing' && this.state.botTimelines.length === 0) {
       this.state.botTimelines = computeBotTimelines({
         botSeed: this.state.botSeed,
@@ -91,6 +92,14 @@ export class PublicRaceRoom extends RaceRoom {
         raceLength: this.state.raceLength,
       });
       await this.persist();
+      // Send bot timeline data so clients can animate bots without per-tick messages.
+      this.broadcast(JSON.stringify({
+        type: 'bot-timelines',
+        botSeed: this.state.botSeed,
+        botTiers: this.state.botTiers,
+        botTimelines: this.state.botTimelines,
+        raceStartedAt: this.state.raceStartedAt,
+      }));
     }
   }
 

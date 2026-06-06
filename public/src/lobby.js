@@ -2,7 +2,18 @@ import { createRoomClient } from './room-client.js';
 
 const DIFFS = ['easy', 'medium', 'hard'];
 
-export function attachLobby({ roomId, screens, onRaceStart }) {
+/**
+ * @param {object} opts
+ * @param {string} opts.roomId
+ * @param {object} opts.screens
+ * @param {function} opts.onRaceStart
+ * @param {string} [opts.mode]       - 'public' activates public-mode UI
+ * @param {string} [opts.difficulty] - forwarded to createRoomClient for public mode
+ * @param {string} [opts.deviceId]   - forwarded to createRoomClient for public mode
+ */
+export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, deviceId }) {
+  const isPublic = mode === 'public';
+
   const roomTitle = document.getElementById('room-title');
   const playersList = document.getElementById('room-players');
   const startBtn = document.getElementById('start-race-btn');
@@ -18,7 +29,33 @@ export function attachLobby({ roomId, screens, onRaceStart }) {
   const inviteCopyBtn = document.getElementById('invite-copy-btn');
   const inviteCloseBtn = document.getElementById('invite-close-btn');
 
-  const client = createRoomClient(roomId);
+  // Public mode: create a "Find Another Match" button and a searching pill dynamically
+  let findAnotherBtn = null;
+  let searchingPill = null;
+  if (isPublic) {
+    // Hide private-only controls
+    startBtn.classList.add('hidden');
+    inviteBtn.classList.add('hidden');
+
+    // Searching pill (replaces start button in lobby state)
+    searchingPill = document.createElement('span');
+    searchingPill.id = 'searching-pill';
+    searchingPill.className = 'lobby-hint';
+    searchingPill.textContent = 'Searching…';
+    startBtn.parentNode.insertBefore(searchingPill, startBtn);
+
+    // "Find Another Match" replaces "Race Again" on the results screen
+    findAnotherBtn = document.createElement('a');
+    findAnotherBtn.id = 'find-another-btn';
+    findAnotherBtn.href = '/';
+    findAnotherBtn.className = 'primary button';
+    findAnotherBtn.textContent = 'Find Another Match';
+    rematchBtn.parentNode.insertBefore(findAnotherBtn, rematchBtn.nextSibling);
+    findAnotherBtn.classList.add('hidden');
+  }
+
+  const client = createRoomClient({ roomId, mode, difficulty, deviceId });
+
   let currentState = null;
   let youAre = null;
   let inviteShownThisSession = false;
@@ -106,16 +143,35 @@ export function attachLobby({ roomId, screens, onRaceStart }) {
 
     // Buttons
     const enoughPlayers = currentState.players.length >= 2;
-    startBtn.disabled = !(inLobby && isCreator && enoughPlayers);
-    startBtn.classList.toggle('hidden', currentState.state !== 'lobby');
-
     const isFinished = currentState.state === 'finished';
-    rematchBtn.classList.toggle('hidden', !isFinished);
-    rematchBtn.disabled = !isCreator;
+
+    if (isPublic) {
+      // Public mode: no start / rematch buttons; searching pill + find-another instead
+      startBtn.classList.add('hidden');
+      rematchBtn.classList.add('hidden');
+
+      if (searchingPill) {
+        const humanCount = currentState.players.filter((p) => !p.id.startsWith('bot-')).length;
+        searchingPill.classList.toggle('hidden', currentState.state !== 'lobby');
+        if (currentState.state === 'lobby') {
+          searchingPill.textContent = `Searching… ${humanCount} / 6 humans`;
+        }
+      }
+      if (findAnotherBtn) {
+        findAnotherBtn.classList.toggle('hidden', !isFinished);
+      }
+    } else {
+      startBtn.disabled = !(inLobby && isCreator && enoughPlayers);
+      startBtn.classList.toggle('hidden', currentState.state !== 'lobby');
+      rematchBtn.classList.toggle('hidden', !isFinished);
+      rematchBtn.disabled = !isCreator;
+    }
 
     // Hint
     if (currentState.state === 'lobby') {
-      if (!enoughPlayers) {
+      if (isPublic) {
+        hint.textContent = '';
+      } else if (!enoughPlayers) {
         hint.textContent = 'Waiting for at least 2 players to start…';
       } else if (!isCreator) {
         hint.textContent = 'Waiting for the host to start the race.';
@@ -127,7 +183,11 @@ export function attachLobby({ roomId, screens, onRaceStart }) {
     } else if (currentState.state === 'racing') {
       hint.textContent = 'Race in progress.';
     } else if (isFinished) {
-      hint.textContent = isCreator ? 'Click Race Again to rematch.' : 'Waiting for the host to rematch.';
+      if (isPublic) {
+        hint.textContent = '';
+      } else {
+        hint.textContent = isCreator ? 'Click Race Again to rematch.' : 'Waiting for the host to rematch.';
+      }
     }
   }
 
@@ -243,8 +303,8 @@ export function attachLobby({ roomId, screens, onRaceStart }) {
       currentState = msg.state;
       youAre = msg.youAre;
 
-      // Auto-open invite modal once when creator first lands.
-      if (!inviteShownThisSession && meIsCreator() && currentState.state === 'lobby' && currentState.problemSequence.length === 0) {
+      // Auto-open invite modal once when creator first lands (private rooms only).
+      if (!isPublic && !inviteShownThisSession && meIsCreator() && currentState.state === 'lobby' && currentState.problemSequence.length === 0) {
         inviteShownThisSession = true;
         openInvite();
       }
@@ -282,6 +342,8 @@ export function attachLobby({ roomId, screens, onRaceStart }) {
     client,
     detach() {
       client.close();
+      searchingPill?.remove();
+      findAnotherBtn?.remove();
     },
   };
 }

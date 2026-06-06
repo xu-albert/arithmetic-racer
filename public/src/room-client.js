@@ -1,21 +1,35 @@
 import PartySocket from 'partysocket';
 import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDeviceId } from './identity.js';
 
-export function createRoomClient(roomId) {
+/**
+ * @param {object} opts
+ * @param {string} opts.roomId
+ * @param {string} [opts.mode]        - 'public' routes to public-race-room party
+ * @param {string} [opts.difficulty]  - included in hello for public mode
+ * @param {string} [opts.deviceId]    - included in hello for public mode
+ */
+export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
+  const party = mode === 'public' ? 'public-race-room' : 'race-room';
+
   const ws = new PartySocket({
     host: location.host,
-    party: 'race-room',
+    party,
     room: roomId,
   });
   const listeners = new Set();
 
   ws.addEventListener('open', () => {
-    ws.send(JSON.stringify({
+    const helloMsg = {
       type: 'hello',
       playerId: getOrCreateRacerId(),
       handle: getStoredHandle(),
-      deviceId: getOrCreateDeviceId(),
-    }));
+      // deviceId is stamped onto every hello so DOs (private + public) can
+      // attribute race_results. Fall back to the local helper if the caller
+      // didn't pass one through the constructor.
+      deviceId: deviceId ?? getOrCreateDeviceId(),
+      ...(mode === 'public' && { difficulty }),
+    };
+    ws.send(JSON.stringify(helloMsg));
   });
 
   ws.addEventListener('message', (e) => {

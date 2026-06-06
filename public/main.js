@@ -179,9 +179,16 @@ function handleRoomRaceStart({ roomClient, initialState, youAre }) {
   cleanupRace = attachRaceUI({ runner, raceLength: initialState.raceLength, screens });
 }
 
-function enterRoom(roomId) {
-  history.replaceState(null, '', `/?room=${roomId}`);
-  lobbyHandle = attachLobby({ roomId, screens, onRaceStart: handleRoomRaceStart });
+function enterRoom(roomId, { mode, difficulty } = {}) {
+  if (!mode) history.replaceState(null, '', `/?room=${roomId}`);
+  lobbyHandle = attachLobby({
+    roomId,
+    screens,
+    onRaceStart: handleRoomRaceStart,
+    mode,
+    difficulty,
+    deviceId: getOrCreateDeviceId(),
+  });
   showScreen('lobby-room');
 }
 
@@ -189,9 +196,11 @@ function enterRoom(roomId) {
 
 const params = new URLSearchParams(location.search);
 const initialRoomId = params.get('room');
+const initialMode = params.get('mode') ?? undefined;
+const initialDifficulty = params.get('difficulty') ?? undefined;
 
 if (initialRoomId) {
-  enterRoom(initialRoomId);
+  enterRoom(initialRoomId, { mode: initialMode, difficulty: initialDifficulty });
 } else {
   lobbyDiffButtons.forEach((btn) => {
     btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
