@@ -15,6 +15,7 @@ import { handleGetMe, handlePostUsername, handleByDevice } from "../worker/route
 import { getAuth } from "../worker/auth.js";
 import { readUserId } from "../worker/session.js";
 import { handleMatchmakeJoin } from "../worker/routes/matchmake.js";
+import { handleAdminIndex } from "../worker/routes/admin.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
 
@@ -56,6 +57,11 @@ export default {
     // Matchmaking
     if (pathname === "/api/matchmake/join" && request.method === "POST") {
       return handleMatchmakeJoin(request, env);
+    }
+
+    // Admin dashboard (operator-only, token-gated)
+    if (pathname === "/admin" || pathname === "/admin/") {
+      return handleAdminIndex(request, env);
     }
 
     // Phase 6 — private multiplayer rooms
