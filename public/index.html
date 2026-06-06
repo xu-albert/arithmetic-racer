@@ -34,15 +34,33 @@
   <main id="app">
     <section id="lobby" class="screen">
       <h2>Lobby</h2>
-      <div class="difficulty-picker">
-        <button class="diff-btn" data-difficulty="easy">Easy</button>
-        <button class="diff-btn" data-difficulty="medium">Medium</button>
-        <button class="diff-btn" data-difficulty="hard">Hard</button>
-      </div>
-      <div class="lobby-actions">
-        <button id="quickplay-btn" class="primary">Quickplay</button>
-        <button id="create-room-btn">Create Private Room</button>
-      </div>
+
+      <section class="find-match">
+        <h3>Find a Match</h3>
+        <p>Race up to 5 other humans in real time. Bots fill empty seats.</p>
+        <div class="match-controls">
+          <div class="difficulty-picker match-diff-picker" role="radiogroup" aria-label="Match difficulty">
+            <label><input type="radio" name="match-diff" value="easy"> Easy</label>
+            <label><input type="radio" name="match-diff" value="medium" checked> Medium</label>
+            <label><input type="radio" name="match-diff" value="hard"> Hard</label>
+          </div>
+          <button type="button" id="btn-find-match" class="primary">Find Match</button>
+          <span class="match-status" id="match-status" aria-live="polite"></span>
+        </div>
+      </section>
+
+      <section class="solo-play">
+        <h3>Solo vs Bots</h3>
+        <div class="difficulty-picker">
+          <button class="diff-btn" data-difficulty="easy">Easy</button>
+          <button class="diff-btn" data-difficulty="medium">Medium</button>
+          <button class="diff-btn" data-difficulty="hard">Hard</button>
+        </div>
+        <div class="lobby-actions">
+          <button id="quickplay-btn" class="primary">Quickplay</button>
+          <button id="create-room-btn">Create Private Room</button>
+        </div>
+      </section>
     </section>
 
     <section id="lobby-room" class="screen hidden">

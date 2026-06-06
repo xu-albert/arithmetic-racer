@@ -16,6 +16,7 @@ import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
 import { postRaceResult } from './src/stats-api.js';
 import { getOrCreateDeviceId } from './src/identity.js';
+import { joinMatchmaking } from './src/matchmake-api.js';
 
 // ---- Identity helpers --------------------------------------------------
 
@@ -199,6 +200,28 @@ if (initialRoomId) {
   setDifficulty('easy');
   showScreen('lobby');
 }
+
+// ---- Find a Match (public matchmaking) ----------------------------------
+
+const findMatchBtn = document.getElementById('btn-find-match');
+const matchStatus = document.getElementById('match-status');
+
+findMatchBtn?.addEventListener('click', async () => {
+  const checkedRadio = document.querySelector('input[name="match-diff"]:checked');
+  const diff = checkedRadio ? checkedRadio.value : 'medium';
+  findMatchBtn.disabled = true;
+  matchStatus.textContent = 'Searching…';
+  try {
+    const { roomId, difficulty } = await joinMatchmaking({
+      difficulty: diff,
+      deviceId: getOrCreateDeviceId(),
+    });
+    window.location.href = `/?room=${encodeURIComponent(roomId)}&mode=public&difficulty=${encodeURIComponent(difficulty)}`;
+  } catch (e) {
+    matchStatus.textContent = e.message || 'Error finding match';
+    findMatchBtn.disabled = false;
+  }
+});
 
 createRoomBtn.addEventListener('click', async () => {
   createRoomBtn.disabled = true;
