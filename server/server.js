@@ -14,6 +14,7 @@ import { handleRaceResult } from "../worker/routes/race-result.js";
 import { handleGetMe, handlePostUsername, handleByDevice } from "../worker/routes/me.js";
 import { getAuth } from "../worker/auth.js";
 import { readUserId } from "../worker/session.js";
+import { handleMatchmakeJoin } from "../worker/routes/matchmake.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
 
@@ -52,6 +53,11 @@ export default {
       return handleByDevice(request, env);
     }
 
+    // Matchmaking
+    if (pathname === "/api/matchmake/join" && request.method === "POST") {
+      return handleMatchmakeJoin(request, env);
+    }
+
     // Phase 6 — private multiplayer rooms
     if (request.method === "POST" && pathname === "/api/rooms") {
       const roomId = generateRoomId();
@@ -62,7 +68,10 @@ export default {
     // attribute race-result rows. Cookie-bound auth = unspoofable; we
     // unconditionally overwrite/delete any client-supplied header value.
     let upgradeRequest = request;
-    if (pathname.startsWith("/parties/race-room/")) {
+    if (
+      pathname.startsWith("/parties/race-room/")
+      || pathname.startsWith("/parties/public-race-room/")
+    ) {
       const userId = await readUserId(request, env);
       const headers = new Headers(request.headers);
       if (userId) headers.set(USER_ID_HEADER, userId);
