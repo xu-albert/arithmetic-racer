@@ -2,7 +2,7 @@
 //
 // Flow:
 //   1. Validate body { difficulty, device_id }.
-//   2. Rate-limit per device_id via KV (3 calls per 10s window).
+//   2. Rate-limit per device_id via KV (3 calls per 60s window).
 //   3. Check KV queue-lock for this device; if set, return cached roomId.
 //   4. Call LobbyRouter.pick() for the difficulty's router DO.
 //   5. Set KV queue-lock with 60s TTL.
@@ -10,7 +10,9 @@
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 const RATE_LIMIT_MAX = 3;
-const RATE_LIMIT_WINDOW_S = 10;
+// Workers KV requires expirationTtl >= 60s. 3 joins per minute per device is
+// well below any legitimate user pattern and still throttles abuse.
+const RATE_LIMIT_WINDOW_S = 60;
 const QUEUE_LOCK_TTL_S = 60;
 
 export async function handleMatchmakeJoin(request, env) {

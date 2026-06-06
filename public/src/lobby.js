@@ -151,7 +151,7 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
       rematchBtn.classList.add('hidden');
 
       if (searchingPill) {
-        const humanCount = currentState.players.filter((p) => !p.id.startsWith('bot-')).length;
+        const humanCount = currentState.players.filter((p) => !p.isBot).length;
         searchingPill.classList.toggle('hidden', currentState.state !== 'lobby');
         if (currentState.state === 'lobby') {
           searchingPill.textContent = `Searching… ${humanCount} / 6 humans`;

@@ -42,4 +42,15 @@ describe("POST /api/matchmake/join", () => {
     const body2 = await res2.json();
     expect(body2.roomId).toBe(body1.roomId);
   });
+
+  it("returns 429 with Retry-After when rate limit exceeded", async () => {
+    const dev = "dev-rl-exceed";
+    // Seed the rate-limit counter at the cap so the next call trips the limit.
+    await env.MATCHMAKING_LIMITS.put(`rl:${dev}`, "3", { expirationTtl: 60 });
+    const res = await handleMatchmakeJoin(makeReq({ difficulty: "easy", device_id: dev }), env);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("60");
+    const body = await res.json();
+    expect(body.error).toBe("rate_limited");
+  });
 });
