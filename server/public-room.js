@@ -13,6 +13,7 @@ import { pickBotTiers } from '../public/src/bot.js';
 import { computeBotTimelines, scoreBotAt } from '../public/src/bot-timeline.js';
 import { seededRng } from '../public/src/seeded-rng.js';
 import { generateSequence } from '../public/src/game.js';
+import { insertRaceResult } from '../worker/routes/race-result.js';
 
 const VALID_DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
 
@@ -36,6 +37,13 @@ export class PublicRaceRoom extends RaceRoom {
 
     // Delegate to base: handle generation, player insertion, broadcast, persist.
     await super.handleHello(connection, msg);
+
+    // Stamp deviceId/userId onto the newly-added player (super.handleHello pushed it).
+    const player = this.state.players.find((p) => p.id === msg.playerId);
+    if (player) {
+      if (typeof msg.deviceId === 'string') player.deviceId = msg.deviceId;
+      if (typeof msg.userId === 'string') player.userId = msg.userId;
+    }
 
     if (this.state.state !== 'lobby') return;
 
@@ -154,6 +162,35 @@ export class PublicRaceRoom extends RaceRoom {
     this.state.graceDeadline = null;
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings }));
+
+    // Fire-and-forget — DB error must not block the WS broadcast.
+    this.persistResults().catch((e) => console.error('persistResults failed', e));
+  }
+
+  async persistResults() {
+    for (const p of this.state.players) {
+      if (p.isBot) continue;
+      if (!p.deviceId) continue;
+
+      const finished = p.score >= this.state.raceLength && !p.dropped;
+      const body = {
+        device_id: p.deviceId,
+        difficulty: this.state.difficulty,
+        finished,
+        finish_time_ms: finished ? p.finishMs : null,
+        problems_total: this.state.raceLength,
+        problems_correct: p.score,
+        problems_attempted: p.score,
+        avg_time_per_problem_ms: p.score > 0 && finished ? Math.round(p.finishMs / p.score) : 0,
+        accuracy_pct: p.score > 0 ? 100 : 0,
+        longest_streak: p.score,
+      };
+      try {
+        await insertRaceResult(this.env, { body, userId: p.userId ?? null, roomId: this.name });
+      } catch (e) {
+        console.error('insertRaceResult failed for player', p.id, e);
+      }
+    }
   }
 
   isRaceComplete() {

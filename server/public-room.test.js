@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 
 describe("PublicRaceRoom — scaffold", () => {
@@ -363,6 +363,66 @@ describe("PublicRaceRoom.finishRace — bot finalization", () => {
       expect(b2.finishMs).toBeNull();
       expect(b2.dnf).toBe(true);
       expect(room.state.state).toBe("finished");
+    });
+  });
+});
+
+describe("PublicRaceRoom — race_results persistence", () => {
+  beforeEach(async () => {
+    // Mirror migration so the test D1 has the room_id column.
+    await env.DB.exec(
+      "CREATE TABLE IF NOT EXISTS race_results (" +
+        "id TEXT PRIMARY KEY, user_id TEXT, device_id TEXT NOT NULL, " +
+        "difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','medium','hard')), " +
+        "finished INTEGER NOT NULL CHECK (finished IN (0,1)), finish_time_ms INTEGER, " +
+        "problems_total INTEGER NOT NULL DEFAULT 20, problems_correct INTEGER NOT NULL, " +
+        "problems_attempted INTEGER NOT NULL, avg_time_per_problem_ms INTEGER NOT NULL, " +
+        "accuracy_pct REAL NOT NULL, longest_streak INTEGER NOT NULL, played_at INTEGER NOT NULL, " +
+        "room_id TEXT)"
+    );
+    await env.DB.exec("DELETE FROM race_results");
+  });
+
+  it("inserts one row per non-bot finisher with room_id set", async () => {
+    const roomName = "test-results-" + crypto.randomUUID();
+    await withRoom(roomName, async (room) => {
+      // Set up state: 1 finished human + 1 dropped human + 1 bot.
+      room.state.difficulty = 'medium';
+      room.state.raceLength = 10;
+      room.state.raceStartedAt = Date.now() - 10000;
+      room.state.state = 'racing';
+      room.state.botTimelines = [[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]];
+      room.state.players = [
+        { id: 'h-1', handle: 'Alice', deviceId: 'dev-1', userId: null, isBot: false, score: 10, finishMs: 5000, dropped: false, dnf: false },
+        { id: 'h-2', handle: 'Bob', deviceId: 'dev-2', userId: null, isBot: false, score: 4, finishMs: null, dropped: true, dnf: false },
+        { id: 'b-1', isBot: true, tier: 'medium', score: 0, finishMs: null, dropped: false, dnf: false },
+      ];
+
+      await room.persistResults();
+
+      const rows = await env.DB.prepare("SELECT * FROM race_results WHERE room_id = ?").bind(roomName).all();
+      expect(rows.results.length).toBe(2); // 1 finished + 1 dropped human; bot excluded
+      const finished = rows.results.find((r) => r.device_id === 'dev-1');
+      const dropped = rows.results.find((r) => r.device_id === 'dev-2');
+      expect(finished.finished).toBe(1);
+      expect(finished.finish_time_ms).toBe(5000);
+      expect(finished.room_id).toBe(roomName);
+      expect(dropped.finished).toBe(0);
+      expect(dropped.finish_time_ms).toBeNull();
+    });
+  });
+});
+
+describe("PublicRaceRoom.handleHello — stamps deviceId/userId on player", () => {
+  it("attaches msg.deviceId to the player record", async () => {
+    await withRoom("test-stamp-room-" + crypto.randomUUID(), async (room) => {
+      const playerId = crypto.randomUUID();
+      await room.handleHello(makeConn(), {
+        type: "hello", playerId, handle: "A", difficulty: "easy", deviceId: "dev-stamp", userId: "user-stamp"
+      });
+      const p = room.state.players.find((p) => p.id === playerId);
+      expect(p.deviceId).toBe("dev-stamp");
+      expect(p.userId).toBe("user-stamp");
     });
   });
 });
