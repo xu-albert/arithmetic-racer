@@ -50,7 +50,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     let anyRunning = false;
     for (let i = 0; i < botTimelines.length; i++) {
       const bot = racers.find((r) => r.id === `bot-${i + 1}`);
-      if (!bot || bot.finishMs != null || bot.dropped) continue;
+      if (!bot || bot.finishMs != null || bot.dropped || bot.dnf) continue;
       const newScore = scoreBotAt(botTimelines[i], elapsed);
       if (newScore !== bot.score) {
         bot.score = newScore;
