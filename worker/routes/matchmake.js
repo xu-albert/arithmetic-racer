@@ -61,7 +61,7 @@ export async function handleMatchmakeJoin(request, env) {
   let roomId;
   try {
     const stub = env.LobbyRouter.get(env.LobbyRouter.idFromName(difficulty));
-    const result = await stub.pick();
+    const result = await stub.pick(difficulty);
     roomId = result.roomId;
   } catch (e) {
     return Response.json({ error: "router_unavailable" }, { status: 503, headers: { "retry-after": "1" } });

@@ -14,8 +14,7 @@ import { computeBotTimelines, scoreBotAt } from '../public/src/bot-timeline.js';
 import { seededRng } from '../public/src/seeded-rng.js';
 import { generateSequence } from '../public/src/game.js';
 import { insertRaceResult } from '../worker/routes/race-result.js';
-
-const VALID_DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
+import { difficultyFromRoomName } from './lobby-router.js';
 
 export class PublicRaceRoom extends RaceRoom {
   static options = { hibernate: true };
@@ -25,14 +24,21 @@ export class PublicRaceRoom extends RaceRoom {
   }
 
   async handleHello(connection, msg) {
-    if (!VALID_DIFFICULTIES.has(msg?.difficulty)) {
-      return this.sendError(connection, 'INVALID_INPUT', 'Missing or invalid difficulty');
+    // Source of truth for difficulty is the room name (prefixed by LobbyRouter).
+    // The client's msg.difficulty is sanity-checked but never used to write state.
+    // This closes the difficulty-hijack vector where any direct WS connection
+    // could permanently lock a fresh room to an arbitrary difficulty.
+    const roomDifficulty = difficultyFromRoomName(this.name);
+    if (roomDifficulty == null) {
+      return this.sendError(connection, 'BAD_ROOM_ID',
+        'Public room name is missing a difficulty prefix; reconnect via Find Match.');
     }
     if (this.state.difficulty == null) {
-      this.state.difficulty = msg.difficulty;
-    } else if (this.state.difficulty !== msg.difficulty) {
+      this.state.difficulty = roomDifficulty;
+    }
+    if (msg?.difficulty != null && msg.difficulty !== roomDifficulty) {
       return this.sendError(connection, 'BAD_DIFFICULTY',
-        `This room is locked to difficulty=${this.state.difficulty}`);
+        `This room is locked to difficulty=${roomDifficulty}`);
     }
 
     // Delegate to base: handle generation, player insertion, broadcast, persist.
@@ -266,7 +272,9 @@ export function publicFreshState(id) {
     ...baseFreshState(id),
     mode: 'public',
     maxPlayers: MAX_PLAYERS,
-    difficulty: null,
+    // Derived from the room name's prefix (e/m/h); null only if the room
+    // was reached via a non-router URL with a malformed name.
+    difficulty: difficultyFromRoomName(id),
     autoStartDeadline: null,
     gatherTriggered: false,
     botSeed: null,

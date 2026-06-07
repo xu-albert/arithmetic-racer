@@ -30,8 +30,15 @@ function makeConn() {
  *   - `instance.releaseCalls` — array of roomIds passed to releaseLobby
  *   - instance.broadcast / broadcastState / getConnections already stubbed
  */
-async function withRoom(name, fn) {
-  const stub = env.PublicRaceRoom.get(env.PublicRaceRoom.idFromName(name));
+// Test rooms must carry the same e-/m-/h- prefix that production LobbyRouter
+// emits, since PublicRaceRoom now derives its difficulty from `this.name`.
+// Tests that need a non-medium difficulty pass it as the third arg.
+async function withRoom(name, fnOrDifficulty, maybeFn) {
+  const difficulty = typeof fnOrDifficulty === "string" ? fnOrDifficulty : "medium";
+  const fn = typeof fnOrDifficulty === "function" ? fnOrDifficulty : maybeFn;
+  const prefix = { easy: "e", medium: "m", hard: "h" }[difficulty];
+  const prefixed = name.startsWith(`${prefix}-`) ? name : `${prefix}-${name}`;
+  const stub = env.PublicRaceRoom.get(env.PublicRaceRoom.idFromName(prefixed));
   return runInDurableObject(stub, async (instance) => {
     // Ensure onStart has run (idempotent — sets state if not yet set).
     if (!instance.state) await instance.onStart();
@@ -95,7 +102,7 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
         type: "hello",
         playerId: crypto.randomUUID(),
         handle: "A",
-        difficulty: "easy",
+        difficulty: "medium",
       });
       expect(room.state.autoStartDeadline).toBeGreaterThanOrEqual(before + LONE_TIMEOUT_MS);
       expect(room.state.autoStartDeadline).toBeLessThanOrEqual(Date.now() + LONE_TIMEOUT_MS + 100);
@@ -109,14 +116,14 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
         type: "hello",
         playerId: crypto.randomUUID(),
         handle: "A",
-        difficulty: "easy",
+        difficulty: "medium",
       });
       const before = Date.now();
       await room.handleHello(makeConn(), {
         type: "hello",
         playerId: crypto.randomUUID(),
         handle: "B",
-        difficulty: "easy",
+        difficulty: "medium",
       });
       expect(room.state.gatherTriggered).toBe(true);
       expect(room.state.autoStartDeadline).toBeGreaterThanOrEqual(before + GATHER_WINDOW_MS);
@@ -129,13 +136,13 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
         type: "hello",
         playerId: crypto.randomUUID(),
         handle: "A",
-        difficulty: "easy",
+        difficulty: "medium",
       });
       await room.handleHello(makeConn(), {
         type: "hello",
         playerId: crypto.randomUUID(),
         handle: "B",
-        difficulty: "easy",
+        difficulty: "medium",
       });
       const deadlineAfter2 = room.state.autoStartDeadline;
       await new Promise((r) => setTimeout(r, 5)); // ensure Date.now() advances
@@ -143,7 +150,7 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
         type: "hello",
         playerId: crypto.randomUUID(),
         handle: "C",
-        difficulty: "easy",
+        difficulty: "medium",
       });
       expect(room.state.autoStartDeadline).toBe(deadlineAfter2);
     });
@@ -187,7 +194,7 @@ describe("PublicRaceRoom.removePlayer", () => {
           type: "hello",
           playerId: pid,
           handle: `Player${i + 1}`,
-          difficulty: "easy",
+          difficulty: "medium",
         });
       }
       return fn(room, playerIds);
@@ -224,13 +231,15 @@ describe("PublicRaceRoom.removePlayer", () => {
 
   it("last player leaving does not release router when difficulty is null", async () => {
     await withRoom("test-no-difficulty-" + crypto.randomUUID(), async (room) => {
-      // Add a player manually without locking difficulty.
+      // Simulate a misrouted connection that landed on a room whose name has
+      // no valid difficulty prefix: difficulty stays null. removePlayer must
+      // not try to call into a LobbyRouter for a non-existent difficulty.
+      room.state.difficulty = null;
       const pid = crypto.randomUUID();
       room.state.players.push({
         id: pid, handle: "Solo", isCreator: false, joinedAt: Date.now(),
         score: 0, finishMs: null, dropped: false, dnf: false,
       });
-      // difficulty stays null
       await room.removePlayer(pid);
       expect(room.releaseCalls.length).toBe(0);
     });
@@ -319,7 +328,7 @@ describe("PublicRaceRoom auto-start sequence", () => {
   it("computed botTimelines match the pure helper", async () => {
     await withRoom("test-match-" + crypto.randomUUID(), async (room) => {
       const playerId = crypto.randomUUID();
-      await room.handleHello(makeConn(), { type: "hello", playerId, handle: "A", difficulty: "easy" });
+      await room.handleHello(makeConn(), { type: "hello", playerId, handle: "A", difficulty: "medium" });
       room.state.autoStartDeadline = Date.now() - 10;
       await room.onAlarm();
       while (room.state.state === "countdown") {
@@ -387,7 +396,6 @@ describe("PublicRaceRoom — race_results persistence", () => {
     const roomName = "test-results-" + crypto.randomUUID();
     await withRoom(roomName, async (room) => {
       // Set up state: 1 finished human + 1 dropped human + 1 bot.
-      room.state.difficulty = 'medium';
       room.state.raceLength = 10;
       room.state.raceStartedAt = Date.now() - 10000;
       room.state.state = 'racing';
@@ -400,13 +408,15 @@ describe("PublicRaceRoom — race_results persistence", () => {
 
       await room.persistResults();
 
-      const rows = await env.DB.prepare("SELECT * FROM race_results WHERE room_id = ?").bind(roomName).all();
+      // The prefix-stamped name is the actual room_id in race_results.
+      const actualRoomId = room.name;
+      const rows = await env.DB.prepare("SELECT * FROM race_results WHERE room_id = ?").bind(actualRoomId).all();
       expect(rows.results.length).toBe(2); // 1 finished + 1 dropped human; bot excluded
       const finished = rows.results.find((r) => r.device_id === 'dev-1');
       const dropped = rows.results.find((r) => r.device_id === 'dev-2');
       expect(finished.finished).toBe(1);
       expect(finished.finish_time_ms).toBe(5000);
-      expect(finished.room_id).toBe(roomName);
+      expect(finished.room_id).toBe(actualRoomId);
       expect(dropped.finished).toBe(0);
       expect(dropped.finish_time_ms).toBeNull();
     });
@@ -418,7 +428,7 @@ describe("PublicRaceRoom.handleHello — stamps deviceId/userId on player", () =
     await withRoom("test-stamp-room-" + crypto.randomUUID(), async (room) => {
       const playerId = crypto.randomUUID();
       await room.handleHello(makeConn(), {
-        type: "hello", playerId, handle: "A", difficulty: "easy", deviceId: "dev-stamp", userId: "user-stamp"
+        type: "hello", playerId, handle: "A", difficulty: "medium", deviceId: "dev-stamp", userId: "user-stamp"
       });
       const p = room.state.players.find((p) => p.id === playerId);
       expect(p.deviceId).toBe("dev-stamp");
@@ -442,7 +452,7 @@ describe("PublicRaceRoom — disabled operations return BAD_STATE", () => {
         type: "hello",
         playerId,
         handle: "Alice",
-        difficulty: "easy",
+        difficulty: "medium",
       });
       // Build a conn whose state resolves to the player we just added.
       const conn = makeConn();

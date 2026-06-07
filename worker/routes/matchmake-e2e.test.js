@@ -66,9 +66,9 @@ describe("matchmaking e2e — POST → router → PublicRaceRoom", () => {
 
   it("released router mints a new roomId on next pick", async () => {
     const stub = env.LobbyRouter.get(env.LobbyRouter.idFromName("medium"));
-    const { roomId: first } = await stub.pick();
+    const { roomId: first } = await stub.pick("medium");
     await stub.release(first);
-    const { roomId: second } = await stub.pick();
+    const { roomId: second } = await stub.pick("medium");
     expect(second).not.toBe(first);
   });
 });
