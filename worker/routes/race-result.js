@@ -11,8 +11,8 @@
 //
 // Contract: see worker/api-contracts.js (frozen).
 
-import { db } from "../db.js";
 import { readUserId } from "../session.js";
+import { insertRaceResult } from "../race-result-store.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
@@ -51,34 +51,23 @@ export async function handleRaceResult(request, env) {
   }
 
   const userId = await readUserId(request, env);
-  const id = crypto.randomUUID();
-  const playedAt = Date.now();
 
+  let id;
   try {
-    await db(env)
-      .prepare(
-        `INSERT INTO race_results (
-           id, user_id, device_id, difficulty, finished, finish_time_ms,
-           problems_total, problems_correct, problems_attempted,
-           avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at
-         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      )
-      .bind(
-        id,
-        userId,
-        body.device_id,
-        body.difficulty,
-        body.finished ? 1 : 0,
-        body.finish_time_ms,
-        body.problems_total,
-        body.problems_correct,
-        body.problems_attempted,
-        body.avg_time_per_problem_ms,
-        body.accuracy_pct,
-        body.longest_streak,
-        playedAt
-      )
-      .run();
+    ({ id } = await insertRaceResult(env, {
+      user_id: userId,
+      device_id: body.device_id,
+      difficulty: body.difficulty,
+      finished: body.finished,
+      finish_time_ms: body.finish_time_ms,
+      problems_total: body.problems_total,
+      problems_correct: body.problems_correct,
+      problems_attempted: body.problems_attempted,
+      avg_time_per_problem_ms: body.avg_time_per_problem_ms,
+      accuracy_pct: body.accuracy_pct,
+      longest_streak: body.longest_streak,
+      room_id: null,
+    }));
   } catch (err) {
     return Response.json(
       { error: "db_error", detail: String(err) },

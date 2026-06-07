@@ -15,17 +15,9 @@ import { mountHeader } from './src/header.js';
 import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
 import { postRaceResult } from './src/stats-api.js';
+import { getOrCreateDeviceId } from './src/identity.js';
 
 // ---- Identity helpers --------------------------------------------------
-
-function getOrCreateDeviceId() {
-  let id = localStorage.getItem('deviceId');
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem('deviceId', id);
-  }
-  return id;
-}
 
 function getOrCreateAnonHandle() {
   let h = localStorage.getItem('anonHandle');
