@@ -203,6 +203,18 @@ export class PublicRaceRoom extends RaceRoom {
 
     // Fire-and-forget — DB error must not block the WS broadcast.
     this.persistResults().catch((e) => console.error('persistResults failed', e));
+
+    // Strip bots from state.players so the human-count gates in onAlarm
+    // (idle cleanup, 24h max-age) can actually fire once humans leave.
+    // Without this, bots remain in players forever and the room's DO storage
+    // never gets reclaimed (bug_004).
+    this.state.players = this.state.players.filter((p) => !p.isBot);
+
+    // If no humans remain at finish time (rare: everyone DNF'd via disconnect),
+    // schedule cleanup now. The base cleanup gates only fire from onAlarm.
+    if (this.state.players.length === 0) {
+      this.state.idleCleanupAt = Date.now() + IDLE_CLEANUP_MS;
+    }
   }
 
   async persistResults() {
@@ -267,6 +279,12 @@ export class PublicRaceRoom extends RaceRoom {
       this.state.autoStartDeadline = null;
       this.state.gatherTriggered = false;
       if (this.state.difficulty) await this.releaseLobby();
+    }
+
+    // Schedule idle cleanup whenever the room is empty of humans, regardless
+    // of state — finishRace strips bots, so .length is a real headcount.
+    // The base RaceRoom only sets this in lobby; we extend to finished/racing.
+    if (this.state.players.length === 0) {
       this.state.idleCleanupAt = Date.now() + IDLE_CLEANUP_MS;
     }
 

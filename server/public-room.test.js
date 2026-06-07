@@ -395,8 +395,11 @@ describe("PublicRaceRoom auto-start sequence", () => {
 });
 
 describe("PublicRaceRoom.finishRace — bot finalization", () => {
-  it("finalizes bot scores from botTimelines at race end", async () => {
+  it("finalizes bot scores from botTimelines at race end (captured in broadcast)", async () => {
     await withRoom("test-finish-room-" + crypto.randomUUID(), async (room) => {
+      // Capture the 'finish' broadcast so we can inspect bot rankings.
+      const broadcasts = [];
+      room.broadcast = (s) => broadcasts.push(JSON.parse(s));
       room.state.raceLength = 10;
       room.state.raceStartedAt = 1000;
       room.state.state = "racing";
@@ -409,10 +412,12 @@ describe("PublicRaceRoom.finishRace — bot finalization", () => {
         { id: "b-1", isBot: true, score: 0, dropped: false, finishMs: null, dnf: false },
         { id: "b-2", isBot: true, score: 0, dropped: false, finishMs: null, dnf: false },
       ];
-      room.finishRace(1100); // explicit raceEndOffset for determinism
+      room.finishRace(1100);
 
-      const b1 = room.state.players.find((p) => p.id === "b-1");
-      const b2 = room.state.players.find((p) => p.id === "b-2");
+      const finish = broadcasts.find((m) => m.type === "finish");
+      expect(finish).toBeTruthy();
+      const b1 = finish.rankings.find((p) => p.id === "b-1");
+      const b2 = finish.rankings.find((p) => p.id === "b-2");
       expect(b1.score).toBe(10);
       expect(b1.finishMs).toBe(1000);
       expect(b1.dnf).toBe(false);
@@ -420,6 +425,41 @@ describe("PublicRaceRoom.finishRace — bot finalization", () => {
       expect(b2.finishMs).toBeNull();
       expect(b2.dnf).toBe(true);
       expect(room.state.state).toBe("finished");
+    });
+  });
+
+  it("strips bots from state.players after finish so cleanup can fire", async () => {
+    await withRoom("test-finish-strip-" + crypto.randomUUID(), async (room) => {
+      room.state.raceLength = 10;
+      room.state.raceStartedAt = 1000;
+      room.state.state = "racing";
+      room.state.botTimelines = [[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]];
+      room.state.players = [
+        { id: "h-1", isBot: false, score: 10, dropped: false, finishMs: 1100, dnf: false },
+        { id: "b-1", isBot: true, score: 0, dropped: false, finishMs: null, dnf: false },
+      ];
+      room.finishRace(1100);
+      expect(room.state.players.length).toBe(1);
+      expect(room.state.players[0].isBot).toBeFalsy();
+    });
+  });
+
+  it("removing the last human in a finished room schedules idle cleanup", async () => {
+    await withRoom("test-finish-cleanup-" + crypto.randomUUID(), async (room) => {
+      room.state.raceLength = 10;
+      room.state.raceStartedAt = 1000;
+      room.state.state = "racing";
+      room.state.botTimelines = [];
+      const pid = crypto.randomUUID();
+      room.state.players = [
+        { id: pid, isBot: false, score: 10, dropped: false, finishMs: 1100, dnf: false },
+      ];
+      room.finishRace(1100);
+      expect(room.state.state).toBe("finished");
+      // Human leaves after the race.
+      await room.removePlayer(pid);
+      expect(room.state.players.length).toBe(0);
+      expect(room.state.idleCleanupAt).toBeGreaterThan(Date.now());
     });
   });
 });
