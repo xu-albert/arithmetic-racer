@@ -156,6 +156,31 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
     });
   });
 
+  it("seventh hello is rejected with ROOM_FULL", async () => {
+    await withRoom("test-seventh-" + crypto.randomUUID(), async (room) => {
+      for (let i = 1; i <= 6; i++) {
+        await room.handleHello(makeConn(), {
+          type: "hello",
+          playerId: crypto.randomUUID(),
+          handle: `H${i}`,
+          difficulty: "medium",
+        });
+      }
+      expect(room.state.players.length).toBe(6);
+      const conn7 = makeConn();
+      await room.handleHello(conn7, {
+        type: "hello",
+        playerId: crypto.randomUUID(),
+        handle: "H7",
+        difficulty: "medium",
+      });
+      const err = conn7.sent.find((m) => m.type === "error");
+      expect(err).toBeTruthy();
+      expect(err.code).toBe("ROOM_FULL");
+      expect(room.state.players.length).toBe(6);
+    });
+  });
+
   it("sixth arrival sets deadline to now (immediate fire) and releases router", async () => {
     await withRoom("test-sixth-" + crypto.randomUUID(), async (room) => {
       // Lock difficulty up front so all hellos are consistent.

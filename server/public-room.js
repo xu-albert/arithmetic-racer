@@ -41,6 +41,21 @@ export class PublicRaceRoom extends RaceRoom {
         `This room is locked to difficulty=${roomDifficulty}`);
     }
 
+    // Hard cap before delegating — the base handler will happily push a 7th
+    // player if state.state is still 'lobby'. The 6-player release fires on
+    // strict-equality at 6, so a concurrent 7th hello inside the same alarm
+    // tick can otherwise slip past releaseLobby().
+    // Reconnects (same playerId) are handled by the base via a separate
+    // branch that returns without re-pushing, so we only block new joiners.
+    const existing = this.state.players.find((p) => p.id === msg?.playerId);
+    if (!existing && this.state.state === 'lobby') {
+      const humans = this.state.players.filter((p) => !p.isBot).length;
+      if (humans >= MAX_PLAYERS) {
+        return this.sendError(connection, 'ROOM_FULL',
+          `This room is full (${MAX_PLAYERS}/${MAX_PLAYERS}); requeue for a fresh room.`);
+      }
+    }
+
     // Delegate to base: handle generation, player insertion, broadcast, persist.
     await super.handleHello(connection, msg);
 
