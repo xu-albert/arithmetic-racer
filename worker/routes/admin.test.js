@@ -97,3 +97,101 @@ describe("GET /admin/ happy path", () => {
     expect(body).toContain("admin");
   });
 });
+
+async function seedUser(id, username, createdAtMs) {
+  await env.DB.prepare(
+    `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", username)
+     VALUES (?,?,?,?,?,?,?)`
+  ).bind(id, username, `${username}@example.com`, 0, createdAtMs, createdAtMs, username).run();
+}
+
+async function seedRace(overrides = {}) {
+  const r = {
+    id: crypto.randomUUID(),
+    user_id: null,
+    device_id: "dev-1",
+    difficulty: "medium",
+    finished: 1,
+    finish_time_ms: 48000,
+    problems_total: 20,
+    problems_correct: 18,
+    problems_attempted: 20,
+    avg_time_per_problem_ms: 2400,
+    accuracy_pct: 90,
+    longest_streak: 7,
+    played_at: Date.now(),
+    ...overrides,
+  };
+  await env.DB.prepare(
+    `INSERT INTO race_results (id, user_id, device_id, difficulty, finished, finish_time_ms,
+       problems_total, problems_correct, problems_attempted, avg_time_per_problem_ms,
+       accuracy_pct, longest_streak, played_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+  )
+    .bind(r.id, r.user_id, r.device_id, r.difficulty, r.finished, r.finish_time_ms,
+          r.problems_total, r.problems_correct, r.problems_attempted, r.avg_time_per_problem_ms,
+          r.accuracy_pct, r.longest_streak, r.played_at)
+    .run();
+  return r;
+}
+
+describe("summary tiles", () => {
+  it("shows zeros on empty DB", async () => {
+    const { handleAdminIndex } = await import("./admin.js");
+    const req = new Request("http://x/admin/?token=expected-secret");
+    const res = await handleAdminIndex(req, { ...env, ADMIN_TOKEN: "expected-secret" });
+    const body = await res.text();
+    expect(body).toContain("races finished");
+    expect(body).toContain("unique players");
+    expect(body).toContain("signups");
+  });
+
+  it("counts finished races in today/7d/all-time windows", async () => {
+    const now = Date.now();
+    const oneHourAgo = now - 60 * 60 * 1000;
+    const threeDaysAgo = now - 3 * 24 * 60 * 60 * 1000;
+    const twentyDaysAgo = now - 20 * 24 * 60 * 60 * 1000;
+
+    await seedRace({ played_at: oneHourAgo,    finished: 1 });
+    await seedRace({ played_at: threeDaysAgo,  finished: 1 });
+    await seedRace({ played_at: twentyDaysAgo, finished: 1 });
+    await seedRace({ played_at: oneHourAgo,    finished: 0 });
+
+    const { handleAdminIndex } = await import("./admin.js");
+    const req = new Request("http://x/admin/?token=expected-secret");
+    const res = await handleAdminIndex(req, { ...env, ADMIN_TOKEN: "expected-secret" });
+    const body = await res.text();
+
+    expect(body).toMatch(/data-window="today"[^>]*>\s*<[^>]*>1</);
+    expect(body).toMatch(/data-window="7d"[^>]*>\s*<[^>]*>2</);
+    expect(body).toMatch(/data-window="all"[^>]*>\s*<[^>]*>3</);
+  });
+
+  it("counts unique players by user_id or device_id", async () => {
+    await seedUser("user-a", "alice", Date.now());
+    await seedRace({ user_id: "user-a", device_id: "dev-1" });
+    await seedRace({ user_id: "user-a", device_id: "dev-9" });
+    await seedRace({ user_id: null,     device_id: "dev-2" });
+    await seedRace({ user_id: null,     device_id: "dev-2" });
+
+    const { handleAdminIndex } = await import("./admin.js");
+    const req = new Request("http://x/admin/?token=expected-secret");
+    const res = await handleAdminIndex(req, { ...env, ADMIN_TOKEN: "expected-secret" });
+    const body = await res.text();
+    expect(body).toMatch(/unique-players[^>]*data-window="all"[^>]*>\s*<[^>]*>2</);
+  });
+
+  it("counts signups in time windows", async () => {
+    const now = Date.now();
+    await seedUser("u1", "alice", now - 60 * 60 * 1000);
+    await seedUser("u2", "bob",   now - 3 * 24 * 60 * 60 * 1000);
+    await seedUser("u3", "carol", now - 20 * 24 * 60 * 60 * 1000);
+
+    const { handleAdminIndex } = await import("./admin.js");
+    const req = new Request("http://x/admin/?token=expected-secret");
+    const res = await handleAdminIndex(req, { ...env, ADMIN_TOKEN: "expected-secret" });
+    const body = await res.text();
+    expect(body).toMatch(/signups[^>]*data-window="today"[^>]*>\s*<[^>]*>1</);
+    expect(body).toMatch(/signups[^>]*data-window="7d"[^>]*>\s*<[^>]*>2</);
+    expect(body).toMatch(/signups[^>]*data-window="all"[^>]*>\s*<[^>]*>3</);
+  });
+});
