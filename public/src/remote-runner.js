@@ -123,6 +123,21 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           lastCountdownN = msg.state.countdownN;
           emit('countdown', { n: msg.state.countdownN });
         }
+        // Reconnect bootstrap: if we joined mid-race and don't yet have bot
+        // timelines locally, take them from the state snapshot and start the
+        // bot tick loop. Without this, a brief disconnect mid-race leaves
+        // all bots frozen at score 0 because the original 'bot-timelines'
+        // message was only sent once at countdown→racing transition.
+        if (
+          msg.state.state === 'racing'
+          && msg.state.botTimelines?.length
+          && !botTimelines
+        ) {
+          botTimelines = msg.state.botTimelines;
+          if (msg.state.raceStartedAt) raceStartedAtMs = msg.state.raceStartedAt;
+          if (botRafId) cancelAnimationFrame(botRafId);
+          botRafId = requestAnimationFrame(tickBots);
+        }
         break;
       }
       case 'countdown': {
