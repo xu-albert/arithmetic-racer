@@ -63,7 +63,6 @@ function isValidHandle(s) {
   return true;
 }
 
-// Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
 function publicPlayer(p) {
   // Strip server-only bookkeeping (attempts/streak counters, identity)
   // before broadcasting to WS clients. Clients don't render these.
@@ -71,6 +70,7 @@ function publicPlayer(p) {
   return rest;
 }
 
+// Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
 function rankPlayers(players) {
   const tier = (r) => (r.dropped || r.dnf ? 3 : r.finishMs != null ? 1 : 2);
   return [...players].sort((a, b) => {
