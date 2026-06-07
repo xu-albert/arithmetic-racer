@@ -46,18 +46,12 @@ export async function handleMatchmakeJoin(request, env) {
     console.warn("rate-limit KV op failed; proceeding", e);
   }
 
-  // Queue-lock
-  const lockKey = `queue-lock:${device_id}`;
-  try {
-    const cached = await env.MATCHMAKING_LIMITS.get(lockKey);
-    if (cached) {
-      return Response.json({ roomId: cached, mode: "public", difficulty });
-    }
-  } catch (e) {
-    console.warn("queue-lock get failed; proceeding", e);
-  }
+  // Queue-lock — keyed by (device, difficulty) so picking a different
+  // difficulty after cancelling doesn't route back to the old room and
+  // trigger BAD_DIFFICULTY at the WS layer (bug_001).
+  const lockKey = `queue-lock:${device_id}:${difficulty}`;
 
-  // Router pick
+  // Router pick — call first so we have the authoritative current room.
   let roomId;
   try {
     const stub = env.LobbyRouter.get(env.LobbyRouter.idFromName(difficulty));
@@ -65,6 +59,18 @@ export async function handleMatchmakeJoin(request, env) {
     roomId = result.roomId;
   } catch (e) {
     return Response.json({ error: "router_unavailable" }, { status: 503, headers: { "retry-after": "1" } });
+  }
+
+  // Revalidate any cached lock against the router's current pick. If the
+  // cached roomId differs, it's stale (room auto-started, filled to 6,
+  // or emptied) and the router already gave us the fresh roomId — use it.
+  try {
+    const cached = await env.MATCHMAKING_LIMITS.get(lockKey);
+    if (cached && cached === roomId) {
+      return Response.json({ roomId: cached, mode: "public", difficulty });
+    }
+  } catch (e) {
+    console.warn("queue-lock get failed; proceeding", e);
   }
 
   // Set queue-lock (best-effort)

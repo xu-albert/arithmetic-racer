@@ -43,6 +43,16 @@ describe("POST /api/matchmake/join", () => {
     expect(body2.roomId).toBe(body1.roomId);
   });
 
+  it("switching difficulty between calls returns a fresh prefixed roomId, not the cached one", async () => {
+    const res1 = await handleMatchmakeJoin(makeReq({ difficulty: "easy", device_id: "dev-c" }), env);
+    const body1 = await res1.json();
+    expect(body1.roomId).toMatch(/^e-/);
+    const res2 = await handleMatchmakeJoin(makeReq({ difficulty: "medium", device_id: "dev-c" }), env);
+    const body2 = await res2.json();
+    expect(body2.roomId).toMatch(/^m-/);
+    expect(body2.roomId).not.toBe(body1.roomId);
+  });
+
   it("returns 429 with Retry-After when rate limit exceeded", async () => {
     const dev = "dev-rl-exceed";
     // Seed the rate-limit counter at the cap so the next call trips the limit.
