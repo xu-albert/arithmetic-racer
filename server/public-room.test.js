@@ -156,6 +156,29 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
     });
   });
 
+  it("reconnect hello does NOT reset the lone-timer deadline", async () => {
+    await withRoom("test-reconnect-" + crypto.randomUUID(), async (room) => {
+      const playerId = crypto.randomUUID();
+      await room.handleHello(makeConn(), {
+        type: "hello",
+        playerId,
+        handle: "A",
+        difficulty: "medium",
+      });
+      const firstDeadline = room.state.autoStartDeadline;
+      expect(firstDeadline).toBeGreaterThan(0);
+      // Simulate a brief network blip — player reconnects with the same id.
+      await new Promise((r) => setTimeout(r, 10));
+      await room.handleHello(makeConn(), {
+        type: "hello",
+        playerId,
+        handle: "A",
+        difficulty: "medium",
+      });
+      expect(room.state.autoStartDeadline).toBe(firstDeadline);
+    });
+  });
+
   it("seventh hello is rejected with ROOM_FULL", async () => {
     await withRoom("test-seventh-" + crypto.randomUUID(), async (room) => {
       for (let i = 1; i <= 6; i++) {

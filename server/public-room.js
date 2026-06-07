@@ -45,10 +45,10 @@ export class PublicRaceRoom extends RaceRoom {
     // player if state.state is still 'lobby'. The 6-player release fires on
     // strict-equality at 6, so a concurrent 7th hello inside the same alarm
     // tick can otherwise slip past releaseLobby().
-    // Reconnects (same playerId) are handled by the base via a separate
-    // branch that returns without re-pushing, so we only block new joiners.
-    const existing = this.state.players.find((p) => p.id === msg?.playerId);
-    if (!existing && this.state.state === 'lobby') {
+    // Track whether this is a reconnect (existing playerId) — reconnects
+    // must not reset the auto-start timer (see bug_002).
+    const isReconnect = !!this.state.players.find((p) => p.id === msg?.playerId);
+    if (!isReconnect && this.state.state === 'lobby') {
       const humans = this.state.players.filter((p) => !p.isBot).length;
       if (humans >= MAX_PLAYERS) {
         return this.sendError(connection, 'ROOM_FULL',
@@ -71,14 +71,19 @@ export class PublicRaceRoom extends RaceRoom {
 
     if (this.state.state !== 'lobby') return;
 
-    const { deadline, gatherTriggered } = computeAutoStartDeadline({
-      playerCount: this.state.players.length,
-      gatherTriggered: this.state.gatherTriggered,
-      now: Date.now(),
-    });
-    if (deadline != null) {
-      this.state.autoStartDeadline = deadline;
-      this.state.gatherTriggered = gatherTriggered;
+    // Reconnects must not reset the auto-start timer — otherwise a flaky
+    // network or a malicious client can extend the pre-race wait indefinitely
+    // (bug_002). Only new joiners drive the timer rule.
+    if (!isReconnect) {
+      const { deadline, gatherTriggered } = computeAutoStartDeadline({
+        playerCount: this.state.players.length,
+        gatherTriggered: this.state.gatherTriggered,
+        now: Date.now(),
+      });
+      if (deadline != null) {
+        this.state.autoStartDeadline = deadline;
+        this.state.gatherTriggered = gatherTriggered;
+      }
     }
 
     if (this.state.players.length === MAX_PLAYERS) {
