@@ -213,6 +213,65 @@ function renderSparkline(buckets) {
     </svg>`);
 }
 
+export async function handleAdminUser(request, env) {
+  const url = new URL(request.url);
+  const gateResponse = checkAdminToken(url, env);
+  if (gateResponse) return gateResponse;
+
+  const segments = url.pathname.split("/").filter(Boolean);
+  const userId = segments[2];
+  if (!userId) return new Response("Not found", { status: 404 });
+
+  const user = await env.DB
+    .prepare(`SELECT id, name, email, username, "createdAt" AS createdAt FROM "user" WHERE id = ?1`)
+    .bind(userId).first();
+  if (!user) return new Response("Not found", { status: 404 });
+
+  const now = Date.now();
+  const before = Number(url.searchParams.get("before")) || now;
+  const token = url.searchParams.get("token") ?? "";
+  const cursorBase = `/admin/users/${encodeURIComponent(userId)}?token=${encodeURIComponent(token)}`;
+  const rows = await loadRecentRaces(env, { before, userId });
+
+  const handle = user.username ?? user.name ?? user.id;
+  const signupIso = user.createdAt ? new Date(Number(user.createdAt)).toISOString() : "—";
+
+  const body = html`
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${handle} · Arithmetic Racer admin</title>
+        <style>
+          body { font: 14px/1.4 system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+          h1 { font-size: 1.4rem; margin-bottom: 1rem; }
+          .user-card { background: #f5f5f7; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
+          .user-card p { margin: 0.2rem 0; }
+          table.races { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+          table.races th, table.races td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
+          table.races th { color: #888; font-weight: 500; }
+          table.races .dnf td { color: #b00; text-decoration: line-through; }
+          .pagination { margin-top: 0.5rem; }
+          .empty { color: #888; font-style: italic; }
+          .back { color: #666; font-size: 0.9rem; }
+        </style>
+      </head>
+      <body>
+        <p class="back"><a href="${escapeHtml(`/admin/?token=${encodeURIComponent(token)}`)}">← back to admin</a></p>
+        <h1>${handle}</h1>
+        <div class="user-card">
+          <p><strong>email</strong> ${user.email ?? "—"}</p>
+          <p><strong>signed up</strong> <span title="${signupIso}">${signupIso}</span></p>
+          <p><strong>id</strong> <code>${user.id}</code></p>
+        </div>
+        <h2>Recent races</h2>
+        ${renderRacesTable(rows, now, token, cursorBase)}
+      </body>
+    </html>
+  `;
+  return new Response(body, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+
 export async function handleAdminIndex(request, env) {
   const url = new URL(request.url);
   const gateResponse = checkAdminToken(url, env);

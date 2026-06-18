@@ -277,3 +277,41 @@ describe("30-day sparkline", () => {
     expect(points.length).toBe(30);
   });
 });
+
+describe("per-user drill-down", () => {
+  it("404s with no token", async () => {
+    const { handleAdminUser } = await import("./admin.js");
+    const res = await handleAdminUser(
+      new Request("http://x/admin/users/u-alice"),
+      { ...env, ADMIN_TOKEN: "expected-secret" }
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when user does not exist (token valid)", async () => {
+    const { handleAdminUser } = await import("./admin.js");
+    const res = await handleAdminUser(
+      new Request("http://x/admin/users/missing?token=expected-secret"),
+      { ...env, ADMIN_TOKEN: "expected-secret" }
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns user header + only that user's races", async () => {
+    const now = Date.now();
+    await seedUser("u-alice", "alice", now - 86400000);
+    await seedUser("u-bob",   "bob",   now);
+    await seedRace({ user_id: "u-alice", played_at: now - 500 });
+    await seedRace({ user_id: "u-bob",   played_at: now - 100 });
+
+    const { handleAdminUser } = await import("./admin.js");
+    const res = await handleAdminUser(
+      new Request("http://x/admin/users/u-alice?token=expected-secret"),
+      { ...env, ADMIN_TOKEN: "expected-secret" }
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("alice");
+    expect(body).not.toContain("bob");
+  });
+});
