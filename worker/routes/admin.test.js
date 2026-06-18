@@ -102,7 +102,7 @@ async function seedUser(id, username, createdAtMs) {
   await env.DB.prepare(
     `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", username)
      VALUES (?,?,?,?,?,?,?)`
-  ).bind(id, username, `${username}@example.com`, 0, createdAtMs, createdAtMs, username).run();
+  ).bind(id, username, `${username}@example.com`, 0, new Date(createdAtMs).toISOString(), new Date(createdAtMs).toISOString(), username).run();
 }
 
 async function seedRace(overrides = {}) {

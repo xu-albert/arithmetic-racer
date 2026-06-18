@@ -69,7 +69,7 @@ async function loadSummary(env, now) {
   const cUnique = (since) =>
     env.DB.prepare(`SELECT COUNT(DISTINCT COALESCE(user_id, device_id)) AS n FROM race_results WHERE played_at >= ?1`).bind(since).first("n");
   const cSignups = (since) =>
-    env.DB.prepare(`SELECT COUNT(*) AS n FROM "user" WHERE "createdAt" >= ?1`).bind(since).first("n");
+    env.DB.prepare(`SELECT COUNT(*) AS n FROM "user" WHERE "createdAt" >= ?1`).bind(new Date(since).toISOString()).first("n");
 
   const [
     finishedToday, finished7d, finishedAll,
@@ -246,7 +246,7 @@ export async function handleAdminUser(request, env) {
   const rows = await loadRecentRaces(env, { before, userId });
 
   const handle = user.username ?? user.name ?? user.id;
-  const signupIso = user.createdAt ? new Date(Number(user.createdAt)).toISOString() : "—";
+  const signupIso = user.createdAt ? new Date(user.createdAt).toISOString() : "—";
 
   const body = html`
     <!doctype html>
