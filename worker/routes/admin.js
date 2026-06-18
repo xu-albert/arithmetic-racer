@@ -110,6 +110,18 @@ function formatSec(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+const BASE_CSS = `
+  body { font: 14px/1.4 system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.4rem; margin-bottom: 1rem; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+  table.races { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+  table.races th, table.races td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
+  table.races th { color: #888; font-weight: 500; }
+  table.races .dnf td { color: #b00; text-decoration: line-through; }
+  .pagination { margin-top: 0.5rem; }
+  .empty { color: #888; font-style: italic; }
+`;
+
 const RECENT_LIMIT = 100;
 
 async function loadRecentRaces(env, { before = Date.now(), userId = null } = {}) {
@@ -243,21 +255,14 @@ export async function handleAdminUser(request, env) {
         <meta charset="utf-8" />
         <title>${handle} · Arithmetic Racer admin</title>
         <style>
-          body { font: 14px/1.4 system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-          h1 { font-size: 1.4rem; margin-bottom: 1rem; }
+          ${raw(BASE_CSS)}
           .user-card { background: #f5f5f7; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
           .user-card p { margin: 0.2rem 0; }
-          table.races { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
-          table.races th, table.races td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
-          table.races th { color: #888; font-weight: 500; }
-          table.races .dnf td { color: #b00; text-decoration: line-through; }
-          .pagination { margin-top: 0.5rem; }
-          .empty { color: #888; font-style: italic; }
           .back { color: #666; font-size: 0.9rem; }
         </style>
       </head>
       <body>
-        <p class="back"><a href="${escapeHtml(`/admin/?token=${encodeURIComponent(token)}`)}">← back to admin</a></p>
+        <p class="back"><a href="/admin/?token=${encodeURIComponent(token)}">← back to admin</a></p>
         <h1>${handle}</h1>
         <div class="user-card">
           <p><strong>email</strong> ${user.email ?? "—"}</p>
@@ -292,21 +297,13 @@ export async function handleAdminIndex(request, env) {
         <meta charset="utf-8" />
         <title>Arithmetic Racer · admin</title>
         <style>
-          body { font: 14px/1.4 system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #222; }
-          h1 { font-size: 1.4rem; margin-bottom: 1rem; }
-          h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+          ${raw(BASE_CSS)}
           table.tiles { border-collapse: collapse; margin-bottom: 1rem; }
           table.tiles th { text-align: left; padding: 0.4rem 1rem 0.4rem 0; font-weight: 500; color: #666; }
           table.tiles td { padding: 0.4rem 1rem; background: #f5f5f7; border-radius: 6px; min-width: 4rem; text-align: right; }
           table.tiles .n { font-variant-numeric: tabular-nums; font-weight: 600; }
           table.tiles thead th { color: #888; font-weight: 500; }
           .avgs { color: #555; }
-          table.races { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
-          table.races th, table.races td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
-          table.races th { color: #888; font-weight: 500; }
-          table.races .dnf td { color: #b00; text-decoration: line-through; }
-          .pagination { margin-top: 0.5rem; }
-          .empty { color: #888; font-style: italic; }
         </style>
       </head>
       <body>
