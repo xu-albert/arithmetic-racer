@@ -250,3 +250,30 @@ describe("summary tiles", () => {
     expect(body).toMatch(/signups[^>]*data-window="all"[^>]*>\s*<[^>]*>3</);
   });
 });
+
+describe("30-day sparkline", () => {
+  it("renders a polyline element even with empty data", async () => {
+    const { handleAdminIndex } = await import("./admin.js");
+    const res = await handleAdminIndex(
+      new Request("http://x/admin/?token=expected-secret"),
+      { ...env, ADMIN_TOKEN: "expected-secret" }
+    );
+    const body = await res.text();
+    expect(body).toMatch(/<svg[^>]*class="sparkline"/);
+    expect(body).toMatch(/<polyline/);
+  });
+
+  it("includes a non-zero point when a recent race exists", async () => {
+    await seedRace({ played_at: Date.now() - 60 * 1000 });
+    const { handleAdminIndex } = await import("./admin.js");
+    const res = await handleAdminIndex(
+      new Request("http://x/admin/?token=expected-secret"),
+      { ...env, ADMIN_TOKEN: "expected-secret" }
+    );
+    const body = await res.text();
+    const match = body.match(/<polyline[^>]*points="([^"]+)"/);
+    expect(match).not.toBeNull();
+    const points = match[1].split(/\s+/).filter(Boolean);
+    expect(points.length).toBe(30);
+  });
+});

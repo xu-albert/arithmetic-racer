@@ -181,6 +181,38 @@ function renderRacesTable(rows, now, token, cursorBase) {
   `);
 }
 
+async function load30DayBuckets(env, now) {
+  const since = now - 30 * 24 * 60 * 60 * 1000;
+  const { results } = await env.DB
+    .prepare(`SELECT (played_at / 86400000) AS day_bucket, COUNT(*) AS n
+              FROM race_results WHERE played_at >= ?1
+              GROUP BY day_bucket ORDER BY day_bucket`)
+    .bind(since).all();
+  const seen = new Map();
+  for (const r of results ?? []) seen.set(Number(r.day_bucket), Number(r.n));
+
+  const todayBucket = Math.floor(now / 86400000);
+  const buckets = [];
+  for (let i = 29; i >= 0; i--) {
+    const b = todayBucket - i;
+    buckets.push(seen.get(b) ?? 0);
+  }
+  return buckets;
+}
+
+function renderSparkline(buckets) {
+  const W = 200, H = 40;
+  const max = Math.max(1, ...buckets);
+  const step = W / (buckets.length - 1 || 1);
+  const points = buckets
+    .map((n, i) => `${(i * step).toFixed(1)},${(H - (n / max) * H).toFixed(1)}`)
+    .join(" ");
+  return raw(`<svg class="sparkline" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
+    aria-label="races per day, last 30 days">
+      <polyline fill="none" stroke="#444" stroke-width="1.5" points="${points}" />
+    </svg>`);
+}
+
 export async function handleAdminIndex(request, env) {
   const url = new URL(request.url);
   const gateResponse = checkAdminToken(url, env);
@@ -188,6 +220,7 @@ export async function handleAdminIndex(request, env) {
 
   const now = Date.now();
   const summary = await loadSummary(env, now);
+  const buckets = await load30DayBuckets(env, now);
   const before = Number(url.searchParams.get("before")) || Date.now();
   const token = url.searchParams.get("token") ?? "";
   const cursorBase = `/admin/?token=${encodeURIComponent(token)}`;
@@ -235,6 +268,7 @@ export async function handleAdminIndex(request, env) {
           med ${formatSec(summary.avgs.medium)} ·
           hard ${formatSec(summary.avgs.hard)}
         </p>
+        <p>Races per day (last 30) ${renderSparkline(buckets)}</p>
         <h2>Recent races</h2>
         ${renderRacesTable(rows, now, token, cursorBase)}
       </body>
