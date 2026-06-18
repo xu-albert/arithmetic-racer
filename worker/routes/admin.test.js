@@ -134,6 +134,61 @@ async function seedRace(overrides = {}) {
   return r;
 }
 
+describe("recent races table", () => {
+  it("renders rows newest-first with username when user_id set", async () => {
+    const now = Date.now();
+    await seedUser("u-alice", "alice", now);
+    await seedRace({ user_id: "u-alice", played_at: now - 1000, finish_time_ms: 48200, accuracy_pct: 96 });
+    await seedRace({ user_id: null, device_id: "dev-xyz1234567", played_at: now - 2000 });
+
+    const { handleAdminIndex } = await import("./admin.js");
+    const req = new Request("http://x/admin/?token=expected-secret");
+    const res = await handleAdminIndex(req, { ...env, ADMIN_TOKEN: "expected-secret" });
+    const body = await res.text();
+
+    expect(body).toContain("alice");
+    expect(body).toContain("dev:dev-xy");
+    expect(body.indexOf("alice")).toBeLessThan(body.indexOf("dev-xy"));
+  });
+
+  it("marks DNF rows with a 'dnf' class", async () => {
+    await seedRace({ finished: 0, finish_time_ms: null });
+    const { handleAdminIndex } = await import("./admin.js");
+    const res = await handleAdminIndex(
+      new Request("http://x/admin/?token=expected-secret"),
+      { ...env, ADMIN_TOKEN: "expected-secret" }
+    );
+    const body = await res.text();
+    expect(body).toMatch(/class="[^"]*dnf[^"]*"/);
+  });
+
+  it("respects ?before=<played_at> cursor", async () => {
+    const now = Date.now();
+    await seedRace({ device_id: "dev-newer", played_at: now - 1000 });
+    await seedRace({ device_id: "dev-older", played_at: now - 9000 });
+    const { handleAdminIndex } = await import("./admin.js");
+    const cursor = now - 5000;
+    const res = await handleAdminIndex(
+      new Request(`http://x/admin/?token=expected-secret&before=${cursor}`),
+      { ...env, ADMIN_TOKEN: "expected-secret" }
+    );
+    const body = await res.text();
+    expect(body).toContain("dev-older");
+    expect(body).not.toContain("dev-newer");
+  });
+
+  it("renders 'Older' link only when result count hits LIMIT", async () => {
+    await seedRace();
+    const { handleAdminIndex } = await import("./admin.js");
+    const res = await handleAdminIndex(
+      new Request("http://x/admin/?token=expected-secret"),
+      { ...env, ADMIN_TOKEN: "expected-secret" }
+    );
+    const body = await res.text();
+    expect(body).not.toMatch(/Older →/);
+  });
+});
+
 describe("summary tiles", () => {
   it("shows zeros on empty DB", async () => {
     const { handleAdminIndex } = await import("./admin.js");

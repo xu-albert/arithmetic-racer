@@ -110,6 +110,77 @@ function formatSec(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+const RECENT_LIMIT = 100;
+
+async function loadRecentRaces(env, { before = Date.now(), userId = null } = {}) {
+  const sql = userId
+    ? `SELECT rr.id, rr.user_id, rr.device_id, rr.difficulty, rr.finished,
+              rr.finish_time_ms, rr.accuracy_pct, rr.played_at, u.username AS username, u.name AS name
+       FROM race_results rr LEFT JOIN "user" u ON u.id = rr.user_id
+       WHERE rr.played_at < ?1 AND rr.user_id = ?2
+       ORDER BY rr.played_at DESC LIMIT ${RECENT_LIMIT}`
+    : `SELECT rr.id, rr.user_id, rr.device_id, rr.difficulty, rr.finished,
+              rr.finish_time_ms, rr.accuracy_pct, rr.played_at, u.username AS username, u.name AS name
+       FROM race_results rr LEFT JOIN "user" u ON u.id = rr.user_id
+       WHERE rr.played_at < ?1
+       ORDER BY rr.played_at DESC LIMIT ${RECENT_LIMIT}`;
+  const stmt = userId ? env.DB.prepare(sql).bind(before, userId) : env.DB.prepare(sql).bind(before);
+  const { results } = await stmt.all();
+  return results ?? [];
+}
+
+function relativeTime(now, then) {
+  const diff = Math.max(0, now - then);
+  const sec = Math.round(diff / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  return `${day}d ago`;
+}
+
+function whoCell(row, token) {
+  if (row.user_id) {
+    const handle = row.username ?? row.name ?? row.user_id;
+    const href = `/admin/users/${encodeURIComponent(row.user_id)}?token=${encodeURIComponent(token)}`;
+    return raw(`<a href="${escapeHtml(href)}">${escapeHtml(handle)}</a>`);
+  }
+  return raw(escapeHtml(`(dev:${(row.device_id ?? "").slice(0, 9)}…)`));
+}
+
+function renderRacesTable(rows, now, token, cursorBase) {
+  if (rows.length === 0) {
+    return raw(`<p class="empty">No races yet.</p>`);
+  }
+  const body = rows.map((r) => {
+    const cls = r.finished ? "race-row" : "race-row dnf";
+    const whenIso = new Date(r.played_at).toISOString();
+    return `<tr class="${cls}">
+      <td><span title="${escapeHtml(whenIso)}">${escapeHtml(relativeTime(now, r.played_at))}</span></td>
+      <td>${whoCell(r, token).__html}</td>
+      <td>${escapeHtml(r.difficulty)}</td>
+      <td>${r.finished ? escapeHtml(formatSec(r.finish_time_ms)) : "—"}</td>
+      <td>${r.finished ? escapeHtml(Math.round(r.accuracy_pct) + "%") : "—"}</td>
+    </tr>`;
+  }).join("");
+
+  const olderLink = rows.length === RECENT_LIMIT
+    ? `<a href="${escapeHtml(cursorBase + "&before=" + rows[rows.length - 1].played_at)}">Older →</a>`
+    : "";
+
+  return raw(`
+    <table class="races">
+      <thead>
+        <tr><th>when</th><th>who</th><th>diff</th><th>time</th><th>acc</th></tr>
+      </thead>
+      <tbody>${body}</tbody>
+    </table>
+    <p class="pagination">${olderLink}</p>
+  `);
+}
+
 export async function handleAdminIndex(request, env) {
   const url = new URL(request.url);
   const gateResponse = checkAdminToken(url, env);
@@ -117,6 +188,10 @@ export async function handleAdminIndex(request, env) {
 
   const now = Date.now();
   const summary = await loadSummary(env, now);
+  const before = Number(url.searchParams.get("before")) || Date.now();
+  const token = url.searchParams.get("token") ?? "";
+  const cursorBase = `/admin/?token=${encodeURIComponent(token)}`;
+  const rows = await loadRecentRaces(env, { before });
 
   const body = html`
     <!doctype html>
@@ -134,6 +209,12 @@ export async function handleAdminIndex(request, env) {
           table.tiles .n { font-variant-numeric: tabular-nums; font-weight: 600; }
           table.tiles thead th { color: #888; font-weight: 500; }
           .avgs { color: #555; }
+          table.races { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+          table.races th, table.races td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
+          table.races th { color: #888; font-weight: 500; }
+          table.races .dnf td { color: #b00; text-decoration: line-through; }
+          .pagination { margin-top: 0.5rem; }
+          .empty { color: #888; font-style: italic; }
         </style>
       </head>
       <body>
@@ -154,6 +235,8 @@ export async function handleAdminIndex(request, env) {
           med ${formatSec(summary.avgs.medium)} ·
           hard ${formatSec(summary.avgs.hard)}
         </p>
+        <h2>Recent races</h2>
+        ${renderRacesTable(rows, now, token, cursorBase)}
       </body>
     </html>
   `;
