@@ -13,7 +13,8 @@ import { pickBotTiers } from '../public/src/bot.js';
 import { computeBotTimelines, scoreBotAt } from '../public/src/bot-timeline.js';
 import { seededRng } from '../public/src/seeded-rng.js';
 import { generateSequence } from '../public/src/game.js';
-import { insertRaceResult } from '../worker/routes/race-result.js';
+import { insertRaceResult } from '../worker/race-result-store.js';
+import { buildRaceResultPayload } from './room-stats.js';
 import { difficultyFromRoomName } from './lobby-router.js';
 
 export class PublicRaceRoom extends RaceRoom {
@@ -218,25 +219,16 @@ export class PublicRaceRoom extends RaceRoom {
   }
 
   async persistResults() {
+    // Public quickmatch uses the same race-result-store as private rooms via
+    // the shared buildRaceResultPayload helper. attempts/longestStreak are
+    // tracked by the base RaceRoom on each answer, so accuracy_pct here is
+    // genuine — no more 0/100 approximation.
     for (const p of this.state.players) {
       if (p.isBot) continue;
       if (!p.deviceId) continue;
-
-      const finished = p.score >= this.state.raceLength && !p.dropped;
-      const body = {
-        device_id: p.deviceId,
-        difficulty: this.state.difficulty,
-        finished,
-        finish_time_ms: finished ? p.finishMs : null,
-        problems_total: this.state.raceLength,
-        problems_correct: p.score,
-        problems_attempted: p.score,
-        avg_time_per_problem_ms: p.score > 0 && finished ? Math.round(p.finishMs / p.score) : 0,
-        accuracy_pct: p.score > 0 ? 100 : 0,
-        longest_streak: p.score,
-      };
+      const payload = buildRaceResultPayload(p, this.state);
       try {
-        await insertRaceResult(this.env, { body, userId: p.userId ?? null, roomId: this.name });
+        await insertRaceResult(this.env, payload);
       } catch (e) {
         console.error('insertRaceResult failed for player', p.id, e);
       }

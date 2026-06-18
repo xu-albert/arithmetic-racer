@@ -19,8 +19,14 @@ export default defineConfig({
     },
   },
   test: {
-    // Worker tests only. The `public/src/*.test.js` files use node:test
-    // and are run separately via `node --test`.
+    // Worker / DO tests use vitest-pool-workers (real bindings via
+    // `cloudflare:test`). Pure-logic test files using `node:test` are run
+    // separately via `node --test` — see the test script in package.json.
+    // server/room-stats.test.js is pure helper math and lives on node:test.
     include: ["worker/**/*.test.js", "server/**/*.test.js"],
+    exclude: [
+      "**/node_modules/**",
+      "server/room-stats.test.js",
+    ],
   },
 });
