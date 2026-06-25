@@ -42,7 +42,7 @@
         {
           "binding": "DB",
           "database_name": "arithmetic-racer-preview",
-          "database_id": "00000000-0000-0000-0000-000000000000"
+          "database_id": "0b3bf14c-e2cb-4f0a-a7f3-40ae344bdcbb"
         }
       ],
       "durable_objects": {
