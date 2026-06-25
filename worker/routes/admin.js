@@ -124,20 +124,30 @@ const BASE_CSS = `
 
 const RECENT_LIMIT = 100;
 
-async function loadRecentRaces(env, { before = Date.now(), userId = null } = {}) {
-  const sql = userId
-    ? `SELECT rr.id, rr.user_id, rr.device_id, rr.difficulty, rr.finished,
+async function loadRecentRaces(env, { before = Date.now(), beforeId = null, userId = null } = {}) {
+  // Compound (played_at, id) cursor. Several race_results rows can share a
+  // played_at millisecond (e.g. one multiplayer race persists every player in
+  // the same tick); a strict `played_at < cursor` would drop the rows that
+  // share the boundary timestamp. The id DESC tiebreak keeps them reachable.
+  const where = [];
+  const binds = [];
+  if (beforeId == null) {
+    where.push("rr.played_at < ?");
+    binds.push(before);
+  } else {
+    where.push("(rr.played_at < ? OR (rr.played_at = ? AND rr.id < ?))");
+    binds.push(before, before, beforeId);
+  }
+  if (userId != null) {
+    where.push("rr.user_id = ?");
+    binds.push(userId);
+  }
+  const sql = `SELECT rr.id, rr.user_id, rr.device_id, rr.difficulty, rr.finished,
               rr.finish_time_ms, rr.accuracy_pct, rr.played_at, u.username AS username, u.name AS name
        FROM race_results rr LEFT JOIN "user" u ON u.id = rr.user_id
-       WHERE rr.played_at < ?1 AND rr.user_id = ?2
-       ORDER BY rr.played_at DESC LIMIT ${RECENT_LIMIT}`
-    : `SELECT rr.id, rr.user_id, rr.device_id, rr.difficulty, rr.finished,
-              rr.finish_time_ms, rr.accuracy_pct, rr.played_at, u.username AS username, u.name AS name
-       FROM race_results rr LEFT JOIN "user" u ON u.id = rr.user_id
-       WHERE rr.played_at < ?1
-       ORDER BY rr.played_at DESC LIMIT ${RECENT_LIMIT}`;
-  const stmt = userId ? env.DB.prepare(sql).bind(before, userId) : env.DB.prepare(sql).bind(before);
-  const { results } = await stmt.all();
+       WHERE ${where.join(" AND ")}
+       ORDER BY rr.played_at DESC, rr.id DESC LIMIT ${RECENT_LIMIT}`;
+  const { results } = await env.DB.prepare(sql).bind(...binds).all();
   return results ?? [];
 }
 
@@ -178,8 +188,9 @@ function renderRacesTable(rows, now, token, cursorBase) {
     </tr>`;
   }).join("");
 
+  const last = rows[rows.length - 1];
   const olderLink = rows.length === RECENT_LIMIT
-    ? `<a href="${escapeHtml(cursorBase + "&before=" + rows[rows.length - 1].played_at)}">Older →</a>`
+    ? `<a href="${escapeHtml(cursorBase + "&before=" + last.played_at + "&beforeId=" + encodeURIComponent(last.id))}">Older →</a>`
     : "";
 
   return raw(`
@@ -241,9 +252,10 @@ export async function handleAdminUser(request, env) {
 
   const now = Date.now();
   const before = Number(url.searchParams.get("before")) || now;
+  const beforeId = url.searchParams.get("beforeId");
   const token = url.searchParams.get("token") ?? "";
   const cursorBase = `/admin/users/${encodeURIComponent(userId)}?token=${encodeURIComponent(token)}`;
-  const rows = await loadRecentRaces(env, { before, userId });
+  const rows = await loadRecentRaces(env, { before, beforeId, userId });
 
   const handle = user.username ?? user.name ?? user.id;
   const signupIso = user.createdAt ? new Date(user.createdAt).toISOString() : "—";
@@ -286,9 +298,10 @@ export async function handleAdminIndex(request, env) {
   const summary = await loadSummary(env, now);
   const buckets = await load30DayBuckets(env, now);
   const before = Number(url.searchParams.get("before")) || Date.now();
+  const beforeId = url.searchParams.get("beforeId");
   const token = url.searchParams.get("token") ?? "";
   const cursorBase = `/admin/?token=${encodeURIComponent(token)}`;
-  const rows = await loadRecentRaces(env, { before });
+  const rows = await loadRecentRaces(env, { before, beforeId });
 
   const body = html`
     <!doctype html>

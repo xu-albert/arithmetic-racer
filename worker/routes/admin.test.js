@@ -189,6 +189,50 @@ describe("recent races table", () => {
   });
 });
 
+describe("recent races pagination with tied played_at", () => {
+  // Regression: the "Older" cursor must not drop rows that share the boundary
+  // played_at millisecond. A single multiplayer race writes several
+  // race_results rows in the same tick (identical played_at); if such a group
+  // straddles the RECENT_LIMIT boundary, a strict `played_at < cursor` query
+  // makes the overflow rows unreachable. The cursor must tiebreak on id.
+  it("reaches every tied row across the Older link (no rows lost)", async () => {
+    const now = Date.now();
+    const P = now - 99000; // shared boundary timestamp for the 3 tie rows
+    const stmts = [];
+    const mk = (id, device_id, played_at) =>
+      env.DB.prepare(
+        `INSERT INTO race_results (id, user_id, device_id, difficulty, finished, finish_time_ms,
+           problems_total, problems_correct, problems_attempted, avg_time_per_problem_ms,
+           accuracy_pct, longest_streak, played_at) VALUES (?,null,?,?,1,48000,20,18,20,2400,90,7,?)`
+      ).bind(id, device_id, "medium", played_at);
+    // 99 rows with distinct, strictly-newer timestamps...
+    for (let i = 0; i < 99; i++) stmts.push(mk(`d-${String(i).padStart(2, "0")}`, `dev-${i}`, now - i * 1000));
+    // ...then 3 rows all sharing the oldest timestamp P (the tie at the boundary).
+    stmts.push(mk("t-1", "tie-1", P));
+    stmts.push(mk("t-2", "tie-2", P));
+    stmts.push(mk("t-3", "tie-3", P));
+    await env.DB.batch(stmts);
+
+    const { handleAdminIndex } = await import("./admin.js");
+    const auth = { ...env, ADMIN_TOKEN: "expected-secret" };
+
+    const page1 = await (await handleAdminIndex(
+      new Request("http://x/admin/?token=expected-secret"), auth)).text();
+    // Page 1 is full (100 rows) so an Older link must be present.
+    const older = page1.match(/href="([^"]*&(?:amp;)?before=[^"]+)"/);
+    expect(older).not.toBeNull();
+    const olderHref = older[1].replace(/&amp;/g, "&");
+    const page2 = await (await handleAdminIndex(
+      new Request(`http://x${olderHref}`), auth)).text();
+
+    // Every tied row must appear across the two pages — none silently dropped.
+    for (const dev of ["tie-1", "tie-2", "tie-3"]) {
+      const seen = (page1.includes(`dev:${dev}`) ? 1 : 0) + (page2.includes(`dev:${dev}`) ? 1 : 0);
+      expect(seen).toBe(1); // present exactly once: no loss, no duplicate
+    }
+  });
+});
+
 describe("summary tiles", () => {
   it("shows zeros on empty DB", async () => {
     const { handleAdminIndex } = await import("./admin.js");
