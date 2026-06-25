@@ -2,6 +2,7 @@
 // The local player's id is aliased to 'player' so ui.js's `.id === 'player'` checks Just Work.
 
 import { validateAnswer } from './game.js';
+import { scoreBotAt } from './bot-timeline.js';
 
 const PLAYER_ALIAS = 'player';
 
@@ -9,18 +10,19 @@ function aliasId(id, youAre) {
   return id === youAre ? PLAYER_ALIAS : id;
 }
 
-// Until accounts ship, every multiplayer participant is a guest. Append the
+// Until accounts ship, every human multiplayer participant is a guest. Append the
 // marker inline so it shows up on race lanes + podium without modifying ui.js.
-function displayHandle(rawHandle) {
-  return `${rawHandle} (Guest)`;
+// Bots are excluded — they already have synthetic handles.
+function displayHandle(rawHandle, isBot) {
+  return isBot ? rawHandle : `${rawHandle} (Guest)`;
 }
 
 function buildRacers(players, youAre) {
   return players.map((p) => ({
     id: aliasId(p.id, youAre),
-    handle: displayHandle(p.handle),
-    isBot: false,
-    tier: null,
+    handle: displayHandle(p.handle, !!p.isBot),
+    isBot: !!p.isBot,
+    tier: p.tier ?? null,
     score: p.score ?? 0,
     finishMs: p.finishMs ?? null,
     dropped: !!p.dropped,
@@ -37,6 +39,32 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   let raceStartEmitted = false;
   let raceStartedAtMs = initialState.raceStartedAt ?? null;
   let lastCountdownN = null;
+
+  // Bot timeline state (public mode only)
+  let botTimelines = null;
+  let botRafId = null;
+
+  function tickBots() {
+    if (!botTimelines || stopped) return;
+    const elapsed = Date.now() - raceStartedAtMs;
+    let anyRunning = false;
+    for (let i = 0; i < botTimelines.length; i++) {
+      const bot = racers.find((r) => r.id === `bot-${i + 1}`);
+      if (!bot || bot.finishMs != null || bot.dropped || bot.dnf) continue;
+      const newScore = scoreBotAt(botTimelines[i], elapsed);
+      if (newScore !== bot.score) {
+        bot.score = newScore;
+        if (newScore >= raceLength && bot.finishMs == null) {
+          bot.finishMs = botTimelines[i][raceLength - 1];
+        }
+        emit('advance', { racerId: bot.id, score: bot.score, finishMs: bot.finishMs });
+      }
+      if (bot.finishMs == null) anyRunning = true;
+    }
+    if (anyRunning && !stopped) {
+      botRafId = requestAnimationFrame(tickBots);
+    }
+  }
 
   function emit(event, data) {
     if (stopped) return;
@@ -70,17 +98,18 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           const aliased = aliasId(p.id, youAre);
           const existing = racers.find((r) => r.id === aliased);
           if (existing) {
-            existing.handle = displayHandle(p.handle);
-            existing.score = p.score ?? existing.score;
+            existing.handle = displayHandle(p.handle, !!p.isBot);
+            // Don't overwrite bot scores mid-race — client drives them via tickBots.
+            if (!existing.isBot) existing.score = p.score ?? existing.score;
             if (p.finishMs != null) existing.finishMs = p.finishMs;
             existing.dropped = !!p.dropped;
             existing.dnf = !!p.dnf;
           } else {
             racers.push({
               id: aliased,
-              handle: displayHandle(p.handle),
-              isBot: false,
-              tier: null,
+              handle: displayHandle(p.handle, !!p.isBot),
+              isBot: !!p.isBot,
+              tier: p.tier ?? null,
               score: p.score ?? 0,
               finishMs: p.finishMs ?? null,
               dropped: !!p.dropped,
@@ -94,6 +123,21 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           lastCountdownN = msg.state.countdownN;
           emit('countdown', { n: msg.state.countdownN });
         }
+        // Reconnect bootstrap: if we joined mid-race and don't yet have bot
+        // timelines locally, take them from the state snapshot and start the
+        // bot tick loop. Without this, a brief disconnect mid-race leaves
+        // all bots frozen at score 0 because the original 'bot-timelines'
+        // message was only sent once at countdown→racing transition.
+        if (
+          msg.state.state === 'racing'
+          && msg.state.botTimelines?.length
+          && !botTimelines
+        ) {
+          botTimelines = msg.state.botTimelines;
+          if (msg.state.raceStartedAt) raceStartedAtMs = msg.state.raceStartedAt;
+          if (botRafId) cancelAnimationFrame(botRafId);
+          botRafId = requestAnimationFrame(tickBots);
+        }
         break;
       }
       case 'countdown': {
@@ -106,6 +150,14 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         raceStartedAtMs = msg.raceStartedAt;
         raceStartEmitted = true;
         emit('start', { problem: sequence[0] });
+        break;
+      }
+      case 'bot-timelines': {
+        // Public-mode only: server sends this right after race-start with precomputed timelines.
+        botTimelines = msg.botTimelines;
+        if (msg.raceStartedAt) raceStartedAtMs = msg.raceStartedAt;
+        if (botRafId) cancelAnimationFrame(botRafId);
+        botRafId = requestAnimationFrame(tickBots);
         break;
       }
       case 'advance': {
@@ -202,6 +254,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     },
     stop() {
       stopped = true;
+      if (botRafId) { cancelAnimationFrame(botRafId); botRafId = null; }
       unsubscribe();
     },
   };

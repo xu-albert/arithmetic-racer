@@ -16,6 +16,7 @@ import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
 import { postRaceResult } from './src/stats-api.js';
 import { getOrCreateDeviceId } from './src/identity.js';
+import { joinMatchmaking } from './src/matchmake-api.js';
 
 // ---- Identity helpers --------------------------------------------------
 
@@ -178,9 +179,16 @@ function handleRoomRaceStart({ roomClient, initialState, youAre }) {
   cleanupRace = attachRaceUI({ runner, raceLength: initialState.raceLength, screens });
 }
 
-function enterRoom(roomId) {
-  history.replaceState(null, '', `/?room=${roomId}`);
-  lobbyHandle = attachLobby({ roomId, screens, onRaceStart: handleRoomRaceStart });
+function enterRoom(roomId, { mode, difficulty } = {}) {
+  if (!mode) history.replaceState(null, '', `/?room=${roomId}`);
+  lobbyHandle = attachLobby({
+    roomId,
+    screens,
+    onRaceStart: handleRoomRaceStart,
+    mode,
+    difficulty,
+    deviceId: getOrCreateDeviceId(),
+  });
   showScreen('lobby-room');
 }
 
@@ -188,9 +196,11 @@ function enterRoom(roomId) {
 
 const params = new URLSearchParams(location.search);
 const initialRoomId = params.get('room');
+const initialMode = params.get('mode') ?? undefined;
+const initialDifficulty = params.get('difficulty') ?? undefined;
 
 if (initialRoomId) {
-  enterRoom(initialRoomId);
+  enterRoom(initialRoomId, { mode: initialMode, difficulty: initialDifficulty });
 } else {
   lobbyDiffButtons.forEach((btn) => {
     btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
@@ -199,6 +209,28 @@ if (initialRoomId) {
   setDifficulty('easy');
   showScreen('lobby');
 }
+
+// ---- Find a Match (public matchmaking) ----------------------------------
+
+const findMatchBtn = document.getElementById('btn-find-match');
+const matchStatus = document.getElementById('match-status');
+
+findMatchBtn?.addEventListener('click', async () => {
+  const checkedRadio = document.querySelector('input[name="match-diff"]:checked');
+  const diff = checkedRadio ? checkedRadio.value : 'medium';
+  findMatchBtn.disabled = true;
+  matchStatus.textContent = 'Searching…';
+  try {
+    const { roomId, difficulty } = await joinMatchmaking({
+      difficulty: diff,
+      deviceId: getOrCreateDeviceId(),
+    });
+    window.location.href = `/?room=${encodeURIComponent(roomId)}&mode=public&difficulty=${encodeURIComponent(difficulty)}`;
+  } catch (e) {
+    matchStatus.textContent = e.message || 'Error finding match';
+    findMatchBtn.disabled = false;
+  }
+});
 
 createRoomBtn.addEventListener('click', async () => {
   createRoomBtn.disabled = true;

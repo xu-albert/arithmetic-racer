@@ -5,17 +5,17 @@ import { insertRaceResult } from '../worker/race-result-store.js';
 import { buildRaceResultPayload } from './room-stats.js';
 
 // Mirrors public/src/runner.js values; private rooms use 20 by default.
-const COUNTDOWN_SECONDS = 3;
-const IDLE_CLEANUP_MS = 5 * 60 * 1000;
-const RECONNECT_GRACE_MS = 30 * 1000;
-const ROOM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const COUNTDOWN_SECONDS = 3;
+export const IDLE_CLEANUP_MS = 5 * 60 * 1000;
+export const RECONNECT_GRACE_MS = 30 * 1000;
+export const ROOM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MAX_HANDLE_LEN = 24;
-const MIN_RACE_LENGTH = 5;
-const MAX_RACE_LENGTH = 50;
+export const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const MAX_HANDLE_LEN = 24;
+export const MIN_RACE_LENGTH = 5;
+export const MAX_RACE_LENGTH = 50;
 
-function freshState(id) {
+export function freshState(id) {
   return {
     id,
     createdAt: Date.now(),
@@ -33,7 +33,7 @@ function freshState(id) {
   };
 }
 
-function resetForRace(state) {
+export function resetForRace(state) {
   for (const p of state.players) {
     p.score = 0;
     p.attempts = 0;
@@ -54,7 +54,7 @@ function isValidDeviceId(s) {
   return typeof s === 'string' && s.length > 0 && s.length <= 128;
 }
 
-function isValidHandle(s) {
+export function isValidHandle(s) {
   if (typeof s !== 'string') return false;
   const t = s.trim();
   if (t.length === 0 || t.length > MAX_HANDLE_LEN) return false;
@@ -71,7 +71,7 @@ function publicPlayer(p) {
 }
 
 // Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
-function rankPlayers(players) {
+export function rankPlayers(players) {
   const tier = (r) => (r.dropped || r.dnf ? 3 : r.finishMs != null ? 1 : 2);
   return [...players].sort((a, b) => {
     const ta = tier(a);
@@ -88,9 +88,13 @@ export class RaceRoom extends Server {
 
   state = null;
 
+  freshState(id) {
+    return freshState(id);
+  }
+
   async onStart() {
     const stored = await this.ctx.storage.get('state');
-    this.state = stored ?? freshState(this.name);
+    this.state = stored ?? this.freshState(this.name);
     if (!stored) await this.persist();
   }
 
@@ -182,7 +186,7 @@ export class RaceRoom extends Server {
     // Idle cleanup.
     if (this.state.idleCleanupAt != null && this.state.idleCleanupAt <= now && this.state.players.length === 0) {
       await this.ctx.storage.delete('state');
-      this.state = freshState(this.name);
+      this.state = this.freshState(this.name);
       // Don't broadcast; nobody's listening.
       return;
     }
@@ -190,7 +194,7 @@ export class RaceRoom extends Server {
     // Hard ceiling: 24h.
     if (now - this.state.createdAt > ROOM_MAX_AGE_MS && this.state.players.length === 0) {
       await this.ctx.storage.delete('state');
-      this.state = freshState(this.name);
+      this.state = this.freshState(this.name);
       return;
     }
 
@@ -352,7 +356,7 @@ export class RaceRoom extends Server {
 
       // Race ends only when every non-dropped player has finished. Stragglers
       // get to finish at their own pace; AFK risk accepted by design.
-      const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
+      const allDone = this.isRaceComplete();
       if (allDone) {
         await this.finishRace();
         await this.persist();
@@ -378,7 +382,7 @@ export class RaceRoom extends Server {
     if (this.state.state === 'racing') {
       player.dropped = true;
       this.broadcast(JSON.stringify({ type: 'drop', playerId: player.id }));
-      const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
+      const allDone = this.isRaceComplete();
       if (allDone) {
         await this.finishRace();
         await this.persist();
@@ -457,7 +461,7 @@ export class RaceRoom extends Server {
         player.dropped = true;
         this.broadcast(JSON.stringify({ type: 'drop', playerId }));
       }
-      const allDone = this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
+      const allDone = this.isRaceComplete();
       if (allDone) await this.finishRace();
       return true;
     }
@@ -486,6 +490,14 @@ export class RaceRoom extends Server {
     return this.state.players.find((p) => p.id === pid) ?? null;
   }
 
+  /**
+   * Hook: returns true when the race should be ended. Default implementation
+   * counts every player. PublicRaceRoom overrides this to ignore bots.
+   */
+  isRaceComplete() {
+    return this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
+  }
+
   publicState() {
     // Strip server-only Player fields (attempts/streak counters, identity).
     return { ...this.state, players: this.state.players.map(publicPlayer) };
@@ -507,11 +519,17 @@ export class RaceRoom extends Server {
     await this.ctx.storage.put('state', this.state);
   }
 
+  extraAlarmDeadlines() {
+    // Subclasses can return additional ms-timestamps to coalesce into the alarm.
+    return [];
+  }
+
   async scheduleNextAlarm() {
     const candidates = [];
     if (this.state.countdownAt != null) candidates.push(this.state.countdownAt);
     if (this.state.idleCleanupAt != null) candidates.push(this.state.idleCleanupAt);
     for (const dl of Object.values(this.state.disconnectDeadlines)) candidates.push(dl);
+    for (const dl of this.extraAlarmDeadlines()) if (dl != null) candidates.push(dl);
 
     if (candidates.length === 0) {
       const cur = await this.ctx.storage.getAlarm();
