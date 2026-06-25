@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "migrate:prod": "wrangler d1 execute arithmetic-racer --remote",
+    "migrate:preview": "wrangler d1 execute arithmetic-racer-preview --remote",
     "vendor": "cp node_modules/partysocket/dist/index.js node_modules/partysocket/dist/index.js.map node_modules/partysocket/dist/ws.js node_modules/partysocket/dist/ws.js.map public/vendor/partysocket/",
     "test": "node --test public/src/*.test.js && vitest run --passWithNoTests"
   },
