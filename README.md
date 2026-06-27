@@ -37,7 +37,7 @@ See [`docs/testing.md`](./docs/testing.md) for the full manual test plan — Qui
 
 ## Difficulty reference
 
-Calibration is provisional — revisit after playtesting. Defined in `src/game.js`.
+Calibration is provisional — revisit after playtesting. Defined in `public/src/game.js`.
 
 ### Easy
 Single-digit `+` and `−`. Operands 0-9. Subtraction never goes negative.
