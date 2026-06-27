@@ -112,6 +112,31 @@ test('generateSequence with different seeds produces different sequences', () =>
   assert.notDeepEqual(a, b);
 });
 
+test('generateSequence never repeats a problem back-to-back', () => {
+  // Easy has the smallest operand space, so it's the most likely to collide.
+  // Sweep many seeds and difficulties; none should yield a consecutive duplicate.
+  for (const diff of DIFFICULTIES) {
+    for (let seed = 1; seed <= 300; seed++) {
+      const seq = generateSequence(diff, 10, seed);
+      for (let i = 1; i < seq.length; i++) {
+        assert.notEqual(
+          seq[i].problem,
+          seq[i - 1].problem,
+          `${diff} seed ${seed}: "${seq[i].problem}" repeats at index ${i}`,
+        );
+      }
+    }
+  }
+});
+
+test('generateSequence dedup stays deterministic for a given seed', () => {
+  // Seed 41 (easy) previously produced "3 - 2 | 3 - 2" back-to-back; the
+  // re-roll must still be reproducible from the seed alone.
+  const a = generateSequence('easy', 10, 41);
+  const b = generateSequence('easy', 10, 41);
+  assert.deepEqual(a, b);
+});
+
 test('validateAnswer: numeric inputs', () => {
   const p = { problem: '7 + 4', answer: 11 };
   assert.equal(validateAnswer(p, 11), true);

@@ -76,9 +76,22 @@ export function makeRng(seed) {
 
 // Generate a fixed-length problem sequence from a seed.
 // Used at race start so all players see the same problems in the same order.
+//
+// Consecutive duplicates are avoided: drawing the same problem twice in a row
+// (common at easy, where the operand space is small) reads like a bug mid-race.
+// We re-roll up to MAX_REROLLS times per slot. Re-rolls draw from the same rng
+// stream, so the result stays deterministic for a given seed — every player who
+// computes the sequence from the shared seed gets the identical list.
+const MAX_REROLLS = 10;
 export function generateSequence(difficulty, length, seed) {
   const rng = makeRng(seed);
   const out = [];
-  for (let i = 0; i < length; i++) out.push(generateProblem(difficulty, rng));
+  for (let i = 0; i < length; i++) {
+    let next = generateProblem(difficulty, rng);
+    for (let attempt = 0; attempt < MAX_REROLLS && i > 0 && next.problem === out[i - 1].problem; attempt++) {
+      next = generateProblem(difficulty, rng);
+    }
+    out.push(next);
+  }
   return out;
 }
