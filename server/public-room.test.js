@@ -532,16 +532,33 @@ describe("PublicRaceRoom — race_results persistence", () => {
   });
 });
 
-describe("PublicRaceRoom.handleHello — stamps deviceId/userId on player", () => {
-  it("attaches msg.deviceId to the player record", async () => {
+describe("PublicRaceRoom.handleHello — identity stamping", () => {
+  it("takes deviceId from the message but userId ONLY from connection state", async () => {
     await withRoom("test-stamp-room-" + crypto.randomUUID(), async (room) => {
       const playerId = crypto.randomUUID();
-      await room.handleHello(makeConn(), {
-        type: "hello", playerId, handle: "A", difficulty: "medium", deviceId: "dev-stamp", userId: "user-stamp"
+      const conn = makeConn();
+      // connection.state.userId is set server-side from the cookie-derived
+      // x-arithmetic-user-id header in onConnect — the trusted source.
+      conn.state = { userId: "user-from-cookie" };
+      await room.handleHello(conn, {
+        type: "hello", playerId, handle: "A", difficulty: "medium",
+        deviceId: "dev-stamp", userId: "user-spoofed",
       });
       const p = room.state.players.find((p) => p.id === playerId);
       expect(p.deviceId).toBe("dev-stamp");
-      expect(p.userId).toBe("user-stamp");
+      expect(p.userId).toBe("user-from-cookie");
+    });
+  });
+
+  it("ignores a spoofed msg.userId for anonymous connections", async () => {
+    await withRoom("test-spoof-room-" + crypto.randomUUID(), async (room) => {
+      const playerId = crypto.randomUUID();
+      await room.handleHello(makeConn(), {
+        type: "hello", playerId, handle: "A", difficulty: "medium",
+        deviceId: "dev-anon", userId: "victim-user-id",
+      });
+      const p = room.state.players.find((p) => p.id === playerId);
+      expect(p.userId).toBeNull();
     });
   });
 });
