@@ -8,7 +8,7 @@
 
 export const HUMAN_AVG_PPM = {
   easy: 35,
-  medium: 20,
+  medium: 24, // retuned with the times-table × change — medium problems got faster
   hard: 12,
 };
 

@@ -59,6 +59,21 @@ test('medium: subtraction answers are never negative', () => {
   }
 });
 
+test('medium: multiplication stays within times-table range (≤12 × ≤9)', () => {
+  const rng = makeRng(11);
+  let seen = 0;
+  for (let i = 0; i < SAMPLE_COUNT; i++) {
+    const p = generateProblem('medium', rng);
+    if (p.problem.includes(' × ')) {
+      seen++;
+      const [a, b] = p.problem.split(' × ').map(Number);
+      assert.ok(a >= 2 && a <= 12, `medium × operand ${a} out of range in "${p.problem}"`);
+      assert.ok(b >= 2 && b <= 9, `medium × operand ${b} out of range in "${p.problem}"`);
+    }
+  }
+  assert.ok(seen > 0, 'expected at least one multiplication in sample');
+});
+
 test('hard: division always produces integers', () => {
   const rng = makeRng(9);
   let divisionsSeen = 0;
