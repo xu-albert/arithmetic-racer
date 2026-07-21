@@ -61,14 +61,15 @@ export class PublicRaceRoom extends RaceRoom {
     // Delegate to base: handle generation, player insertion, broadcast, persist.
     await super.handleHello(connection, msg);
 
-    // Stamp deviceId/userId onto the newly-added player and clear isCreator —
-    // public rooms have no host concept (manual start / config / rematch are
-    // all disabled), and the base RaceRoom marks the first joiner isCreator.
+    // Clear isCreator — public rooms have no host concept (manual start /
+    // config / rematch are all disabled), and the base RaceRoom marks the
+    // first joiner isCreator. deviceId/userId are NOT re-stamped here: the
+    // base handler already sets a validated deviceId from the message and
+    // userId from connection state (cookie-derived, unspoofable). Reading
+    // msg.userId would let any client attribute results to another account.
     const player = this.state.players.find((p) => p.id === msg.playerId);
     if (player) {
       player.isCreator = false;
-      if (typeof msg.deviceId === 'string') player.deviceId = msg.deviceId;
-      if (typeof msg.userId === 'string') player.userId = msg.userId;
     }
 
     if (this.state.state !== 'lobby') return;
