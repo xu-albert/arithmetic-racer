@@ -339,6 +339,62 @@ button[aria-pressed="true"]:hover {
   box-shadow: var(--card-shadow);
 }
 
+/* lobby sections -- Find a Match / Solo vs Bots groupings */
+.find-match,
+.solo-play {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+}
+
+.find-match h3,
+.solo-play h3 {
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 1.3rem;
+  color: var(--navy);
+}
+
+.find-match p {
+  color: var(--navy-soft);
+  margin-top: -0.7rem;
+}
+
+.match-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  /* leave room for the floating "Difficulty" tab on the picker card */
+  padding-top: 0.6rem;
+}
+
+.match-diff-picker {
+  gap: 1rem;
+}
+.match-diff-picker label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 700;
+  color: var(--navy);
+  cursor: pointer;
+}
+.match-diff-picker input[type="radio"] {
+  accent-color: var(--green);
+  width: 1.05rem;
+  height: 1.05rem;
+  cursor: pointer;
+}
+
+.match-status {
+  font-weight: 700;
+  color: var(--navy);
+}
+.match-status:empty { display: none; }
+
 /* ============================================================
    COUNTDOWN -- big, navy, confident, gentle pop
    ============================================================ */

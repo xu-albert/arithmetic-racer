@@ -356,6 +356,27 @@ describe("PublicRaceRoom auto-start sequence", () => {
     });
   });
 
+  it("gives bots human-style handles that blend in (no Bot- prefix, unique, no clash with humans)", async () => {
+    await withRoom("test-bothandles-" + crypto.randomUUID(), async (room) => {
+      const playerId = crypto.randomUUID();
+      await room.handleHello(makeConn(), { type: "hello", playerId, handle: "BraveOtter", difficulty: "medium" });
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+      const bots = room.state.players.filter((p) => p.isBot);
+      expect(bots.length).toBe(5);
+      const handles = bots.map((b) => b.handle);
+      for (const h of handles) {
+        expect(h).not.toMatch(/bot/i);
+        expect(h).not.toMatch(/easy|medium|hard/i);
+        // Adjective+Animal shape, optional numeric fallback suffix.
+        expect(h).toMatch(/^[A-Z][a-z]+[A-Z][a-z]+\d*$/);
+      }
+      // Unique among bots and distinct from the human's handle.
+      expect(new Set(handles).size).toBe(handles.length);
+      expect(handles).not.toContain("BraveOtter");
+    });
+  });
+
   it("computes botTimelines when countdown→racing transition fires", async () => {
     await withRoom("test-timeline-" + crypto.randomUUID(), async (room) => {
       const playerId = crypto.randomUUID();
