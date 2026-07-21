@@ -594,3 +594,22 @@ describe("PublicRaceRoom — disabled operations return BAD_STATE", () => {
     });
   });
 });
+
+import { publicPlayer } from "./room.js";
+
+describe("publicPlayer — broadcast shape", () => {
+  it("exposes isGuest instead of identity; bots read as guests", () => {
+    const signedIn = publicPlayer({ id: "a", handle: "X", userId: "u1", deviceId: "d1", attempts: 3, currentStreak: 1, longestStreak: 2 });
+    expect(signedIn.isGuest).toBe(false);
+    expect(signedIn.userId).toBeUndefined();
+    expect(signedIn.deviceId).toBeUndefined();
+    expect(signedIn.attempts).toBeUndefined();
+
+    const guest = publicPlayer({ id: "b", handle: "Y", userId: null, deviceId: "d2" });
+    expect(guest.isGuest).toBe(true);
+
+    const bot = publicPlayer({ id: "bot-1", handle: "Z", isBot: true });
+    expect(bot.isGuest).toBe(true);
+    expect(bot.isBot).toBe(true);
+  });
+});

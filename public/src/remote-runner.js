@@ -10,17 +10,17 @@ function aliasId(id, youAre) {
   return id === youAre ? PLAYER_ALIAS : id;
 }
 
-// Until accounts ship, every human multiplayer participant is a guest. Append the
-// marker inline so it shows up on race lanes + podium without modifying ui.js.
-// Bots are excluded — they already have synthetic handles.
-function displayHandle(rawHandle, isBot) {
-  return isBot ? rawHandle : `${rawHandle} (Guest)`;
+// Append the guest marker inline so it shows up on race lanes + podium without
+// modifying ui.js. The server broadcasts isGuest (no account); bots read as
+// guests too, so the badge never distinguishes them from anonymous humans.
+function displayHandle(rawHandle, isGuest) {
+  return isGuest ? `${rawHandle} (Guest)` : rawHandle;
 }
 
 function buildRacers(players, youAre) {
   return players.map((p) => ({
     id: aliasId(p.id, youAre),
-    handle: displayHandle(p.handle, !!p.isBot),
+    handle: displayHandle(p.handle, !!p.isGuest),
     isBot: !!p.isBot,
     tier: p.tier ?? null,
     score: p.score ?? 0,
@@ -98,7 +98,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           const aliased = aliasId(p.id, youAre);
           const existing = racers.find((r) => r.id === aliased);
           if (existing) {
-            existing.handle = displayHandle(p.handle, !!p.isBot);
+            existing.handle = displayHandle(p.handle, !!p.isGuest);
             // Don't overwrite bot scores mid-race — client drives them via tickBots.
             if (!existing.isBot) existing.score = p.score ?? existing.score;
             if (p.finishMs != null) existing.finishMs = p.finishMs;
@@ -107,7 +107,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           } else {
             racers.push({
               id: aliased,
-              handle: displayHandle(p.handle, !!p.isBot),
+              handle: displayHandle(p.handle, !!p.isGuest),
               isBot: !!p.isBot,
               tier: p.tier ?? null,
               score: p.score ?? 0,

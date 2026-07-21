@@ -63,11 +63,12 @@ export function isValidHandle(s) {
   return true;
 }
 
-function publicPlayer(p) {
+export function publicPlayer(p) {
   // Strip server-only bookkeeping (attempts/streak counters, identity)
-  // before broadcasting to WS clients. Clients don't render these.
+  // before broadcasting to WS clients. Expose only a boolean guest flag —
+  // bots carry no userId, so they read as guests and blend in.
   const { attempts, longestStreak, currentStreak, deviceId, userId, ...rest } = p;
-  return rest;
+  return { ...rest, isGuest: !userId };
 }
 
 // Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
