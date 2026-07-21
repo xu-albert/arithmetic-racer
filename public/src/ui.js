@@ -106,7 +106,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   function renderPodium() {
     podium.innerHTML = '';
     const rankings = runner.getRankings();
-    rankings.forEach((r, i) => {
+    rankings.forEach((r) => {
       const li = document.createElement('li');
       const youBadge = r.id === 'player' ? ' (you)' : '';
       let detail;
@@ -114,7 +114,8 @@ export function attachRaceUI({ runner, raceLength, screens }) {
       else if (r.finishMs != null) detail = `${r.score}/${raceLength} in ${(r.finishMs / 1000).toFixed(1)}s`;
       else if (r.dnf) detail = `${r.score}/${raceLength} — didn't finish`;
       else detail = `${r.score}/${raceLength} — waiting for results`;
-      li.textContent = `${i + 1}. ${r.handle}${youBadge} — ${detail}`;
+      // Rank number comes from the CSS counter badge on #podium li::before.
+      li.textContent = `${r.handle}${youBadge} — ${detail}`;
       if (r.dropped || r.dnf || r.finishMs == null) li.classList.add('unfinished');
       podium.append(li);
     });

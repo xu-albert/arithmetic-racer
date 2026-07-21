@@ -22,7 +22,9 @@ function mediumProblem(rng) {
   const ops = ['+', '-', '×'];
   const op = ops[randInt(0, 2, rng)];
   if (op === '×') {
-    const a = randInt(10, 99, rng);
+    // Times-table recall, not 2-digit long multiplication — the old 10–99
+    // range made medium's × harder than hard's (11–19 × 2–9).
+    const a = randInt(2, 12, rng);
     const b = randInt(2, 9, rng);
     return { problem: `${a} × ${b}`, answer: a * b };
   }

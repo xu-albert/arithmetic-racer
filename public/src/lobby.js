@@ -62,7 +62,9 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
   let raceStartHandled = false;
   let prevServerState = null;
 
-  roomTitle.textContent = `Room: ${roomId}`;
+  // Public matches are anonymous drop-ins — the internal room slug is
+  // meaningless to players, so don't surface it.
+  roomTitle.textContent = isPublic ? 'Quick Match' : `Room: ${roomId}`;
   inviteUrlInput.value = `${location.origin}/?room=${roomId}`;
 
   function meIsCreator() {
@@ -108,11 +110,14 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
         hostBadge.textContent = '(host)';
         li.append(hostBadge);
       }
-      // Everyone is a guest until accounts ship; suppress for any future signed-in player.
-      const guestBadge = document.createElement('span');
-      guestBadge.className = 'badge badge-guest';
-      guestBadge.textContent = '(Guest)';
-      li.append(guestBadge);
+      // Server broadcasts isGuest (no userId). Bots read as guests too, so
+      // they blend in with the anonymous crowd.
+      if (p.isGuest) {
+        const guestBadge = document.createElement('span');
+        guestBadge.className = 'badge badge-guest';
+        guestBadge.textContent = '(Guest)';
+        li.append(guestBadge);
+      }
 
       const status = statusFor(p);
       if (status) {

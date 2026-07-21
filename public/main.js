@@ -248,6 +248,12 @@ createRoomBtn.addEventListener('click', async () => {
 });
 
 playAgainBtn.addEventListener('click', () => {
+  // Public quickmatch rooms are one-shot — returning to the dead room's
+  // lobby is a dead end, so go home where Find a Match lives.
+  if (initialMode === 'public') {
+    location.assign('/');
+    return;
+  }
   if (initialRoomId || lobbyHandle) {
     showScreen('lobby-room');
   } else {

@@ -9,6 +9,7 @@
 .hdr,
 .hdr.hdr--static {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
   padding: 0.5rem 1rem;
