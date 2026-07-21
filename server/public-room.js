@@ -12,6 +12,7 @@ import { MAX_PLAYERS, computeAutoStartDeadline } from '../public/src/auto-start.
 import { pickBotTiers } from '../public/src/bot.js';
 import { computeBotTimelines, scoreBotAt } from '../public/src/bot-timeline.js';
 import { seededRng } from '../public/src/seeded-rng.js';
+import { generateHandle } from '../public/src/handles.js';
 import { generateSequence } from '../public/src/game.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
 import { buildRaceResultPayload } from './room-stats.js';
@@ -95,10 +96,6 @@ export class PublicRaceRoom extends RaceRoom {
     await this.scheduleNextAlarm();
   }
 
-  synthHandle(tier, n) {
-    return `Bot-${tier}-${n}`;
-  }
-
   async onAlarm() {
     const now = Date.now();
     const wasLobby = this.state.state === 'lobby';
@@ -142,11 +139,17 @@ export class PublicRaceRoom extends RaceRoom {
     this.state.botSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
     this.state.botTiers = pickBotTiers(this.state.difficulty, botCount, seededRng(this.state.botSeed));
 
+    // Bots must be indistinguishable from humans in the roster, so they draw
+    // from the same handle pool as guests (different seed stream than tiers).
+    const nameRng = seededRng((this.state.botSeed ^ 0x9e3779b9) >>> 0);
+    const taken = new Set(this.state.players.map((p) => p.handle));
     for (let i = 0; i < botCount; i++) {
       const tier = this.state.botTiers[i];
+      const handle = generateHandle(nameRng, taken);
+      taken.add(handle);
       this.state.players.push({
         id: `bot-${i + 1}`,
-        handle: this.synthHandle(tier, i + 1),
+        handle,
         isCreator: false,
         isBot: true,
         tier,
