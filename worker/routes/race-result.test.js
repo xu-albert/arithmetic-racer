@@ -43,7 +43,9 @@ beforeEach(async () => {
 
 function makeBody(overrides = {}) {
   return {
-    device_id: "device-123",
+    // Unique per call: the endpoint rate-limits per device, and a shared id
+    // would make tests fail depending on how many ran before them.
+    device_id: `device-${crypto.randomUUID()}`,
     difficulty: "medium",
     finished: true,
     finish_time_ms: 48000,
@@ -67,7 +69,10 @@ function makeRequest(body) {
 
 describe("POST /api/race-result — happy path", () => {
   it("inserts an anonymous race result with user_id NULL and device_id set", async () => {
-    const res = await handleRaceResult(makeRequest(makeBody()), env);
+    const res = await handleRaceResult(
+      makeRequest(makeBody({ device_id: "device-123" })),
+      env
+    );
     expect(res.status).toBe(200);
 
     const json = await res.json();
@@ -113,6 +118,55 @@ describe("POST /api/race-result — happy path", () => {
     expect(results).toHaveLength(1);
     expect(results[0].finished).toBe(0);
     expect(results[0].finish_time_ms).toBeNull();
+  });
+});
+
+describe("POST /api/race-result — rate limiting", () => {
+  it("accepts a burst up to the per-device limit and 429s past it", async () => {
+    const device_id = `device-${crypto.randomUUID()}`;
+    const statuses = [];
+    for (let i = 0; i < 8; i++) {
+      const res = await handleRaceResult(makeRequest(makeBody({ device_id })), env);
+      statuses.push(res.status);
+    }
+    // 6/min/device — roughly 3x the ~2 races/min a real player can produce.
+    expect(statuses.slice(0, 6)).toEqual([200, 200, 200, 200, 200, 200]);
+    expect(statuses.slice(6)).toEqual([429, 429]);
+  });
+
+  it("returns a retry-after header with the 429 so a client can back off", async () => {
+    const device_id = `device-${crypto.randomUUID()}`;
+    let res;
+    for (let i = 0; i < 7; i++) {
+      res = await handleRaceResult(makeRequest(makeBody({ device_id })), env);
+    }
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ error: "rate_limited" });
+    expect(res.headers.get("retry-after")).toBe("60");
+  });
+
+  it("does not persist a race it rate-limited", async () => {
+    const device_id = `device-${crypto.randomUUID()}`;
+    for (let i = 0; i < 7; i++) {
+      await handleRaceResult(makeRequest(makeBody({ device_id })), env);
+    }
+    const { results } = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM race_results WHERE device_id = ?"
+    ).bind(device_id).all();
+    expect(results[0].n).toBe(6);
+  });
+
+  it("limits each device independently", async () => {
+    const busy = `device-${crypto.randomUUID()}`;
+    for (let i = 0; i < 7; i++) {
+      await handleRaceResult(makeRequest(makeBody({ device_id: busy })), env);
+    }
+    // A second player must not be punished for the first one's traffic.
+    const res = await handleRaceResult(
+      makeRequest(makeBody({ device_id: `device-${crypto.randomUUID()}` })),
+      env
+    );
+    expect(res.status).toBe(200);
   });
 });
 

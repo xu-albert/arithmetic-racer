@@ -13,6 +13,18 @@
 
 import { readUserId } from "../session.js";
 import { insertRaceResult } from "../race-result-store.js";
+import { allowRequest } from "../rate-limit.js";
+
+// Matches the `period` on both limiters in wrangler.jsonc. The binding only
+// permits 10 or 60, so this is a fixed window, not a rolling one.
+const RATE_LIMIT_WINDOW_S = 60;
+
+function rateLimited() {
+  return Response.json(
+    { error: "rate_limited" },
+    { status: 429, headers: { "retry-after": String(RATE_LIMIT_WINDOW_S) } }
+  );
+}
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
@@ -69,6 +81,14 @@ function isValidBody(b) {
 }
 
 export async function handleRaceResult(request, env) {
+  // IP ceiling first, before reading the body: it needs no parsing, so it is
+  // the only check that can absorb a flood of malformed requests. The device
+  // limit below cannot — its key lives inside the body.
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  if (!(await allowRequest(env.RACE_RESULT_IP_LIMIT, ip))) {
+    return rateLimited();
+  }
+
   let body;
   try {
     body = await request.json();
@@ -78,6 +98,13 @@ export async function handleRaceResult(request, env) {
 
   if (!isValidBody(body)) {
     return Response.json({ error: "invalid_body" }, { status: 400 });
+  }
+
+  // Device is the primary key for limiting — see wrangler.jsonc for why IP
+  // alone is too coarse. Checked after validation so a client cannot burn
+  // another device's budget by sending its id in a body we reject anyway.
+  if (!(await allowRequest(env.RACE_RESULT_LIMIT, body.device_id))) {
+    return rateLimited();
   }
 
   const userId = await readUserId(request, env);
