@@ -323,6 +323,10 @@ const HTML = `
         <span class="auth-username-status"></span>
       </label>
       <button type="submit">Create account</button>
+      <p class="auth-privacy-note">
+        We store your email, display name and race history.
+        <a href="/privacy" target="_blank" rel="noopener">How your data is handled</a>.
+      </p>
       <p class="auth-error" hidden></p>
     </form>
 

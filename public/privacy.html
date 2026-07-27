@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy — Arithmetic Racer</title>
+  <meta name="description" content="What Arithmetic Racer stores, who it is shared with, and how to have it deleted." />
+  <meta name="robots" content="noindex,nofollow" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏎️</text></svg>" />
+  <link rel="stylesheet" href="style-a.css" />
+  <style>
+    .doc {
+      max-width: 46rem;
+      margin: 1.5rem auto 3rem;
+      padding: 1.75rem clamp(1rem, 4vw, 2.25rem);
+      background: var(--card);
+      border-radius: 14px;
+      box-shadow: var(--card-shadow);
+      color: var(--navy-soft);
+      line-height: 1.6;
+    }
+    .doc h1 { color: var(--navy); margin: 0 0 0.25rem; }
+    .doc h2 {
+      color: var(--navy);
+      margin: 2rem 0 0.6rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--hairline);
+      font-size: 1.15rem;
+    }
+    .doc h2:first-of-type { border-top: none; padding-top: 0; }
+    .doc .updated { color: var(--navy-mute); font-size: 0.9rem; margin: 0 0 1rem; }
+    .doc ul { padding-left: 1.15rem; }
+    .doc li { margin-bottom: 0.4rem; }
+    .doc a { color: var(--car-blue); }
+    .doc code {
+      background: #f2f6fb;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    .doc table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
+    .doc th, .doc td {
+      text-align: left;
+      padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid var(--hairline);
+      vertical-align: top;
+      font-size: 0.95rem;
+    }
+    .doc th { color: var(--navy); white-space: nowrap; }
+    .doc .table-scroll { overflow-x: auto; }
+    .doc .back { display: inline-block; margin-bottom: 1rem; color: var(--car-blue); }
+  </style>
+</head>
+<body>
+  <main class="doc">
+    <a class="back" href="/">&larr; Back to Arithmetic Racer</a>
+
+    <h1>Privacy</h1>
+    <p class="updated">Last updated 27 July 2026</p>
+
+    <p>
+      Arithmetic Racer is a small math racing game. This page describes exactly what it
+      stores, who else sees it, and how to have it deleted. It is written to be read,
+      not to cover anyone legally.
+    </p>
+
+    <h2>You can play without an account</h2>
+    <p>
+      No sign-up is required. If you never create an account, we never learn your email
+      address or your name.
+    </p>
+
+    <h2>What is stored in your browser</h2>
+    <p>
+      These stay on your device in <code>localStorage</code> and are not passwords or
+      tracking cookies:
+    </p>
+    <ul>
+      <li><strong>A device ID</strong> — a random identifier so your race history survives a page refresh while signed out.</li>
+      <li><strong>A player ID and handle</strong> — the temporary name shown to other players in a room.</li>
+    </ul>
+    <p>Clearing your browser data for this site removes all of them.</p>
+
+    <h2>What is stored on the server</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Data</th><th>When</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Race results — difficulty, finish time, problems attempted and correct, accuracy, longest streak, and when you played</td>
+            <td>Every race, signed in or not. Linked to your device ID, and to your account if you have one.</td>
+          </tr>
+          <tr>
+            <td>Email address, display name, and username</td>
+            <td>Only if you create an account.</td>
+          </tr>
+          <tr>
+            <td>A password hash</td>
+            <td>Only if you sign up with a password. The password itself is never stored.</td>
+          </tr>
+          <tr>
+            <td>Google account identifiers and sign-in tokens</td>
+            <td>Only if you sign in with Google.</td>
+          </tr>
+          <tr>
+            <td>Login session records, which include your <strong>IP address</strong> and <strong>browser user-agent</strong></td>
+            <td>While you are signed in. Created and expired by the authentication library.</td>
+          </tr>
+          <tr>
+            <td>Room handles and chat-free game messages</td>
+            <td>While a multiplayer room is active. Rooms are discarded after 24 hours.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      If you create an account after playing anonymously, races previously tied to your
+      device ID are re-attributed to your account so your history carries over.
+    </p>
+
+    <h2>Who else sees it</h2>
+    <ul>
+      <li>
+        <strong>Cloudflare</strong> — hosts the game and its database. All traffic and
+        stored data passes through their infrastructure.
+      </li>
+      <li>
+        <strong>Loops</strong> — sends account emails such as the welcome and
+        password-reset messages. Receives your email address only if you create an account.
+      </li>
+      <li>
+        <strong>Google</strong> — only if you choose to sign in with Google.
+      </li>
+      <li>
+        <strong>Google Fonts</strong> — the page loads its typefaces from Google's servers,
+        which means Google receives your IP address when the page loads, whether or not you
+        have an account. We intend to self-host these fonts to remove that.
+      </li>
+    </ul>
+    <p>Your data is not sold, and there are no advertising or analytics trackers.</p>
+
+    <h2>Deleting your data</h2>
+    <p>
+      A self-service delete button is not built yet. Until it is, use the
+      <a href="/contact">contact form</a> to request deletion and everything tied to
+      your account will be removed.
+    </p>
+    <p>
+      To remove anonymous race history, clear this site's browser data — that discards the
+      device ID, after which the old rows are no longer linked to you.
+    </p>
+
+    <h2>Children</h2>
+    <p>
+      The game is suitable for children, and an account is never required to play. We do
+      not knowingly collect personal information from children under 13. If a child has
+      created an account, use the <a href="/contact">contact form</a> and it will be deleted.
+    </p>
+
+    <h2>Changes</h2>
+    <p>
+      This page is updated in place when practice changes, with the date at the top
+      revised. The game is in alpha, so expect it to change.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      Questions about any of this go through the <a href="/contact">contact form</a>.
+    </p>
+  </main>
+</body>
+</html>

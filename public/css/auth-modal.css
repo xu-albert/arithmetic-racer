@@ -346,3 +346,14 @@
   font-size: 0.9rem;
   color: #475569;
 }
+
+/* Data-handling note under the sign-up button. Shown at the point where the
+   user is about to hand over an email address, not buried in a footer. */
+.auth-privacy-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--navy-mute);
+  text-align: center;
+}
+.auth-privacy-note a { color: var(--car-blue); }
