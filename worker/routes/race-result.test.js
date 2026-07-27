@@ -201,6 +201,108 @@ describe("POST /api/race-result — validation", () => {
     expect(await res.json()).toEqual({ error: "invalid_body" });
   });
 
+  // Each field below is individually in range; only the relationship between
+  // them is impossible. Range checks in isolation cannot catch these.
+  describe("cross-field consistency", () => {
+    it("rejects problems_correct greater than problems_total", async () => {
+      const res = await handleRaceResult(
+        makeRequest(makeBody({
+          problems_total: 1, problems_attempted: 1,
+          problems_correct: 999, accuracy_pct: 100,
+        })),
+        env
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_body" });
+    });
+
+    it("rejects problems_attempted greater than problems_total", async () => {
+      const res = await handleRaceResult(
+        makeRequest(makeBody({
+          problems_total: 10, problems_attempted: 11,
+          problems_correct: 10, accuracy_pct: 90.9,
+        })),
+        env
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_body" });
+    });
+
+    it("rejects problems_correct greater than problems_attempted", async () => {
+      const res = await handleRaceResult(
+        makeRequest(makeBody({
+          problems_total: 20, problems_attempted: 5,
+          problems_correct: 10, accuracy_pct: 100,
+        })),
+        env
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_body" });
+    });
+
+    it("rejects accuracy_pct that contradicts the correct/attempted counts", async () => {
+      const res = await handleRaceResult(
+        makeRequest(makeBody({
+          problems_total: 20, problems_attempted: 20,
+          problems_correct: 0, accuracy_pct: 100,
+        })),
+        env
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_body" });
+    });
+
+    it("rejects a non-zero accuracy_pct when nothing was attempted", async () => {
+      const res = await handleRaceResult(
+        makeRequest(makeBody({
+          finished: false, finish_time_ms: null,
+          problems_total: 20, problems_attempted: 0,
+          problems_correct: 0, accuracy_pct: 75,
+        })),
+        env
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_body" });
+    });
+
+    it("rejects longest_streak greater than problems_correct", async () => {
+      const res = await handleRaceResult(
+        makeRequest(makeBody({
+          problems_total: 20, problems_attempted: 20,
+          problems_correct: 5, accuracy_pct: 25, longest_streak: 20,
+        })),
+        env
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "invalid_body" });
+    });
+
+    it("accepts a rounded accuracy_pct within tolerance of the counts", async () => {
+      // 2/3 = 66.666...%, and the client rounds for display. Tolerance has to
+      // absorb that or honest results get thrown away.
+      const res = await handleRaceResult(
+        makeRequest(makeBody({
+          problems_total: 3, problems_attempted: 3,
+          problems_correct: 2, accuracy_pct: 66.7, longest_streak: 2,
+        })),
+        env
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("accepts a quit mid-race where attempted is below total", async () => {
+      const res = await handleRaceResult(
+        makeRequest(makeBody({
+          finished: false, finish_time_ms: null,
+          problems_total: 20, problems_attempted: 7,
+          problems_correct: 6, accuracy_pct: 85.7, longest_streak: 4,
+        })),
+        env
+      );
+      expect(res.status).toBe(200);
+    });
+  });
+
   it("rejects an empty body with 400 invalid_body", async () => {
     const res = await handleRaceResult(makeRequest(""), env);
     expect(res.status).toBe(400);

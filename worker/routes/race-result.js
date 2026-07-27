@@ -16,6 +16,33 @@ import { insertRaceResult } from "../race-result-store.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
+// accuracy_pct is computed and rounded client-side, so an exact match against
+// the counts would reject honest results (2/3 races report 66.7, not
+// 66.666...). One percentage point absorbs any sane rounding while still
+// catching a fabricated value, which is off by tens of points, not tenths.
+const ACCURACY_TOLERANCE_PCT = 1;
+
+/**
+ * Cross-field checks. Every field can be individually in range while the
+ * combination is impossible — `{problems_correct: 999, problems_total: 1}`
+ * passed every range check and persisted before this existed.
+ */
+function isSelfConsistent(b) {
+  // correct <= attempted <= total. Transitively bounds correct by total too.
+  if (b.problems_correct > b.problems_attempted) return false;
+  if (b.problems_attempted > b.problems_total) return false;
+
+  // You cannot have a run of correct answers longer than your correct answers.
+  if (b.longest_streak > b.problems_correct) return false;
+
+  // Nothing attempted means nothing to be accurate about.
+  const expected =
+    b.problems_attempted === 0
+      ? 0
+      : (b.problems_correct / b.problems_attempted) * 100;
+  return Math.abs(b.accuracy_pct - expected) <= ACCURACY_TOLERANCE_PCT;
+}
+
 /**
  * Validate the parsed JSON body against RaceResultInput.
  * Returns true only if every required field is present and within range.
@@ -34,7 +61,10 @@ function isValidBody(b) {
     Number.isInteger(b.problems_attempted) && b.problems_attempted >= 0 &&
     Number.isFinite(b.avg_time_per_problem_ms) && b.avg_time_per_problem_ms >= 0 &&
     Number.isFinite(b.accuracy_pct) && b.accuracy_pct >= 0 && b.accuracy_pct <= 100 &&
-    Number.isInteger(b.longest_streak) && b.longest_streak >= 0
+    Number.isInteger(b.longest_streak) && b.longest_streak >= 0 &&
+    // Runs last: it reads several fields at once and assumes each is already
+    // known to be a number of the right kind.
+    isSelfConsistent(b)
   );
 }
 
