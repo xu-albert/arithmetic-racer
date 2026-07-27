@@ -8,6 +8,8 @@
 //   5. Set KV queue-lock with 60s TTL.
 //   6. Return { roomId, mode: 'public', difficulty }.
 
+import { logWarn, KINDS } from "../logger.js";
+
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 const RATE_LIMIT_MAX = 3;
 // Workers KV requires expirationTtl >= 60s. 3 joins per minute per device is
@@ -43,7 +45,7 @@ export async function handleMatchmakeJoin(request, env) {
     }
     await env.MATCHMAKING_LIMITS.put(rlKey, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_S });
   } catch (e) {
-    console.warn("rate-limit KV op failed; proceeding", e);
+    logWarn(KINDS.MATCHMAKING_KV, e, { op: "rate_limit", device_id, outcome: "proceeding" });
   }
 
   // Queue-lock — keyed by (device, difficulty) so picking a different
@@ -70,14 +72,14 @@ export async function handleMatchmakeJoin(request, env) {
       return Response.json({ roomId: cached, mode: "public", difficulty });
     }
   } catch (e) {
-    console.warn("queue-lock get failed; proceeding", e);
+    logWarn(KINDS.MATCHMAKING_KV, e, { op: "queue_lock_get", device_id, difficulty, outcome: "proceeding" });
   }
 
   // Set queue-lock (best-effort)
   try {
     await env.MATCHMAKING_LIMITS.put(lockKey, roomId, { expirationTtl: QUEUE_LOCK_TTL_S });
   } catch (e) {
-    console.warn("queue-lock put failed", e);
+    logWarn(KINDS.MATCHMAKING_KV, e, { op: "queue_lock_put", device_id, difficulty, roomId });
   }
 
   return Response.json({ roomId, mode: "public", difficulty });

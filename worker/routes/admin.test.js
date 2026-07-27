@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import { timingSafeEqualStrings } from "./admin.js";
+import { timingSafeEqualStrings, handleAdminIndex } from "./admin.js";
 
 beforeAll(async () => {
   await env.DB.exec(
@@ -357,5 +357,69 @@ describe("per-user drill-down", () => {
     const body = await res.text();
     expect(body).toContain("alice");
     expect(body).not.toContain("bob");
+  });
+});
+
+describe("admin dashboard — contact messages", () => {
+  beforeAll(async () => {
+    // Mirror of migrations/0005_contact_messages.sql.
+    await env.DB.exec(
+      "CREATE TABLE IF NOT EXISTS contact_messages (" +
+        "id TEXT PRIMARY KEY, " +
+        "email TEXT, " +
+        "message TEXT NOT NULL, " +
+        "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion')), " +
+        "user_id TEXT, " +
+        "device_id TEXT, " +
+        "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
+        "created_at INTEGER NOT NULL" +
+        ")"
+    );
+  });
+
+  beforeEach(async () => {
+    await env.DB.exec("DELETE FROM contact_messages");
+  });
+
+  async function insert({ id = crypto.randomUUID(), message, kind = "general", email = null, handled = 0 }) {
+    await env.DB.prepare(
+      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at) " +
+        "VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)"
+    ).bind(id, email, message, kind, handled, Date.now()).run();
+  }
+
+  async function dashboard() {
+    const res = await handleAdminIndex(
+      new Request("https://x/admin/?token=t"),
+      { ...env, ADMIN_TOKEN: "t" }
+    );
+    return res.text();
+  }
+
+  it("lists a submitted message", async () => {
+    await insert({ message: "my printer is on fire", email: "a@b.com" });
+    const body = await dashboard();
+    expect(body).toContain("my printer is on fire");
+    expect(body).toContain("a@b.com");
+  });
+
+  it("shows how many are unhandled", async () => {
+    await insert({ message: "one" });
+    await insert({ message: "two" });
+    await insert({ message: "three", handled: 1 });
+    expect(await dashboard()).toContain("2 unhandled");
+  });
+
+  it("escapes HTML in a submitted message", async () => {
+    // Arbitrary text a stranger typed into a public form, rendered into the
+    // operator's authenticated page. Unescaped, this is stored XSS.
+    await insert({ message: "<img src=x onerror=alert(1)>" });
+    const body = await dashboard();
+    expect(body).not.toContain("<img src=x onerror=alert(1)>");
+    expect(body).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("renders an empty state rather than failing", async () => {
+    expect(await dashboard()).toContain("No contact messages");
   });
 });

@@ -63,6 +63,7 @@ import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { sendResetEmail, sendWelcomeEmail } from "./email.js";
 import { validateUsernameSync } from "./username-validator.js";
+import { logError, KINDS } from "./logger.js";
 
 /**
  * Build the auth instance against the Worker's D1 binding and env secrets.
@@ -164,13 +165,13 @@ export function getAuth(env) {
                 await runClaim(env, user.id, deviceId);
               } catch (err) {
                 // Don't fail signup if claim has a hiccup; log and move on.
-                console.error("[auth] claim on signup failed", err);
+                logError(KINDS.CLAIM_FAILED, err, { trigger: "signup", userId: user.id });
               }
             }
             try {
               await sendWelcomeEmail(env, { to: user.email });
             } catch (err) {
-              console.error("[auth] welcome email failed", err);
+              logError(KINDS.WELCOME_EMAIL_FAILED, err, { userId: user.id });
             }
           },
         },

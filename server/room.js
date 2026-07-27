@@ -2,6 +2,8 @@ import { Server } from 'partyserver';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
+import { containsProfanity } from '../worker/username-validator.js';
+import { logError, KINDS } from '../worker/logger.js';
 import { buildRaceResultPayload } from './room-stats.js';
 
 // Mirrors public/src/runner.js values; private rooms use 20 by default.
@@ -60,6 +62,9 @@ export function isValidHandle(s) {
   if (t.length === 0 || t.length > MAX_HANDLE_LEN) return false;
   // Reject control chars (incl. tab, newline) — keep punctuation/emoji.
   if (/[\x00-\x1f\x7f]/.test(t)) return false;
+  // Screened here rather than at each call site so every path that assigns a
+  // handle (hello, reconnect, set-handle) is covered by construction.
+  if (containsProfanity(t)) return false;
   return true;
 }
 
@@ -130,7 +135,7 @@ export class RaceRoom extends Server {
         case 'rematch': return await this.handleRematch(connection);
       }
     } catch (e) {
-      console.error('onMessage error', msg.type, e);
+      logError(KINDS.ROOM_MESSAGE, e, { roomId: this.name, msgType: msg.type });
     }
   }
 
@@ -280,6 +285,13 @@ export class RaceRoom extends Server {
   async handleSetHandle(connection, msg) {
     const player = this.playerFor(connection);
     if (!player) return this.sendError(connection, 'BAD_STATE', 'No player; send hello first');
+    // Checked ahead of isValidHandle purely for the error message: the screen
+    // lives inside isValidHandle so every assignment path is covered, but this
+    // is the one path with a user watching, and "must be 1-24 chars" is a
+    // baffling thing to tell someone whose handle was rejected as profane.
+    if (containsProfanity(msg.handle)) {
+      return this.sendError(connection, 'INVALID_INPUT', 'Please choose a different handle');
+    }
     if (!isValidHandle(msg.handle)) {
       return this.sendError(connection, 'INVALID_INPUT', 'Handle must be 1–24 chars, no control chars');
     }
@@ -437,13 +449,13 @@ export class RaceRoom extends Server {
       if (!p.deviceId) {
         // Defensive: shouldn't happen since the client always sends deviceId
         // in `hello`, but skip rather than violate the NOT NULL constraint.
-        console.error('persistRaceResults: skipping player with no deviceId', { playerId: p.id });
+        logError(KINDS.RACE_RESULT_DB, 'skipping player with no deviceId', { roomId: this.name, playerId: p.id, phase: 'precheck' });
         continue;
       }
       try {
         await insertRaceResult(this.env, buildRaceResultPayload(p, this.state));
       } catch (e) {
-        console.error('persistRaceResults: insert failed', { playerId: p.id, error: String(e) });
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: p.id, phase: 'insert' });
       }
     }
   }

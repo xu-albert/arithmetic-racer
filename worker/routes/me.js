@@ -13,6 +13,7 @@ import { db } from "../db.js";
 import { validateUsernameSync } from "../username-validator.js";
 import { readUserId } from "../session.js";
 import { runClaim } from "../auth.js";
+import { logError, KINDS } from "../logger.js";
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
 
@@ -163,7 +164,7 @@ export async function handlePostUsername(request, env) {
       await runClaim(env, userId, deviceId);
     } catch (err) {
       // Don't fail the rename on a claim hiccup; the user has their name set.
-      console.error("[me] claim on first-username-set failed", err);
+      logError(KINDS.CLAIM_FAILED, err, { trigger: "first_username_set", userId });
     }
   }
 
