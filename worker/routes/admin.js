@@ -289,6 +289,52 @@ export async function handleAdminUser(request, env) {
   return new Response(body, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
+/**
+ * Newest contact submissions. Capped rather than paginated — if the backlog
+ * ever exceeds this, the answer is to deal with it, not to scroll.
+ */
+async function loadContactMessages(env, limit = 50) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, email, message, kind, user_id, handled, created_at
+         FROM contact_messages
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?`
+    ).bind(limit).all();
+    return results ?? [];
+  } catch {
+    // The table arrives in migration 0005. An un-migrated database should
+    // degrade to an empty section rather than take down the whole dashboard.
+    return [];
+  }
+}
+
+function renderContactTable(messages, now) {
+  if (!messages.length) return raw(`<p class="empty">No contact messages.</p>`);
+  const body = messages
+    .map((m) => {
+      const whenIso = new Date(m.created_at).toISOString();
+      // escapeHtml on the message body is load-bearing, not cosmetic: this is
+      // arbitrary text a stranger typed into a public form, rendered into the
+      // operator's own authenticated page.
+      return `<tr class="${m.handled ? "contact-row handled" : "contact-row"}">
+      <td><span title="${escapeHtml(whenIso)}">${escapeHtml(relativeTime(now, m.created_at))}</span></td>
+      <td>${escapeHtml(m.kind)}</td>
+      <td>${escapeHtml(m.email ?? "—")}</td>
+      <td>${m.user_id ? "signed in" : "anonymous"}</td>
+      <td class="msg">${escapeHtml(m.message)}</td>
+      <td>${m.handled ? "handled" : "open"}</td>
+    </tr>`;
+    })
+    .join("");
+  return raw(`<table class="contact">
+    <thead>
+      <tr><th>When</th><th>Kind</th><th>Email</th><th>Who</th><th>Message</th><th>Status</th></tr>
+    </thead>
+    <tbody>${body}</tbody>
+  </table>`);
+}
+
 export async function handleAdminIndex(request, env) {
   const url = new URL(request.url);
   const gateResponse = checkAdminToken(url, env);
@@ -302,6 +348,7 @@ export async function handleAdminIndex(request, env) {
   const token = url.searchParams.get("token") ?? "";
   const cursorBase = `/admin/?token=${encodeURIComponent(token)}`;
   const rows = await loadRecentRaces(env, { before, beforeId });
+  const messages = await loadContactMessages(env);
 
   const body = html`
     <!doctype html>
@@ -317,6 +364,10 @@ export async function handleAdminIndex(request, env) {
           table.tiles .n { font-variant-numeric: tabular-nums; font-weight: 600; }
           table.tiles thead th { color: #888; font-weight: 500; }
           .avgs { color: #555; }
+          table.contact { border-collapse: collapse; width: 100%; }
+          table.contact th, table.contact td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; vertical-align: top; }
+          table.contact .msg { white-space: pre-wrap; word-break: break-word; max-width: 32rem; }
+          table.contact tr.handled { color: #999; }
         </style>
       </head>
       <body>
@@ -340,6 +391,8 @@ export async function handleAdminIndex(request, env) {
         <p>Races per day (last 30) ${renderSparkline(buckets)}</p>
         <h2>Recent races</h2>
         ${renderRacesTable(rows, now, token, cursorBase)}
+        <h2>Contact messages${messages.length ? ` (${messages.filter((m) => !m.handled).length} unhandled)` : ""}</h2>
+        ${renderContactTable(messages, now)}
       </body>
     </html>
   `;

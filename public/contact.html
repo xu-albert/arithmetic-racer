@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Contact — Arithmetic Racer</title>
+  <meta name="description" content="Get in touch about Arithmetic Racer, or request deletion of your data." />
+  <meta name="robots" content="noindex,nofollow" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏎️</text></svg>" />
+  <link rel="stylesheet" href="style-a.css" />
+  <style>
+    .doc {
+      max-width: 34rem;
+      margin: 1.5rem auto 3rem;
+      padding: 1.75rem clamp(1rem, 4vw, 2.25rem);
+      background: var(--card);
+      border-radius: 14px;
+      box-shadow: var(--card-shadow);
+      color: var(--navy-soft);
+      line-height: 1.6;
+    }
+    .doc h1 { color: var(--navy); margin: 0 0 0.5rem; }
+    .doc a { color: var(--car-blue); }
+    .doc .back { display: inline-block; margin-bottom: 1rem; color: var(--car-blue); }
+    .doc label { display: block; margin: 1.1rem 0 0.3rem; color: var(--navy); font-weight: 600; font-size: 0.95rem; }
+    .doc .hint { font-weight: 400; color: var(--navy-mute); font-size: 0.85rem; }
+    .doc input[type="email"],
+    .doc select,
+    .doc textarea {
+      width: 100%;
+      padding: 0.6rem 0.7rem;
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      font: inherit;
+      font-size: 1rem;
+      color: var(--navy-soft);
+      background: #fff;
+    }
+    .doc textarea { min-height: 8rem; resize: vertical; }
+    .doc button {
+      margin-top: 1.2rem;
+      width: 100%;
+      padding: 0.75rem 1rem;
+      font: inherit;
+      font-weight: 700;
+      font-size: 1rem;
+      color: #fff;
+      background: var(--green);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .doc button:hover:not(:disabled) { background: var(--green-hover); }
+    .doc button:disabled { opacity: 0.6; cursor: default; }
+    .form-note {
+      margin: 1rem 0 0;
+      padding: 0.7rem 0.85rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .form-note.error { display: block; background: #fdecea; color: #a3231a; }
+    .form-note.ok { display: block; background: #eaf7ea; color: #2f6d2f; }
+    .deletion-note {
+      margin: 0.6rem 0 0;
+      font-size: 0.85rem;
+      color: var(--navy-mute);
+      display: none;
+    }
+    .deletion-note.shown { display: block; }
+  </style>
+</head>
+<body>
+  <main class="doc">
+    <a class="back" href="/">&larr; Back to Arithmetic Racer</a>
+    <h1>Contact</h1>
+    <p>
+      Questions, bugs, or a request to delete your data. See the
+      <a href="/privacy">privacy page</a> for what is stored.
+    </p>
+
+    <form id="contact-form" novalidate>
+      <label for="kind">What is this about?</label>
+      <select id="kind" name="kind">
+        <option value="general">General — a question or a bug</option>
+        <option value="deletion">Deleting my data</option>
+      </select>
+
+      <p class="deletion-note" id="deletion-note">
+        Because a form submission cannot prove who sent it, we will contact you to
+        confirm you control the account before deleting anything. Please use the
+        email address on the account.
+      </p>
+
+      <label for="email">
+        Your email
+        <span class="hint">— optional, but we cannot reply without it</span>
+      </label>
+      <input type="email" id="email" name="email" autocomplete="email" placeholder="you@example.com" />
+
+      <label for="message">Message</label>
+      <textarea id="message" name="message" maxlength="5000" required></textarea>
+
+      <button type="submit" id="submit-btn">Send</button>
+      <p class="form-note" id="form-note" role="status" aria-live="polite"></p>
+    </form>
+  </main>
+
+  <script type="module">
+    const form = document.getElementById("contact-form");
+    const note = document.getElementById("form-note");
+    const btn = document.getElementById("submit-btn");
+    const kind = document.getElementById("kind");
+    const deletionNote = document.getElementById("deletion-note");
+
+    kind.addEventListener("change", () => {
+      deletionNote.classList.toggle("shown", kind.value === "deletion");
+    });
+
+    function show(kindClass, text) {
+      note.className = `form-note ${kindClass}`;
+      note.textContent = text;
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const message = document.getElementById("message").value.trim();
+      if (!message) return show("error", "Please write a message first.");
+
+      btn.disabled = true;
+      show("", "");
+      try {
+        const res = await fetch("/api/contact", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            message,
+            kind: kind.value,
+            email: document.getElementById("email").value.trim() || undefined,
+            device_id: localStorage.getItem("deviceId") || undefined,
+          }),
+        });
+        if (res.status === 429) {
+          show("error", "That's a few messages in a short time — please try again later.");
+          return;
+        }
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          const reason = {
+            empty_message: "Please write a message first.",
+            message_too_long: "That message is too long — please shorten it.",
+            invalid_email: "That email address doesn't look right.",
+          }[body.error];
+          show("error", reason ?? "Something went wrong sending that. Please try again.");
+          return;
+        }
+        form.reset();
+        deletionNote.classList.remove("shown");
+        show("ok", "Thanks — your message was received.");
+      } catch {
+        show("error", "Couldn't reach the server. Please check your connection and try again.");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

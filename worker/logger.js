@@ -22,6 +22,9 @@ export const KINDS = {
   EMAIL_SEND_FAILED: "email_send_failed",
   LOBBY_RELEASE_FAILED: "lobby_release_failed",
   MATCHMAKING_KV: "matchmaking_kv",
+  CONTACT_DB: "contact_db",
+  CONTACT_NOTIFY_FAILED: "contact_notify_failed",
+  CONTACT_RATE_LIMIT: "contact_rate_limit",
 };
 
 /**
