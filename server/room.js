@@ -285,6 +285,13 @@ export class RaceRoom extends Server {
   async handleSetHandle(connection, msg) {
     const player = this.playerFor(connection);
     if (!player) return this.sendError(connection, 'BAD_STATE', 'No player; send hello first');
+    // Checked ahead of isValidHandle purely for the error message: the screen
+    // lives inside isValidHandle so every assignment path is covered, but this
+    // is the one path with a user watching, and "must be 1-24 chars" is a
+    // baffling thing to tell someone whose handle was rejected as profane.
+    if (containsProfanity(msg.handle)) {
+      return this.sendError(connection, 'INVALID_INPUT', 'Please choose a different handle');
+    }
     if (!isValidHandle(msg.handle)) {
       return this.sendError(connection, 'INVALID_INPUT', 'Handle must be 1–24 chars, no control chars');
     }

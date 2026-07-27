@@ -147,6 +147,45 @@ describe("handleSetHandle — profanity", () => {
     });
   });
 
+  it("explains WHY a profane handle was rejected", async () => {
+    // Folding the screen into isValidHandle means the generic shape message
+    // would otherwise claim the handle was the wrong length.
+    await withRoom("profanity-msg-" + crypto.randomUUID(), async (room) => {
+      const conn = makeConn();
+      const playerId = crypto.randomUUID();
+      room.state.players.push({
+        id: playerId, handle: "BraveOtter", score: 0, attempts: 0,
+        currentStreak: 0, longestStreak: 0, deviceId: null, userId: null,
+      });
+      conn.state = { playerId };
+      room.playerFor = () => room.state.players.find((p) => p.id === playerId);
+
+      await room.handleSetHandle(conn, { type: "set-handle", handle: "shit" });
+
+      const [error] = conn.sent.filter((m) => m.type === "error");
+      expect(error.message).not.toMatch(/24 chars|control chars/);
+      expect(error.message).toMatch(/different handle/i);
+    });
+  });
+
+  it("still reports a shape problem as a shape problem", async () => {
+    await withRoom("shape-msg-" + crypto.randomUUID(), async (room) => {
+      const conn = makeConn();
+      const playerId = crypto.randomUUID();
+      room.state.players.push({
+        id: playerId, handle: "BraveOtter", score: 0, attempts: 0,
+        currentStreak: 0, longestStreak: 0, deviceId: null, userId: null,
+      });
+      conn.state = { playerId };
+      room.playerFor = () => room.state.players.find((p) => p.id === playerId);
+
+      await room.handleSetHandle(conn, { type: "set-handle", handle: "x".repeat(99) });
+
+      const [error] = conn.sent.filter((m) => m.type === "error");
+      expect(error.message).toMatch(/24 chars/);
+    });
+  });
+
   it("still accepts a clean handle change", async () => {
     await withRoom("profanity-ok-" + crypto.randomUUID(), async (room) => {
       const conn = makeConn();
