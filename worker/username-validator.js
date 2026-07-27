@@ -57,6 +57,45 @@ const matcher = new RegExpMatcher({
 });
 
 /**
+ * Profanity check with no format opinion, for callers that allow shapes
+ * `validateUsernameSync` would reject anyway — room handles permit
+ * punctuation, emoji, and 1-24 chars. Shares the matcher above so there's a
+ * single source of profanity truth and only one dataset build per isolate.
+ *
+ * Non-strings are treated as clean; shape validation belongs to the caller.
+ *
+ * @param {unknown} text
+ * @returns {boolean}
+ */
+export function containsProfanity(text) {
+  if (typeof text !== "string") return false;
+  // Checked in both forms deliberately. obscenity only matches terms starting
+  // at a word boundary (that's what keeps "assassin", "classic", "Scunthorpe"
+  // and "grass" from tripping it), so "SuperShitLord" slips through raw but is
+  // caught once camel case is split into words. The reverse is also true —
+  // leetspeak like "sh1t" matches raw but not after splitting — so neither
+  // form alone is sufficient.
+  return matcher.hasMatch(text) || matcher.hasMatch(splitWordBoundaries(text));
+}
+
+/**
+ * Insert spaces at camelCase and letter/digit transitions so run-together
+ * handles expose their word boundaries to the matcher.
+ *
+ * Known limitation: an all-lowercase run-on like "supershitlord" has no
+ * boundary to find and stays undetected. Catching it would mean substring
+ * matching, which reintroduces the Scunthorpe problem and would reject
+ * legitimate handles. Deliberate trade-off in favor of not blocking real names.
+ */
+function splitWordBoundaries(s) {
+  return s
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Za-z])([0-9])/g, "$1 $2")
+    .replace(/([0-9])([A-Za-z])/g, "$1 $2")
+    .replace(/[_\-.]+/g, " ");
+}
+
+/**
  * Run all pure-function checks. Does NOT check DB uniqueness.
  * @param {string} username
  * @returns {ValidationResult}

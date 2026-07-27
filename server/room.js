@@ -2,6 +2,7 @@ import { Server } from 'partyserver';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
+import { containsProfanity } from '../worker/username-validator.js';
 import { buildRaceResultPayload } from './room-stats.js';
 
 // Mirrors public/src/runner.js values; private rooms use 20 by default.
@@ -60,6 +61,9 @@ export function isValidHandle(s) {
   if (t.length === 0 || t.length > MAX_HANDLE_LEN) return false;
   // Reject control chars (incl. tab, newline) — keep punctuation/emoji.
   if (/[\x00-\x1f\x7f]/.test(t)) return false;
+  // Screened here rather than at each call site so every path that assigns a
+  // handle (hello, reconnect, set-handle) is covered by construction.
+  if (containsProfanity(t)) return false;
   return true;
 }
 
