@@ -23,7 +23,9 @@ beforeAll(async () => {
       "accuracy_pct REAL NOT NULL, " +
       "longest_streak INTEGER NOT NULL, " +
       "played_at INTEGER NOT NULL, " +
-      "room_id TEXT" +
+      "room_id TEXT, " +
+      "suspect INTEGER NOT NULL DEFAULT 0, " +
+      "suspect_reason TEXT" +
       ")"
   );
 });

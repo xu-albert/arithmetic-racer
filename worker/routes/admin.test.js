@@ -33,7 +33,9 @@ beforeAll(async () => {
       "avg_time_per_problem_ms INTEGER NOT NULL, " +
       "accuracy_pct REAL NOT NULL, " +
       "longest_streak INTEGER NOT NULL, " +
-      "played_at INTEGER NOT NULL" +
+      "played_at INTEGER NOT NULL, " +
+      "suspect INTEGER NOT NULL DEFAULT 0, " +
+      "suspect_reason TEXT" +
       ")"
   );
 });

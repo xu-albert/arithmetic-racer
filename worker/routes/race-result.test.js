@@ -30,7 +30,9 @@ beforeAll(async () => {
       "accuracy_pct REAL NOT NULL, " +
       "longest_streak INTEGER NOT NULL, " +
       "played_at INTEGER NOT NULL, " +
-      "room_id TEXT" +
+      "room_id TEXT, " +
+      "suspect INTEGER NOT NULL DEFAULT 0, " +
+      "suspect_reason TEXT" +
       ")"
   );
 });
@@ -111,6 +113,54 @@ describe("POST /api/race-result — happy path", () => {
     expect(results).toHaveLength(1);
     expect(results[0].finished).toBe(0);
     expect(results[0].finish_time_ms).toBeNull();
+  });
+});
+
+describe("POST /api/race-result — plausibility", () => {
+  it("stores an ordinary race unflagged", async () => {
+    const res = await handleRaceResult(makeRequest(makeBody()), env);
+    expect(res.status).toBe(200);
+
+    const { results } = await env.DB.prepare(
+      "SELECT suspect, suspect_reason FROM race_results"
+    ).all();
+    expect(results[0].suspect).toBe(0);
+    expect(results[0].suspect_reason).toBeNull();
+  });
+
+  it("flags an impossibly fast race but still persists it with 200", async () => {
+    // Rejecting would delete the one row worth examining, so this must be a
+    // normal successful write that merely carries a mark.
+    const res = await handleRaceResult(
+      makeRequest(makeBody({
+        problems_total: 10, problems_attempted: 10, problems_correct: 10,
+        accuracy_pct: 100, longest_streak: 10, finish_time_ms: 500,
+      })),
+      env
+    );
+    expect(res.status).toBe(200);
+
+    const { results } = await env.DB.prepare(
+      "SELECT suspect, suspect_reason, finish_time_ms FROM race_results"
+    ).all();
+    expect(results).toHaveLength(1);
+    expect(results[0].suspect).toBe(1);
+    expect(results[0].suspect_reason).toBe("impossibly_fast");
+    expect(results[0].finish_time_ms).toBe(500);
+  });
+
+  it("flags a race that ran implausibly long", async () => {
+    const res = await handleRaceResult(
+      makeRequest(makeBody({ finish_time_ms: 31 * 60_000 })),
+      env
+    );
+    expect(res.status).toBe(200);
+
+    const { results } = await env.DB.prepare(
+      "SELECT suspect, suspect_reason FROM race_results"
+    ).all();
+    expect(results[0].suspect).toBe(1);
+    expect(results[0].suspect_reason).toBe("implausibly_slow");
   });
 });
 

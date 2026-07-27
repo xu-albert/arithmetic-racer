@@ -496,7 +496,7 @@ describe("PublicRaceRoom — race_results persistence", () => {
         "problems_total INTEGER NOT NULL DEFAULT 20, problems_correct INTEGER NOT NULL, " +
         "problems_attempted INTEGER NOT NULL, avg_time_per_problem_ms INTEGER NOT NULL, " +
         "accuracy_pct REAL NOT NULL, longest_streak INTEGER NOT NULL, played_at INTEGER NOT NULL, " +
-        "room_id TEXT)"
+        "room_id TEXT, suspect INTEGER NOT NULL DEFAULT 0, suspect_reason TEXT)"
     );
     await env.DB.exec("DELETE FROM race_results");
   });
