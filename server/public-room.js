@@ -17,6 +17,7 @@ import { generateSequence } from '../public/src/game.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
 import { buildRaceResultPayload } from './room-stats.js';
 import { difficultyFromRoomName } from './lobby-router.js';
+import { logError, KINDS } from '../worker/logger.js';
 
 export class PublicRaceRoom extends RaceRoom {
   static options = { hibernate: true };
@@ -207,7 +208,7 @@ export class PublicRaceRoom extends RaceRoom {
     this.broadcast(JSON.stringify({ type: 'finish', rankings }));
 
     // Fire-and-forget — DB error must not block the WS broadcast.
-    this.persistResults().catch((e) => console.error('persistResults failed', e));
+    this.persistResults().catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, phase: 'persist_results' }));
 
     // Strip bots from state.players so the human-count gates in onAlarm
     // (idle cleanup, 24h max-age) can actually fire once humans leave.
@@ -234,7 +235,7 @@ export class PublicRaceRoom extends RaceRoom {
       try {
         await insertRaceResult(this.env, payload);
       } catch (e) {
-        console.error('insertRaceResult failed for player', p.id, e);
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: p.id, phase: 'insert' });
       }
     }
   }
@@ -296,7 +297,7 @@ export class PublicRaceRoom extends RaceRoom {
       const stub = this.env.LobbyRouter.get(this.env.LobbyRouter.idFromName(this.state.difficulty));
       await stub.release(this.name);
     } catch (e) {
-      console.error('LobbyRouter.release failed', e);
+      logError(KINDS.LOBBY_RELEASE_FAILED, e, { roomId: this.name, difficulty: this.state.difficulty });
     }
   }
 }

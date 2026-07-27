@@ -26,7 +26,22 @@
 // The only file affected by these swaps is this one — auth.js calls
 // sendWelcomeEmail / sendResetEmail by name; the names didn't change.
 
+import { logError, logWarn, KINDS } from "./logger.js";
+
 const LOOPS_URL = "https://app.loops.so/api/v1/transactional";
+
+/**
+ * Reduce an address to `***@domain` for logging.
+ *
+ * Observability runs at head_sampling_rate 1, so anything logged here is
+ * retained wholesale. The domain is enough to tell "all Gmail deliveries are
+ * failing" from "one address is bad" without putting user addresses in logs.
+ */
+function redactEmail(address) {
+  if (typeof address !== "string") return null;
+  const at = address.lastIndexOf("@");
+  return at === -1 ? "***" : `***@${address.slice(at + 1)}`;
+}
 
 /**
  * Internal helper. Fires one transactional send.
@@ -37,11 +52,17 @@ const LOOPS_URL = "https://app.loops.so/api/v1/transactional";
  */
 export async function sendTransactional(env, { transactionalId, to, dataVariables = {} }) {
   if (!env.LOOPS_API_KEY) {
-    console.warn("[email] no LOOPS_API_KEY; would send:", { transactionalId, to });
+    logWarn(KINDS.EMAIL_SEND_FAILED, "no LOOPS_API_KEY configured", {
+      transactionalId,
+      to: redactEmail(to),
+      outcome: "skipped",
+    });
     return { skipped: true };
   }
   if (!transactionalId) {
-    console.error("[email] missing transactionalId; refusing to send");
+    logError(KINDS.EMAIL_SEND_FAILED, "missing transactionalId; refusing to send", {
+      to: redactEmail(to),
+    });
     return { ok: false, status: 0, reason: "no_template" };
   }
   const res = await fetch(LOOPS_URL, {
@@ -58,7 +79,12 @@ export async function sendTransactional(env, { transactionalId, to, dataVariable
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    console.error("[email] loops failed", res.status, text);
+    logError(KINDS.EMAIL_SEND_FAILED, `loops responded ${res.status}`, {
+      status: res.status,
+      body: text.slice(0, 500),
+      transactionalId,
+      to: redactEmail(to),
+    });
     return { ok: false, status: res.status };
   }
   return { ok: true };

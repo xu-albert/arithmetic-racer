@@ -7,6 +7,14 @@
     "directory": "./public",
     "binding": "ASSETS"
   },
+  // Ships Worker logs to Cloudflare's Observability backend so `kind`-tagged
+  // lines from worker/logger.js are queryable. Sampling is 1 (keep everything)
+  // because current traffic is low enough that full retention is cheap and
+  // partial sampling makes rare errors unfindable. Revisit if volume grows.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -43,6 +51,12 @@
       "assets": {
         "directory": "./public",
         "binding": "ASSETS"
+      },
+      // Named envs do not inherit top-level observability — it must be repeated
+      // here or preview deploys silently ship without logging.
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
       },
       "d1_databases": [
         {

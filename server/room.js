@@ -3,6 +3,7 @@ import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
 import { containsProfanity } from '../worker/username-validator.js';
+import { logError, KINDS } from '../worker/logger.js';
 import { buildRaceResultPayload } from './room-stats.js';
 
 // Mirrors public/src/runner.js values; private rooms use 20 by default.
@@ -134,7 +135,7 @@ export class RaceRoom extends Server {
         case 'rematch': return await this.handleRematch(connection);
       }
     } catch (e) {
-      console.error('onMessage error', msg.type, e);
+      logError(KINDS.ROOM_MESSAGE, e, { roomId: this.name, msgType: msg.type });
     }
   }
 
@@ -441,13 +442,13 @@ export class RaceRoom extends Server {
       if (!p.deviceId) {
         // Defensive: shouldn't happen since the client always sends deviceId
         // in `hello`, but skip rather than violate the NOT NULL constraint.
-        console.error('persistRaceResults: skipping player with no deviceId', { playerId: p.id });
+        logError(KINDS.RACE_RESULT_DB, 'skipping player with no deviceId', { roomId: this.name, playerId: p.id, phase: 'precheck' });
         continue;
       }
       try {
         await insertRaceResult(this.env, buildRaceResultPayload(p, this.state));
       } catch (e) {
-        console.error('persistRaceResults: insert failed', { playerId: p.id, error: String(e) });
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: p.id, phase: 'insert' });
       }
     }
   }
