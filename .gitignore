@@ -1,4 +1,6 @@
-node_modules/
+# No trailing slash: worktrees symlink node_modules rather than installing it,
+# and a `dir/` pattern matches real directories only, not symlinks to them.
+node_modules
 .env
 .env.local
 .DS_Store
@@ -11,6 +13,11 @@ dist/
 
 # Local-only design notes, plans, and case-study session logs
 docs/superpowers/
+
+# Claude Code worktrees live inside the working tree, so without this a
+# `git add -A` would commit an entire second checkout into the repo.
+.claude/worktrees/
+.claude/settings.local.json
 
 # Playwright MCP test artifacts (snapshots, screenshots, logs)
 .playwright-mcp/
