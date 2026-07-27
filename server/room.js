@@ -5,6 +5,7 @@ import { insertRaceResult } from '../worker/race-result-store.js';
 import { containsProfanity } from '../worker/username-validator.js';
 import { logError, KINDS } from '../worker/logger.js';
 import { buildRaceResultPayload } from './room-stats.js';
+import { createSocketLimiter } from './socket-limit.js';
 
 // Mirrors public/src/runner.js values; private rooms use 20 by default.
 export const COUNTDOWN_SECONDS = 3;
@@ -94,6 +95,10 @@ export class RaceRoom extends Server {
 
   state = null;
 
+  // In-memory, per-instance. Not persisted and not shared across rooms: a
+  // flood only ever needs to be stopped in the room receiving it.
+  socketLimiter = createSocketLimiter();
+
   freshState(id) {
     return freshState(id);
   }
@@ -116,6 +121,12 @@ export class RaceRoom extends Server {
   }
 
   async onMessage(connection, raw) {
+    // Before parsing: a flood is cheapest to drop when we do no work on it.
+    // Dropped silently rather than answered with an error — replying would
+    // hand a flooding socket a response per message, which is the opposite of
+    // what a limiter is for. A real client never reaches this rate.
+    if (!this.socketLimiter.allow(connection.id)) return;
+
     let msg;
     try {
       msg = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
@@ -140,6 +151,11 @@ export class RaceRoom extends Server {
   }
 
   async onClose(connection) {
+    // Release the bucket first — this must happen for every close, including
+    // the early returns below, or a long-lived room retains an entry per
+    // socket it has ever seen.
+    this.socketLimiter.forget(connection.id);
+
     const playerId = connection.state?.playerId;
     if (!playerId) return;
     const player = this.state.players.find((p) => p.id === playerId);
