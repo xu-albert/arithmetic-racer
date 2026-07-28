@@ -23,7 +23,18 @@ The preview deploy that Cloudflare Workers Builds runs on every PR
    npm run migrate:preview -- --file=migrations/0008_add_thing.sql
    ```
 
-Always run both. Skipping the preview one is the schema-drift trap this setup exists to prevent.
+3. Confirm both databases match this directory:
+
+   ```sh
+   npm run check:schema
+   ```
+
+Always run both applies. Skipping the preview one is the schema-drift trap this
+setup exists to prevent — and on 2026-07-28 it turned out **neither** database
+had received three of them. `npm run check:schema` replays `migrations/` into a
+scratch SQLite database and diffs the result against live prod and preview, so a
+migration that was written but never applied fails loudly instead of waiting to
+be discovered by a broken INSERT.
 
 > These migrations have no tracking table, so they are **not** idempotent — only
 > apply a file that hasn't been applied to that database yet.
