@@ -2,37 +2,29 @@
 // POST /api/race-result route handler and the RaceRoom Durable Object.
 // Runs under @cloudflare/vitest-pool-workers with a real D1 binding.
 
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { insertRaceResult } from "./race-result-store.js";
 
-beforeAll(async () => {
-  // Mirror of migrations/0002 + 0003. Keep in sync with the migrations dir.
-  await env.DB.exec(
-    "CREATE TABLE IF NOT EXISTS race_results (" +
-      "id TEXT PRIMARY KEY, " +
-      "user_id TEXT, " +
-      "device_id TEXT NOT NULL, " +
-      "difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','medium','hard')), " +
-      "finished INTEGER NOT NULL CHECK (finished IN (0,1)), " +
-      "finish_time_ms INTEGER, " +
-      "problems_total INTEGER NOT NULL DEFAULT 20, " +
-      "problems_correct INTEGER NOT NULL, " +
-      "problems_attempted INTEGER NOT NULL, " +
-      "avg_time_per_problem_ms INTEGER NOT NULL, " +
-      "accuracy_pct REAL NOT NULL, " +
-      "longest_streak INTEGER NOT NULL, " +
-      "played_at INTEGER NOT NULL, " +
-      "room_id TEXT, " +
-      "suspect INTEGER NOT NULL DEFAULT 0, " +
-      "suspect_reason TEXT" +
-      ")"
-  );
-});
+// Schema comes from migrations/ via worker/test-setup.js.
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
+  await env.DB.exec(`DELETE FROM "user"`);
 });
+
+// race_results.user_id carries an ON DELETE SET NULL foreign key to "user",
+// which D1 enforces. A test that sets user_id therefore has to have a real user
+// row to point at. The inline schema this file used to declare dropped the
+// constraint entirely, so it never noticed.
+async function seedUser(id) {
+  await env.DB.prepare(
+    `INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt)
+     VALUES (?, ?, ?, 1, datetime('now'), datetime('now'))`
+  )
+    .bind(id, `name-${id}`, `${id}@example.test`)
+    .run();
+}
 
 function basePayload(overrides = {}) {
   return {
@@ -70,6 +62,7 @@ describe("insertRaceResult", () => {
   });
 
   it("inserts a room+logged-in row with both user_id and room_id set", async () => {
+    await seedUser("user-abc");
     const { id } = await insertRaceResult(env, basePayload({
       user_id: "user-abc",
       room_id: "brave-otter-eel",
