@@ -6,17 +6,6 @@ describe("matchmaking e2e — POST → router → PublicRaceRoom", () => {
   beforeEach(async () => {
     const list = await env.MATCHMAKING_LIMITS.list();
     for (const k of list.keys) await env.MATCHMAKING_LIMITS.delete(k.name);
-    // Ensure race_results table exists with room_id column (for any DB checks).
-    await env.DB.exec(
-      "CREATE TABLE IF NOT EXISTS race_results (" +
-        "id TEXT PRIMARY KEY, user_id TEXT, device_id TEXT NOT NULL, " +
-        "difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','medium','hard')), " +
-        "finished INTEGER NOT NULL CHECK (finished IN (0,1)), finish_time_ms INTEGER, " +
-        "problems_total INTEGER NOT NULL DEFAULT 20, problems_correct INTEGER NOT NULL, " +
-        "problems_attempted INTEGER NOT NULL, avg_time_per_problem_ms INTEGER NOT NULL, " +
-        "accuracy_pct REAL NOT NULL, longest_streak INTEGER NOT NULL, played_at INTEGER NOT NULL, " +
-        "room_id TEXT, suspect INTEGER NOT NULL DEFAULT 0, suspect_reason TEXT)"
-    );
     await env.DB.exec("DELETE FROM race_results");
   });
 

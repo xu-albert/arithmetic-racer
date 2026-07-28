@@ -1,6 +1,6 @@
 // Tests for the admin dashboard route. Runs under @cloudflare/vitest-pool-workers.
-// Each test file gets its own ephemeral D1; we apply the user + race_results DDL
-// inline in beforeAll (same pattern as me.test.js).
+// Each test file gets its own ephemeral D1; the schema is applied from
+// migrations/ by worker/test-setup.js.
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vitest";
 import { env } from "cloudflare:test";
@@ -20,9 +20,9 @@ const CONTACT_MESSAGES_DDL =
   "context TEXT" +
   ")";
 
-// The same table as 0005 left it: no `context`, and a `kind` CHECK that
-// predates 'bug'. This is the shape a database is in until 0007 is applied.
-const CONTACT_MESSAGES_DDL_0005 =
+// The same table as 0006 left it: no `context`, and a `kind` CHECK that
+// predates 'bug'. This is the shape a database is in until 0008 is applied.
+const CONTACT_MESSAGES_DDL_0006 =
   "CREATE TABLE IF NOT EXISTS contact_messages (" +
   "id TEXT PRIMARY KEY, " +
   "email TEXT, " +
@@ -33,46 +33,6 @@ const CONTACT_MESSAGES_DDL_0005 =
   "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
   "created_at INTEGER NOT NULL" +
   ")";
-
-beforeAll(async () => {
-  await env.DB.exec(
-    `CREATE TABLE IF NOT EXISTS "user" (` +
-      `"id" text not null primary key, ` +
-      `"name" text not null, ` +
-      `"email" text not null unique, ` +
-      `"emailVerified" integer not null, ` +
-      `"image" text, ` +
-      `"createdAt" date not null, ` +
-      `"updatedAt" date not null, ` +
-      `"username" text unique` +
-      `)`
-  );
-  await env.DB.exec(
-    "CREATE TABLE IF NOT EXISTS race_results (" +
-      "id TEXT PRIMARY KEY, " +
-      `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
-      "device_id TEXT NOT NULL, " +
-      "difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','medium','hard')), " +
-      "finished INTEGER NOT NULL CHECK (finished IN (0,1)), " +
-      "finish_time_ms INTEGER, " +
-      "problems_total INTEGER NOT NULL DEFAULT 20, " +
-      "problems_correct INTEGER NOT NULL, " +
-      "problems_attempted INTEGER NOT NULL, " +
-      "avg_time_per_problem_ms INTEGER NOT NULL, " +
-      "accuracy_pct REAL NOT NULL, " +
-      "longest_streak INTEGER NOT NULL, " +
-      "played_at INTEGER NOT NULL, " +
-      "suspect INTEGER NOT NULL DEFAULT 0, " +
-      "suspect_reason TEXT" +
-      ")"
-  );
-  // Mirror of migrations/0005_contact_messages.sql as amended by
-  // migrations/0007_contact_bug_reports.sql. The migration files themselves are
-  // executed and asserted on in migrations/migrations.test.js. It lives at file
-  // level, not inside the first describe that needs it, so every suite in this
-  // file still has its schema when run on its own (`vitest -t "…"`).
-  await env.DB.exec(CONTACT_MESSAGES_DDL);
-});
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
@@ -803,7 +763,7 @@ describe("admin dashboard — captured context", () => {
   });
 });
 
-describe("admin dashboard — database still on the pre-0007 schema", () => {
+describe("admin dashboard — database still on the pre-0008 schema", () => {
   // Migrations are applied by hand while the Worker deploys from a push, so
   // this dashboard can run against a database that has no `context` column. It
   // is the only place contact messages are ever read, so it has to keep listing
@@ -813,7 +773,7 @@ describe("admin dashboard — database still on the pre-0007 schema", () => {
     await env.DB.exec(ddl);
   };
 
-  beforeAll(() => rebuild(CONTACT_MESSAGES_DDL_0005));
+  beforeAll(() => rebuild(CONTACT_MESSAGES_DDL_0006));
   afterAll(() => rebuild(CONTACT_MESSAGES_DDL));
 
   async function insertLegacy({
@@ -878,7 +838,7 @@ describe("admin dashboard — database still on the pre-0007 schema", () => {
       expect(body).toContain("No contact messages");
       expect(body).toContain("Recent races");
     } finally {
-      await env.DB.exec(CONTACT_MESSAGES_DDL_0005);
+      await env.DB.exec(CONTACT_MESSAGES_DDL_0006);
     }
   });
 });
