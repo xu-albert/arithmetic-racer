@@ -1,44 +1,10 @@
 // Tests for the admin dashboard route. Runs under @cloudflare/vitest-pool-workers.
-// Each test file gets its own ephemeral D1; we apply the user + race_results DDL
-// inline in beforeAll (same pattern as me.test.js).
+// Each test file gets its own ephemeral D1; the schema is applied from
+// migrations/ by worker/test-setup.js.
 
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { timingSafeEqualStrings, handleAdminIndex } from "./admin.js";
-
-beforeAll(async () => {
-  await env.DB.exec(
-    `CREATE TABLE IF NOT EXISTS "user" (` +
-      `"id" text not null primary key, ` +
-      `"name" text not null, ` +
-      `"email" text not null unique, ` +
-      `"emailVerified" integer not null, ` +
-      `"image" text, ` +
-      `"createdAt" date not null, ` +
-      `"updatedAt" date not null, ` +
-      `"username" text unique` +
-      `)`
-  );
-  await env.DB.exec(
-    "CREATE TABLE IF NOT EXISTS race_results (" +
-      "id TEXT PRIMARY KEY, " +
-      `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
-      "device_id TEXT NOT NULL, " +
-      "difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','medium','hard')), " +
-      "finished INTEGER NOT NULL CHECK (finished IN (0,1)), " +
-      "finish_time_ms INTEGER, " +
-      "problems_total INTEGER NOT NULL DEFAULT 20, " +
-      "problems_correct INTEGER NOT NULL, " +
-      "problems_attempted INTEGER NOT NULL, " +
-      "avg_time_per_problem_ms INTEGER NOT NULL, " +
-      "accuracy_pct REAL NOT NULL, " +
-      "longest_streak INTEGER NOT NULL, " +
-      "played_at INTEGER NOT NULL, " +
-      "suspect INTEGER NOT NULL DEFAULT 0, " +
-      "suspect_reason TEXT" +
-      ")"
-  );
-});
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
@@ -363,22 +329,6 @@ describe("per-user drill-down", () => {
 });
 
 describe("admin dashboard — contact messages", () => {
-  beforeAll(async () => {
-    // Mirror of migrations/0005_contact_messages.sql.
-    await env.DB.exec(
-      "CREATE TABLE IF NOT EXISTS contact_messages (" +
-        "id TEXT PRIMARY KEY, " +
-        "email TEXT, " +
-        "message TEXT NOT NULL, " +
-        "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion')), " +
-        "user_id TEXT, " +
-        "device_id TEXT, " +
-        "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
-        "created_at INTEGER NOT NULL" +
-        ")"
-    );
-  });
-
   beforeEach(async () => {
     await env.DB.exec("DELETE FROM contact_messages");
   });

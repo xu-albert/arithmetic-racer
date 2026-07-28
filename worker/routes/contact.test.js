@@ -1,27 +1,11 @@
 // Tests for POST /api/contact.
 //
-// Mirrors migrations/0005_contact_messages.sql inline, matching the pattern in
-// race-result.test.js (vitest-pool-workers gives an ephemeral in-memory D1 per
-// test file). If that migration changes, update this block to match.
+// vitest-pool-workers gives an ephemeral in-memory D1 per test file; the schema
+// is applied from migrations/ by worker/test-setup.js.
 
-import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { env } from "cloudflare:test";
 import { handleContact } from "./contact.js";
-
-beforeAll(async () => {
-  await env.DB.exec(
-    "CREATE TABLE IF NOT EXISTS contact_messages (" +
-      "id TEXT PRIMARY KEY, " +
-      "email TEXT, " +
-      "message TEXT NOT NULL, " +
-      "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion')), " +
-      "user_id TEXT, " +
-      "device_id TEXT, " +
-      "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
-      "created_at INTEGER NOT NULL" +
-      ")"
-  );
-});
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM contact_messages");

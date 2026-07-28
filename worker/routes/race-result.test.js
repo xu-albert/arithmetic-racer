@@ -1,41 +1,12 @@
 // Tests for POST /api/race-result. Runs under @cloudflare/vitest-pool-workers,
 // which gives us a real D1 binding via `import { env } from "cloudflare:test"`.
 //
-// vitest-pool-workers ships an ephemeral in-memory D1 per test file, so we
-// create the race_results table once with `beforeAll` (mirroring
-// migrations/0002_race_results.sql) and clear it between tests. Keeping the
-// schema inline avoids reaching into vitest.config.js (outside this agent's
-// allowlist). The integrator can later replace this with `applyD1Migrations`
-// driven from the migrations directory once a shared test setup exists.
+// vitest-pool-workers ships an ephemeral in-memory D1 per test file; the schema
+// is applied from migrations/ by worker/test-setup.js.
 
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { handleRaceResult } from "./race-result.js";
-
-beforeAll(async () => {
-  // Mirror of migrations/0002_race_results.sql. If that migration changes,
-  // update this block to match.
-  await env.DB.exec(
-    "CREATE TABLE IF NOT EXISTS race_results (" +
-      "id TEXT PRIMARY KEY, " +
-      "user_id TEXT, " +
-      "device_id TEXT NOT NULL, " +
-      "difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','medium','hard')), " +
-      "finished INTEGER NOT NULL CHECK (finished IN (0,1)), " +
-      "finish_time_ms INTEGER, " +
-      "problems_total INTEGER NOT NULL DEFAULT 20, " +
-      "problems_correct INTEGER NOT NULL, " +
-      "problems_attempted INTEGER NOT NULL, " +
-      "avg_time_per_problem_ms INTEGER NOT NULL, " +
-      "accuracy_pct REAL NOT NULL, " +
-      "longest_streak INTEGER NOT NULL, " +
-      "played_at INTEGER NOT NULL, " +
-      "room_id TEXT, " +
-      "suspect INTEGER NOT NULL DEFAULT 0, " +
-      "suspect_reason TEXT" +
-      ")"
-  );
-});
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
