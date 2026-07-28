@@ -25,6 +25,8 @@ export const KINDS = {
   CONTACT_DB: "contact_db",
   CONTACT_NOTIFY_FAILED: "contact_notify_failed",
   CONTACT_RATE_LIMIT: "contact_rate_limit",
+  RATE_LIMIT_UNAVAILABLE: "rate_limit_unavailable",
+  RACE_RESULT_RATE_LIMITED: "race_result_rate_limited",
 };
 
 /**
