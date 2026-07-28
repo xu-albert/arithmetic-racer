@@ -11,7 +11,7 @@
 // semantics under test (CHECK constraints, index survival, foreign keys) are
 // the same engine's.
 //
-// The point is the 0007 rebuild: SQLite cannot widen a CHECK constraint in
+// The point is the 0008 rebuild: SQLite cannot widen a CHECK constraint in
 // place, and the create/copy/drop/rename dance silently drops indexes and
 // foreign keys if you let it.
 
@@ -83,25 +83,30 @@ describe("migrations apply", () => {
     assert.doesNotThrow(() => migrate().close());
   });
 
-  test("0007 applies after the file that creates the table it rebuilds", () => {
-    // Filename order is the apply order, and 0007 rebuilds the table 0005
+  test("0008 applies after the file that creates the table it rebuilds", () => {
+    // Filename order is the apply order, and 0008 rebuilds the table 0006
     // creates, so all this needs to pin is that it still lands after it — and
-    // after 0006, the highest number on main when it was written. A concurrent
-    // branch renumbers migration files; if that lands and drags 0007 above its
-    // prerequisite, this fails. It deliberately says nothing about which file
-    // is *last*, so the next unrelated migration does not break the suite.
+    // after 0007, the highest number it was renumbered past. This file was
+    // `0007_contact_bug_reports.sql` until the gapless renumber (see
+    // README.md); any future renumber that drags it above its prerequisite
+    // fails here. It deliberately says nothing about which file is *last*, so
+    // the next unrelated migration does not break the suite.
     //
-    // Uniqueness of the numeric prefix is not the invariant: 0003 is already
-    // two independent index migrations, and either order is fine there.
+    // The missing-file case is asserted explicitly: indexOf returns -1 for a
+    // name that no longer exists, which would satisfy every `<` below and turn
+    // this test vacuously green after a rename.
     const files = migrationFiles();
-    const at = (name) => files.indexOf(name);
-    assert.ok(at("0007_contact_bug_reports.sql") !== -1);
-    assert.ok(at("0005_contact_messages.sql") < at("0007_contact_bug_reports.sql"));
-    assert.ok(at("0006_race_results_suspect.sql") < at("0007_contact_bug_reports.sql"));
+    const at = (name) => {
+      const i = files.indexOf(name);
+      assert.notEqual(i, -1, `${name} is missing — was it renumbered?`);
+      return i;
+    };
+    assert.ok(at("0006_contact_messages.sql") < at("0008_contact_bug_reports.sql"));
+    assert.ok(at("0007_race_results_suspect.sql") < at("0008_contact_bug_reports.sql"));
   });
 });
 
-describe("0007 — kind constraint", () => {
+describe("0008 — kind constraint", () => {
   let db;
   before(() => { db = migrate(); });
 
@@ -111,7 +116,7 @@ describe("0007 — kind constraint", () => {
     assert.equal(row.kind, "bug");
   });
 
-  test("still accepts the kinds from 0005", () => {
+  test("still accepts the kinds from 0006", () => {
     assert.doesNotThrow(() => insertMessage(db, { kind: "general" }));
     assert.doesNotThrow(() => insertMessage(db, { kind: "deletion" }));
   });
@@ -140,7 +145,7 @@ describe("0007 — kind constraint", () => {
   });
 });
 
-describe("0007 — context column", () => {
+describe("0008 — context column", () => {
   let db;
   before(() => { db = migrate(); });
 
@@ -169,13 +174,13 @@ describe("0007 — context column", () => {
   });
 });
 
-describe("0007 — the rebuild preserves what 0005 created", () => {
+describe("0008 — the rebuild preserves what 0006 created", () => {
   test("carries existing rows across unchanged", () => {
-    // Seeded after 0005/0006 but before 0007, so the rows go through the
+    // Seeded after 0006/0007 but before 0008, so the rows go through the
     // create/copy/drop/rename for real rather than being written afterwards.
     let seeded;
     const db = migrate((d, file) => {
-      if (file !== "0006_race_results_suspect.sql") return;
+      if (file !== "0007_race_results_suspect.sql") return;
       d.prepare(
         `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", username)
          VALUES ('u-1', 'Ada', 'ada@example.test', 0, '2026-01-01', '2026-01-01', 'ada')`

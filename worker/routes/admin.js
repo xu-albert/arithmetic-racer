@@ -328,7 +328,7 @@ export async function handleAdminUser(request, env) {
 }
 
 // Kinds the contact table can be filtered to, and their dashboard labels.
-// Matches the CHECK constraint in migrations/0007_contact_bug_reports.sql; an
+// Matches the CHECK constraint in migrations/0008_contact_bug_reports.sql; an
 // unknown ?kind= falls back to showing everything rather than an empty table.
 const CONTACT_KINDS = [
   ["bug", "Bug reports"],
