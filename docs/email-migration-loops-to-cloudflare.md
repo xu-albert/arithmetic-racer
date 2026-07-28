@@ -2,6 +2,43 @@
 
 Handoff notes. Everything you need to pick this up cold.
 
+## Status: BLOCKED on Workers Paid (checked 2026-07-28)
+
+**Email Sending requires the Workers Paid plan ($5/mo). This account is on the free plan, so no
+code in this document can be exercised yet.** Migration deliberately paused — nothing has been
+changed in `worker/`. Loops remains live and untouched.
+
+Evidence, so the next session doesn't re-derive it:
+
+- `npx wrangler email sending list` → `Unauthorized [code: 2036]`. So does
+  `npx wrangler email sending dns get arithmeticracer.com`. 2036 is *authenticated but not
+  entitled* — the zone resolves fine, the email endpoints refuse.
+- Not a stale token scope: `wrangler whoami` shows `email_sending (write)`, and a second,
+  independent credential (the Cloudflare MCP token) hits the same 2036 on
+  `/accounts/{id}/email/sending/zones`.
+- `/user/subscriptions` and `/accounts/{id}/subscriptions` return exactly one subscription — a
+  **free zone plan on `albertxu.com`**. There is no Workers Paid entry on the account.
+- Docs confirm the rule: *"Sending to arbitrary recipients requires the Workers Paid plan. Sending
+  to verified destination addresses in your account is free on all plans."*
+
+**To unblock:** enable Workers Paid in the dashboard, then re-run
+`npx wrangler email sending list`. If it returns a (possibly empty) list instead of 2036, the
+entitlement is live and the plan below is good to execute as written.
+
+### What the free plan *would* allow
+
+Only sends to addresses already verified as Email Routing destinations. That covers exactly one of
+the three paths:
+
+| Path | Recipient | Free plan? |
+|---|---|---|
+| Welcome | arbitrary new user | ❌ needs Paid |
+| Password reset | arbitrary user | ❌ needs Paid |
+| Contact notification | `CONTACT_EMAIL` (own address) | ✅ verifiable destination |
+
+Migrating contact alone was considered and rejected: it leaves auth mail on Loops, so the project
+runs **two** email providers instead of one — the opposite of this migration's stated goal.
+
 ## Why
 
 Transactional email is scattered across projects — this Worker is on Loops, albertxu.com is on
@@ -19,6 +56,12 @@ Resend Pro or run a service per project, consolidate on one provider.
   200/day to verified addresses only.
 - **Cost.** 3,000 emails/month included on Workers Paid. SES would be ~$0.25/mo — the price gap is
   irrelevant at this volume, so it wasn't the deciding factor.
+  **Correction (2026-07-28):** this bullet quietly assumed the account was already on Workers Paid.
+  It isn't. The real marginal cost of choosing Cloudflare is **$5/mo**, versus ~$0.25/mo for SES
+  and $0 for staying on Loops. That doesn't overturn the decision — the other four reasons
+  (no credentials, automatic bounce handling, DNS already here, no review wait) stand on their own,
+  and $5/mo buys Workers Paid generally, not just email. But the cost comparison as originally
+  written was wrong and shouldn't be cited as-is.
 
 Known tradeoff: Email Service has been in **public beta since April 2026**. That risk is bounded —
 email is confined to `worker/email.js`, which has already survived Resend → Brevo → Loops without
@@ -67,10 +110,15 @@ No API key, no `authorization` header, no `transactionalId`.
 
 ## Steps
 
-1. **`wrangler login`** — there's no wrangler config on this machine today.
+0. **Enable Workers Paid.** New blocking prerequisite — see Status above. Everything below fails
+   with 2036 until this is done.
+1. ~~**`wrangler login`**~~ — **done.** Already authenticated as `albertwxu@gmail.com`, account
+   `5e7b2cb30cead8c65603f3c9a048b862`, with `email_sending (write)` in scope. Nothing to do here.
 2. **Onboard the domain:** `npx wrangler email sending enable arithmeticracer.com`.
    Auto-writes SPF + DKIM into the Cloudflare zone. Confirm with
    `npx wrangler email sending dns get arithmeticracer.com`. Propagation is 5–15 min.
+   Local wrangler is 4.88.0 and warns these are open-beta commands; 4.114.0 is available if they
+   misbehave.
 3. **Add the binding** to `wrangler.jsonc` — see the preview-env gotcha below.
 4. **Port the three templates into code.** They currently live in the Loops dashboard. Either
    export the HTML from Loops first or write fresh ones. See "Templates move into code" below.
@@ -151,8 +199,11 @@ bite here. New accounts start on a conservative daily quota that scales with rep
 
 - **Reuse the Loops HTML or rewrite?** Rewriting is likely faster than exporting, and the current
   templates are plain (welcome has no variables at all).
-- **Sender address.** `noreply@arithmeticracer.com` is the assumed default — worth considering a
-  replyable address for contact notifications specifically.
+- ~~**Sender address.**~~ **Decided 2026-07-28:** all three emails send from
+  `noreply@arithmeticracer.com` with **no reply-to**, including contact notifications. A
+  reply-to pointing at the form submitter was considered and declined — it matches current Loops
+  behaviour exactly, and the notification carries no body anyway, so replying from the inbox was
+  never going to be the workflow. Deletion requests still get handled through admin.
 - **Do `albertxu.com` at the same time?** It's a single `fetch` in
   `src/app/api/contact/route.ts` there. Doing both together means onboarding two domains in one
   sitting. Note the REST API uses `address` (not `email`) and `reply_to` (not `replyTo`) — it
