@@ -79,8 +79,8 @@ function composeBugMessage({ whatHappened, expected, where, steps }) {
  * anyone chose to put in it. Every key the descriptor does not declare as
  * client-supplied is dropped — no cookies, no tokens, no auth headers, no
  * localStorage — and declaring one is a deliberate decision that it is safe to
- * capture *and* an undertaking to show it to the reporter, since the form's
- * disclosure is generated from the same list.
+ * capture *and* an undertaking to account for it on the privacy page, which a
+ * guard in public/src/bug-report-context.test.js holds to this same list.
  *
  * Anything the server can determine itself — user agent, whether the sender is
  * signed in, which version is deployed — is taken from the server rather than

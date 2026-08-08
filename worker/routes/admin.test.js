@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
-import { timingSafeEqualStrings, handleAdminIndex } from "./admin.js";
+import { timingSafeEqualStrings, handleAdminIndex, html, raw } from "./admin.js";
 
 beforeAll(async () => {
   await env.DB.exec(
@@ -431,12 +431,36 @@ describe("admin dashboard — contact messages", () => {
   });
 
   it("renders an empty state rather than failing", async () => {
-    const body = await dashboard();
-    expect(body).toContain("No contact messages");
-    // No interpolated value may reach the page as a stringified object; the
-    // html() tag has to escape or emit raw, never fall through to "[object
-    // Object]".
-    expect(body).not.toContain("[object Object]");
+    expect(await dashboard()).toContain("No contact messages");
+  });
+});
+
+describe("html() template tag", () => {
+  it("renders an empty raw value as nothing", () => {
+    // raw("") is a legitimate "render nothing". Gating the raw branch on the
+    // truthiness of __html instead of its type sends the wrapper object down
+    // the escaping path, which stringifies it into the page as
+    // "[object Object]" — and zero-of-something is the ordinary case, so that
+    // lands on a normal load rather than an exotic one.
+    expect(html`<h1>x</h1>${raw("")}<table>`).toBe("<h1>x</h1><table>");
+  });
+
+  it("emits a non-empty raw value unescaped", () => {
+    expect(html`<p>${raw("<b>hi</b>")}</p>`).toBe("<p><b>hi</b></p>");
+  });
+
+  it("escapes an ordinary interpolated value", () => {
+    expect(html`${"<img src=x onerror=alert(1)>"}`).toBe(
+      "&lt;img src=x onerror=alert(1)&gt;"
+    );
+  });
+
+  it("renders null and undefined as nothing", () => {
+    expect(html`a${null}b${undefined}c`).toBe("abc");
+  });
+
+  it("joins an interpolated array without separators", () => {
+    expect(html`<ul>${["<li>a</li>", "<li>b</li>"]}</ul>`).toBe("<ul><li>a</li><li>b</li></ul>");
   });
 });
 

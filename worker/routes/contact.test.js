@@ -453,10 +453,11 @@ describe("POST /api/contact — captured context", () => {
   });
 
   it("stores exactly the fields the shared descriptor declares", async () => {
-    // The descriptor is what the form's disclosure is generated from, so a
-    // field stored but not declared is a field captured without telling the
-    // reporter — and a field declared but not stored is a promise the
-    // disclosure makes and the server does not keep. Both must fail here.
+    // The descriptor is the list the privacy page is held to by the guard in
+    // public/src/bug-report-context.test.js, so a field stored but not declared
+    // is a field captured with no account of it anywhere — and a field declared
+    // but not stored is a claim that page makes and the server does not keep.
+    // Both must fail here.
     const declared = BUG_CONTEXT_FIELDS.filter((f) => f.storedIn === "context");
     const sent = Object.fromEntries(
       declared

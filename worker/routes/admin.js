@@ -37,7 +37,7 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-function html(strings, ...values) {
+export function html(strings, ...values) {
   let out = "";
   for (let i = 0; i < strings.length; i++) {
     out += strings[i];
@@ -54,7 +54,7 @@ function html(strings, ...values) {
   return out;
 }
 
-function raw(s) {
+export function raw(s) {
   return { __html: s };
 }
 
