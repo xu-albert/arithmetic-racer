@@ -76,6 +76,12 @@ npx wrangler deploy --env=""
 
 This deploys to the `arithmetic-racer` Worker, live at `https://arithmetic-racer.albertwxu.workers.dev`. There is currently no isolated preview environment (Cloudflare's Workers Builds CI overrides the `--env preview` name). If branch-isolated previews are needed, set up a second Workers Build connected to the same repo, scoped to a separate Worker (e.g. `arithmetic-racer-preview`) — see notes in `wrangler.jsonc`.
 
+### Why `.nvmrc` pins Node 22
+
+Workers Builds runs `npm clean-install` before the deploy command, and on 2026-07-30 Cloudflare moved its default Node from 22 to 24.18.0. The npm bundled with Node 24 fails `npm ci` on our `package-lock.json`, because that lock only carries the `darwin-arm64` optional binaries for `esbuild`, `lightningcss`, `@rolldown/binding-*`, `sharp` and `workerd` — the other ~90 platform packages are declared as optional edges with no lock entry. Older npm skipped those edges; the newer one reports them as `Missing: … from lock file` and refuses to install.
+
+`.nvmrc` pins `22.23.2`, which the build image preinstalls, so the build environment stops drifting under us. The pin, not the lock, is the thing to revisit: completing the lock needs a full re-resolve, which pulls `wrangler` past 4.88 into a peer conflict between its `@cloudflare/workers-types@^5` requirement and our `^4`. Regenerate the lock as part of that upgrade, then drop this file.
+
 ## WebSocket protocol probes (server-side regression)
 
 Quick Node-based probes useful when changing `server/room.js`. Examples are in `/tmp/ws-*.mjs` from the Phase 6 build; the pattern is:
