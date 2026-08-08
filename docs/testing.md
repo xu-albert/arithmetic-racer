@@ -8,12 +8,11 @@ Manual + automated regression checks for Arithmetic Racer. Use this when verifyi
 npm test
 ```
 
-Two suites run back to back:
+Runs the pure-logic suites under `node --test` and the Worker / Durable Object / route suites under `vitest` — the `test` script in `package.json` is the authoritative list of what runs.
 
-- `node --test` over the pure modules (`public/src/*.test.js`, plus `server/room-stats.test.js`) — problem generation and validation, bot tier delays, the handle generator, and the shared room-config rules. `migrations/*.test.js` runs here too: it applies every migration to an in-memory SQLite database and asserts on the resulting schema (see `migrations/README.md`).
-- `vitest run` over the Worker and Durable Object tests (`worker/**`, `server/**`), which execute against real bindings via `@cloudflare/vitest-pool-workers`. `server/room-config.test.js` drives a full two-player private race inside a real `RaceRoom` DO.
+Worker tests get an ephemeral D1 whose schema is applied from `migrations/` (`worker/test-setup.js`), so a schema change belongs in a migration file, never inline in a test. The migration files themselves are applied to an in-memory SQLite database and asserted on by `migrations/migrations.test.js` under `node --test` — see [`migrations/README.md`](../migrations/README.md).
 
-The manual probes below still cover what the DO tests don't (real sockets, browser UI, timing).
+The browser flows and WebSocket probes below are not automated; run them by hand.
 
 ## Local dev
 
@@ -74,7 +73,7 @@ For browser tests open `http://localhost:8787` in two different browsers (or one
 npx wrangler deploy --env=""
 ```
 
-This deploys to the `arithmetic-racer` Worker, live at `https://arithmetic-racer.albertwxu.workers.dev`. There is currently no isolated preview environment (Cloudflare's Workers Builds CI overrides the `--env preview` name). If branch-isolated previews are needed, set up a second Workers Build connected to the same repo, scoped to a separate Worker (e.g. `arithmetic-racer-preview`) — see notes in `wrangler.jsonc`.
+This deploys to the `arithmetic-racer` Worker, live at `https://arithmetic-racer.albertwxu.workers.dev`. A separate preview Worker and D1 database (`arithmetic-racer-preview`) is configured under `env.preview` in `wrangler.jsonc`; its schema has to stay in lockstep with production — see [`migrations/README.md`](../migrations/README.md).
 
 ### Why `.nvmrc` pins Node 22
 
