@@ -13,7 +13,10 @@ on:
     branches: [main]
     paths:
       - "migrations/**"
-      - "scripts/check-schema-drift.mjs"
+      # The whole directory, not just check-schema-drift.mjs: the checker
+      # already imports sql-constraints.mjs, and naming files one by one means
+      # the next split silently stops re-running the check.
+      - "scripts/**"
       - ".github/workflows/schema-drift.yml"
   schedule:
     - cron: "17 9 * * *"

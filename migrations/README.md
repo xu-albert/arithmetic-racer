@@ -46,10 +46,13 @@ be discovered by a broken INSERT.
 ### Checked automatically
 
 `.github/workflows/schema-drift.yml` runs `npm run check:schema` on every push
-to `main` that touches `migrations/`, on a daily schedule, and on demand via
-**Run workflow**. It is deliberately *not* wired to `pull_request`: a PR that
-adds a migration hasn't had it applied to the live databases yet, so a PR
-trigger would fail the PRs doing the right thing.
+to `main` that touches `migrations/`, `scripts/` or the workflow itself, on a
+daily schedule, and on demand via **Run workflow**. (The path filter names all
+of `scripts/`, not just the checker's entry point, so splitting the checker into
+another module cannot silently stop the check from running.) It is deliberately
+*not* wired to `pull_request`: a PR that adds a migration hasn't had it applied
+to the live databases yet, so a PR trigger would fail the PRs doing the right
+thing.
 
 The workflow needs two **repository secrets**, which have to be created by hand
 before it can pass — until they exist it fails loudly rather than skipping,
