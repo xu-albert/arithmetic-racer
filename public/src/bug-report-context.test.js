@@ -117,12 +117,23 @@ test("shows the real user agent rather than describing it", () => {
 
 test("describes the server-derived fields the browser cannot know", () => {
   const rows = describeBugContext(fakeWindow());
-  for (const key of ["browser", "os", "app_version", "signed_in"]) {
+  for (const key of ["browser", "os", "app_version", "signed_in", "user_id"]) {
     const row = rows.find((r) => r.key === key);
     assert.ok(row, `${key} must appear in the disclosure even though the client never sends it`);
     assert.ok(row.value.length > 0);
     assert.ok(row.label.length > 0);
   }
+});
+
+test("discloses the account link the request carries without the client sending it", () => {
+  // The session cookie rides along on a same-origin submit, so a signed-in
+  // report is linked to the account whatever the reporter ticks. The client
+  // must not try to supply it, and the disclosure must still name it.
+  const win = fakeWindow();
+  const payload = collectBugPayload(win, { optIn: ["device_id"] });
+  assert.equal("user_id" in payload, false);
+  assert.equal("user_id" in payload.context, false);
+  assert.ok(describeBugContext(win).some((row) => row.key === "user_id"));
 });
 
 test("every declared field carries what both sides need to handle it", () => {

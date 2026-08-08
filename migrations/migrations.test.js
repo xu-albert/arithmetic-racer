@@ -83,12 +83,21 @@ describe("migrations apply", () => {
     assert.doesNotThrow(() => migrate().close());
   });
 
-  test("0007 is numbered from what is on main (0006 is the previous highest)", () => {
-    // A concurrent branch renumbers migration files; if this fails after a
-    // rebase, the renumbering landed and 0007 needs to move with it.
+  test("0007 applies after the file that creates the table it rebuilds", () => {
+    // Filename order is the apply order, and 0007 rebuilds the table 0005
+    // creates, so all this needs to pin is that it still lands after it — and
+    // after 0006, the highest number on main when it was written. A concurrent
+    // branch renumbers migration files; if that lands and drags 0007 above its
+    // prerequisite, this fails. It deliberately says nothing about which file
+    // is *last*, so the next unrelated migration does not break the suite.
+    //
+    // Uniqueness of the numeric prefix is not the invariant: 0003 is already
+    // two independent index migrations, and either order is fine there.
     const files = migrationFiles();
-    assert.ok(files.includes("0007_contact_bug_reports.sql"));
-    assert.equal(files[files.length - 1], "0007_contact_bug_reports.sql");
+    const at = (name) => files.indexOf(name);
+    assert.ok(at("0007_contact_bug_reports.sql") !== -1);
+    assert.ok(at("0005_contact_messages.sql") < at("0007_contact_bug_reports.sql"));
+    assert.ok(at("0006_race_results_suspect.sql") < at("0007_contact_bug_reports.sql"));
   });
 });
 

@@ -19,8 +19,10 @@ const BROWSERS = [
   [/\bCriOS\/(\d+)/, "Chrome"],
   [/\bChrome\/(\d+)/, "Chrome"],
   // Safari reports its own version in `Version/`; the `Safari/` token alone is
-  // a WebKit build number and is present in most of the above too.
-  [/\bVersion\/(\d+)[^ ]* Safari\//, "Safari"],
+  // a WebKit build number and is present in most of the above too, so a
+  // `Safari/` token still has to appear — but anywhere later, not adjacent.
+  // iOS Safari puts `Mobile/15E148` between the two.
+  [/\bVersion\/(\d+)(?=.* Safari\/)/, "Safari"],
 ];
 
 const OSES = [

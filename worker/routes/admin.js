@@ -396,24 +396,6 @@ function renderContactFilters(activeKind, token, counts) {
   return raw(`<p class="contact-filters">${links.join(" · ")}</p>`);
 }
 
-/**
- * Top-of-page banner for unhandled bug reports.
- *
- * The contact notification email has never actually fired in production
- * (neither LOOPS_TEMPLATE_CONTACT nor CONTACT_EMAIL is configured), which
- * makes this dashboard the only place a bug report is ever seen. A section
- * below the fold is not good enough for the sole delivery path, so an
- * outstanding report announces itself before anything else on the page.
- */
-function renderBugAlert(counts, token) {
-  const unhandled = counts.bug?.unhandled ?? 0;
-  if (!unhandled) return raw("");
-  const label = `${unhandled} unhandled bug report${unhandled === 1 ? "" : "s"}`;
-  return raw(
-    `<p class="bug-alert"><a href="${escapeHtml(contactHref(token, "bug"))}">${escapeHtml(label)}</a></p>`
-  );
-}
-
 function renderContactTable(messages, now) {
   if (!messages.length) return raw(`<p class="empty">No contact messages.</p>`);
   const body = messages
@@ -442,25 +424,20 @@ function renderContactTable(messages, now) {
 }
 
 /**
- * Per-kind totals for the filter links (so a filter shows what it will find)
- * and unhandled counts (so the bug alert knows whether to appear).
+ * Per-kind totals for the filter links, so a filter shows what it will find.
  *
- * @returns {Record<string, {total: number, unhandled: number}>} Keyed by kind,
- *   plus an `all` bucket. Kinds with no rows are simply absent.
+ * @returns {Record<string, {total: number}>} Keyed by kind, plus an `all`
+ *   bucket. Kinds with no rows are simply absent.
  */
 async function loadContactCounts(env) {
-  const counts = { all: { total: 0, unhandled: 0 } };
+  const counts = { all: { total: 0 } };
   try {
     const { results } = await env.DB
-      .prepare(
-        `SELECT kind, COUNT(*) AS total, SUM(CASE WHEN handled = 0 THEN 1 ELSE 0 END) AS unhandled
-           FROM contact_messages GROUP BY kind`
-      )
+      .prepare(`SELECT kind, COUNT(*) AS total FROM contact_messages GROUP BY kind`)
       .all();
     for (const row of results ?? []) {
-      counts[row.kind] = { total: Number(row.total), unhandled: Number(row.unhandled) };
+      counts[row.kind] = { total: Number(row.total) };
       counts.all.total += Number(row.total);
-      counts.all.unhandled += Number(row.unhandled);
     }
   } catch {
     // Same degradation as loadContactMessages: no table, no counts, no crash.
@@ -508,8 +485,6 @@ export async function handleAdminIndex(request, env) {
           table.contact .msg { white-space: pre-wrap; word-break: break-word; max-width: 32rem; }
           table.contact tr.handled { color: #999; }
           table.contact .kind-bug { font-weight: 600; color: #a3231a; }
-          .bug-alert { margin: 0 0 1rem; padding: 0.5rem 0.75rem; border-radius: 6px; background: #fdecea; }
-          .bug-alert a { color: #a3231a; font-weight: 600; }
           .contact-filters { margin: 0.5rem 0; color: #888; }
           .contact-filters a { color: #444; }
           details.ctx { margin-top: 0.5rem; font-size: 0.9em; }
@@ -521,7 +496,6 @@ export async function handleAdminIndex(request, env) {
       </head>
       <body>
         <h1>Arithmetic Racer · admin</h1>
-        ${renderBugAlert(contactCounts, token)}
         <table class="tiles">
           <thead>
             <tr><th></th><th>Today</th><th>7 days</th><th>All-time</th></tr>

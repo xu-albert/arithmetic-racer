@@ -14,6 +14,14 @@ const UAS = {
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Safari/605.1.15",
   safariIphone:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
+  safariIpad:
+    "Mozilla/5.0 (iPad; CPU OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
+  firefoxIphone:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/133.0 Mobile/15E148 Safari/605.1.15",
+  edgeIphone:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 EdgiOS/131.0.0.0 Mobile/15E148 Safari/605.1.15",
+  androidWebview:
+    "Mozilla/5.0 (Linux; Android 14; SM-A155F) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/141.0.0.0 Mobile Safari/537.36",
   chromeIphone:
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/141.0.0.0 Mobile/15E148 Safari/604.1",
   firefoxWin:
@@ -39,6 +47,28 @@ describe("describeUserAgent — browser", () => {
 
   it("names Safari from Version/, not the WebKit build in Safari/", () => {
     expect(describeUserAgent(UAS.safariMac).browser).toBe("Safari 18");
+  });
+
+  it("names Safari on iPhone, where Mobile/ sits between Version/ and Safari/", () => {
+    expect(describeUserAgent(UAS.safariIphone).browser).toBe("Safari 18");
+  });
+
+  it("names Safari on iPad", () => {
+    expect(describeUserAgent(UAS.safariIpad).browser).toBe("Safari 18");
+  });
+
+  it("does not call Firefox on iOS 'Safari'", () => {
+    // Every iOS browser is WebKit and carries a Safari/ token, so the Safari
+    // branch has to stay behind the ones that name themselves.
+    expect(describeUserAgent(UAS.firefoxIphone).browser).toBe("Firefox 133");
+  });
+
+  it("does not call Edge on iOS 'Safari' even though it sends Version/ too", () => {
+    expect(describeUserAgent(UAS.edgeIphone).browser).toBe("Edge 131");
+  });
+
+  it("does not call an Android WebView's Version/4.0 'Safari 4'", () => {
+    expect(describeUserAgent(UAS.androidWebview).browser).toBe("Chrome 141");
   });
 
   it("does not call Edge 'Chrome'", () => {

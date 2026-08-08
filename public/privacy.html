@@ -113,8 +113,16 @@
             <td>While a multiplayer room is active. Rooms are discarded after 24 hours.</td>
           </tr>
           <tr>
-            <td>Anything you send through the contact form — your message, and the email address you give if you give one</td>
-            <td>Only when you submit the form. Kept until the request is dealt with.</td>
+            <td>
+              Anything you send through the contact form — your message, the email
+              address you give if you give one, and the device ID from your browser
+            </td>
+            <td>
+              Only when you submit the form. The device ID always goes with a contact
+              message, so a request can be matched to the races saved against this
+              browser — which is what makes it possible to act on one from someone
+              without an account. Kept until the request is dealt with.
+            </td>
           </tr>
           <tr>
             <td>
@@ -122,7 +130,8 @@
               and operating system, the identification string your browser sends with
               every request, your screen size, window size and pixel ratio, the page
               on this site you came to the form from (the path only, never the query
-              string), the app version, and whether you were signed in
+              string), the app version, whether you were signed in, and your account
+              id if you were
             </td>
             <td>
               Only when you submit the <a href="/bug-report">bug report form</a>, which

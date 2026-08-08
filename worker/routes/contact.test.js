@@ -13,15 +13,30 @@ import { env } from "cloudflare:test";
 import { handleContact } from "./contact.js";
 import { APP_VERSION } from "../version.js";
 import { BUG_CONTEXT_FIELDS } from "../../public/src/bug-report-context.js";
+import { _setTestUserId } from "../session.js";
 
 beforeAll(async () => {
+  // Mirror of migrations/0001_better_auth.sql (user table only). Present so the
+  // foreign key below is real and a signed-in submission can be exercised.
+  await env.DB.exec(
+    `CREATE TABLE IF NOT EXISTS "user" (` +
+      `"id" text not null primary key, ` +
+      `"name" text not null, ` +
+      `"email" text not null unique, ` +
+      `"emailVerified" integer not null, ` +
+      `"image" text, ` +
+      `"createdAt" date not null, ` +
+      `"updatedAt" date not null, ` +
+      `"username" text unique` +
+      `)`
+  );
   await env.DB.exec(
     "CREATE TABLE IF NOT EXISTS contact_messages (" +
       "id TEXT PRIMARY KEY, " +
       "email TEXT, " +
       "message TEXT NOT NULL, " +
       "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
-      "user_id TEXT, " +
+      `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
       "device_id TEXT, " +
       "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
       "created_at INTEGER NOT NULL, " +
@@ -32,7 +47,20 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM contact_messages");
+  await env.DB.exec(`DELETE FROM "user"`);
+  _setTestUserId(null);
 });
+
+/** Seed an account so a submission can be made as a real signed-in reporter. */
+async function seedUser(id) {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", username)
+     VALUES (?,?,?,?,?,?,?)`
+  )
+    .bind(id, id, `${id}@example.com`, 0, now, now, id)
+    .run();
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -439,6 +467,44 @@ describe("POST /api/contact — captured context", () => {
       context: { ...sent, cookie: "session=abc123", authorization: "Bearer super-secret" },
     });
     expect(Object.keys(await firstContext()).sort()).toEqual(declared.map((f) => f.key).sort());
+  });
+
+  it("persists no user-data column the shared descriptor does not declare", async () => {
+    // The columns half of the same promise. A bug report filed while signed in
+    // carries the session cookie, so the row picks up an account link the
+    // reporter never ticked a box for — the disclosure has to name it, and this
+    // is what makes that enforceable rather than aspirational. Exercised with a
+    // real signed-in reporter on purpose: with user_id null the assertion
+    // cannot fail, which is precisely how the account link went unnoticed.
+    await seedUser("u-reporter");
+    _setTestUserId("u-reporter");
+    await submitBug({ device_id: "dev-abc" });
+
+    const [row] = await rows();
+    expect(row.user_id).toBe("u-reporter");
+
+    // Columns that carry the submission itself rather than data about the
+    // reporter: the id and timestamps are plumbing, message and email are what
+    // they typed into visible fields, and context has its own assertion above.
+    const NOT_ABOUT_THE_REPORTER = new Set([
+      "id",
+      "message",
+      "kind",
+      "created_at",
+      "handled",
+      "email",
+      "context",
+    ]);
+    const persisted = Object.entries(row)
+      .filter(([column, value]) => value !== null && !NOT_ABOUT_THE_REPORTER.has(column))
+      .map(([column]) => column);
+    const declared = BUG_CONTEXT_FIELDS.filter((f) => f.storedIn === "column").map((f) => f.key);
+    expect(persisted.sort()).toEqual(declared.sort());
+  });
+
+  it("leaves the account link empty for a report filed while signed out", async () => {
+    await submitBug({ device_id: "dev-abc" });
+    expect((await rows())[0].user_id).toBe(null);
   });
 
   it("stores the device id when the report carries one", async () => {

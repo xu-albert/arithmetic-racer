@@ -124,7 +124,21 @@ export const BUG_CONTEXT_FIELDS = [
     source: "server",
     type: "boolean",
     storedIn: "context",
-    description: "yes or no, from your session — not your account details",
+    description: "yes or no, read from your session",
+  },
+  {
+    // The request carries the session cookie, so a report filed while signed in
+    // is linked to the account whether or not the reporter also ticks the
+    // device box below — a stronger link than the one that is opt-in. It is
+    // declared here because the disclosure promises completeness: whatever the
+    // row ends up holding about the reporter has to be on this list.
+    key: "user_id",
+    label: "Your account id",
+    source: "server",
+    type: "text",
+    storedIn: "column",
+    description:
+      "only if you are signed in — the id of your account, so a reply can find you",
   },
   {
     // The one opt-in field, and the only one that is an identity link rather
@@ -154,9 +168,14 @@ export const CLIENT_CONTEXT_FIELDS = BUG_CONTEXT_FIELDS.filter(
   (field) => field.source === "client" && field.storedIn === "context"
 );
 
-/** Fields the server determines itself and never reads from the request body. */
-export const SERVER_CONTEXT_FIELDS = BUG_CONTEXT_FIELDS.filter(
-  (field) => field.source === "server"
+/**
+ * Fields the row keeps in a column of its own rather than in the `context`
+ * blob. Every one of these is data about the reporter, which is why the guard
+ * test in worker/routes/contact.test.js compares the persisted columns against
+ * this list: a column can only hold what the disclosure already declares.
+ */
+export const COLUMN_FIELDS = BUG_CONTEXT_FIELDS.filter(
+  (field) => field.storedIn === "column"
 );
 
 /** @returns {BugContextField|undefined} */

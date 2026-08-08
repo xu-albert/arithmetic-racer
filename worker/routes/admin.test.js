@@ -119,6 +119,29 @@ describe("GET /admin/ happy path", () => {
   });
 });
 
+async function insertContact({
+  id = crypto.randomUUID(),
+  message,
+  kind = "general",
+  email = null,
+  handled = 0,
+  context = null,
+  created_at = Date.now(),
+} = {}) {
+  await env.DB.prepare(
+    "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
+      "VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)"
+  ).bind(id, email, message, kind, handled, created_at, context).run();
+}
+
+async function dashboard(query = "") {
+  const res = await handleAdminIndex(
+    new Request(`https://x/admin/?token=t${query}`),
+    { ...env, ADMIN_TOKEN: "t" }
+  );
+  return res.text();
+}
+
 async function seedUser(id, username, createdAtMs) {
   await env.DB.prepare(
     `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", username)
@@ -382,28 +405,7 @@ describe("per-user drill-down", () => {
 });
 
 describe("admin dashboard — contact messages", () => {
-  async function insert({
-    id = crypto.randomUUID(),
-    message,
-    kind = "general",
-    email = null,
-    handled = 0,
-    context = null,
-    created_at = Date.now(),
-  }) {
-    await env.DB.prepare(
-      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
-        "VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)"
-    ).bind(id, email, message, kind, handled, created_at, context).run();
-  }
-
-  async function dashboard(query = "") {
-    const res = await handleAdminIndex(
-      new Request(`https://x/admin/?token=t${query}`),
-      { ...env, ADMIN_TOKEN: "t" }
-    );
-    return res.text();
-  }
+  const insert = insertContact;
 
   it("lists a submitted message", async () => {
     await insert({ message: "my printer is on fire", email: "a@b.com" });
@@ -429,7 +431,12 @@ describe("admin dashboard — contact messages", () => {
   });
 
   it("renders an empty state rather than failing", async () => {
-    expect(await dashboard()).toContain("No contact messages");
+    const body = await dashboard();
+    expect(body).toContain("No contact messages");
+    // No interpolated value may reach the page as a stringified object; the
+    // html() tag has to escape or emit raw, never fall through to "[object
+    // Object]".
+    expect(body).not.toContain("[object Object]");
   });
 });
 
@@ -437,29 +444,7 @@ describe("admin dashboard — finding bug reports", () => {
   // The contact notification email has never been configured in production,
   // so this dashboard is the only place a bug report is ever read. "Findable
   // here" is the delivery guarantee, not a convenience.
-  async function insert(row) {
-    await env.DB.prepare(
-      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
-        "VALUES (?, NULL, ?, ?, NULL, NULL, ?, ?, ?)"
-    )
-      .bind(
-        row.id ?? crypto.randomUUID(),
-        row.message,
-        row.kind ?? "general",
-        row.handled ?? 0,
-        row.created_at ?? Date.now(),
-        row.context ?? null
-      )
-      .run();
-  }
-
-  async function dashboard(query = "") {
-    const res = await handleAdminIndex(
-      new Request(`https://x/admin/?token=t${query}`),
-      { ...env, ADMIN_TOKEN: "t" }
-    );
-    return res.text();
-  }
+  const insert = insertContact;
 
   it("filters the table to bug reports with ?kind=bug", async () => {
     await insert({ message: "a general question", kind: "general" });
@@ -511,43 +496,13 @@ describe("admin dashboard — finding bug reports", () => {
     expect(body).toContain("General (1)");
   });
 
-  it("announces unhandled bug reports at the top of the page", async () => {
+  it("still counts unhandled messages in the contact heading", async () => {
+    // The count stays; the top-of-page banner it used to also drive is gone,
+    // because nothing in this dashboard can mark a report handled and a signal
+    // that can never be cleared stops being read.
     await insert({ message: "the race froze", kind: "bug" });
-    const body = await dashboard();
-    expect(body).toContain("1 unhandled bug report");
-    // Above the summary tiles — below the fold is not good enough for the only
-    // delivery path there is.
-    expect(body.indexOf("unhandled bug report")).toBeLessThan(body.indexOf("races finished"));
-  });
-
-  it("pluralizes the announcement", async () => {
-    await insert({ message: "one", kind: "bug" });
-    await insert({ message: "two", kind: "bug" });
-    expect(await dashboard()).toContain("2 unhandled bug reports");
-  });
-
-  it("says nothing when every bug report is handled", async () => {
-    await insert({ message: "the race froze", kind: "bug", handled: 1 });
-    const body = await dashboard();
-    expect(body).not.toContain("unhandled bug report");
-    expect(body).not.toContain("[object Object]");
-  });
-
-  it("says nothing when the only unhandled messages are other kinds", async () => {
-    await insert({ message: "a general question", kind: "general" });
-    const body = await dashboard();
-    expect(body).not.toContain("unhandled bug report");
-    expect(body).not.toContain("[object Object]");
-  });
-
-  it("renders nothing at all where the banner goes when there is none", async () => {
-    // Zero unhandled bug reports is the ordinary state of this page, so the
-    // no-banner case is the one that renders on nearly every load. Asserting
-    // only the absence of the banner text let a stringified placeholder object
-    // sit between the heading and the tiles unnoticed.
-    const body = await dashboard();
-    expect(body).not.toContain("[object Object]");
-    expect(body).toMatch(/<h1>[^<]*<\/h1>\s*<table class="tiles">/);
+    await insert({ message: "fixed already", kind: "bug", handled: 1 });
+    expect(await dashboard()).toContain("1 unhandled");
   });
 });
 
@@ -564,20 +519,8 @@ describe("admin dashboard — captured context", () => {
     ua: "Mozilla/5.0 (Macintosh) Chrome/141.0.0.0",
   });
 
-  async function insertWithContext(context, message = "the race froze") {
-    await env.DB.prepare(
-      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
-        "VALUES (?, NULL, ?, 'bug', NULL, NULL, 0, ?, ?)"
-    ).bind(crypto.randomUUID(), message, Date.now(), context).run();
-  }
-
-  async function dashboard() {
-    const res = await handleAdminIndex(
-      new Request("https://x/admin/?token=t"),
-      { ...env, ADMIN_TOKEN: "t" }
-    );
-    return res.text();
-  }
+  const insertWithContext = (context, message = "the race froze") =>
+    insertContact({ message, kind: "bug", context });
 
   it("surfaces every captured field when reading a report", async () => {
     await insertWithContext(CONTEXT);
