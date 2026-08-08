@@ -8,7 +8,12 @@ Manual + automated regression checks for Arithmetic Racer. Use this when verifyi
 npm test
 ```
 
-Runs `node --test public/src/*.test.js` — covers `game.js` (problem generation, validation), `bot.js` (tier delays), `handles.js` (handle generator). All 26 should pass. Server logic is covered by manual probes (below), not unit tests.
+Two suites run back to back:
+
+- `node --test` over the pure modules (`public/src/*.test.js`, plus `server/room-stats.test.js`) — problem generation and validation, bot tier delays, the handle generator, and the shared room-config rules.
+- `vitest run` over the Worker and Durable Object tests (`worker/**`, `server/**`), which execute against real bindings via `@cloudflare/vitest-pool-workers`. `server/room-config.test.js` drives a full two-player private race inside a real `RaceRoom` DO.
+
+The manual probes below still cover what the DO tests don't (real sockets, browser UI, timing).
 
 ## Local dev
 
@@ -41,7 +46,8 @@ For browser tests open `http://localhost:8787` in two different browsers (or one
 | 2 | Copy URL → paste into Browser B | B joins the lobby; A sees B in the player list. |
 | 3 | Each row in lobby player list | Shows `<handle>`, `(you)`, `(host)`, `(Guest)` badges as appropriate. |
 | 4 | Non-creator (B) clicks their own handle inline | Edits to a new handle; both browsers reflect the new name. |
-| 5 | Creator (A) changes difficulty | Both browsers' difficulty buttons reflect the new pressed state. |
+| 5 | Creator (A) changes difficulty in the lobby | Both browsers' difficulty buttons reflect the new pressed state. |
+| 5b | Creator (A) changes difficulty **after a race**, on the post-race lobby-room screen | Controls are enabled (not greyed out); B sees a "Host set the race to …" toast; the next **Race Again** → **Start Race** uses the new difficulty. Regression guard for the frozen-difficulty bug. |
 | 6 | Creator clicks **Start Race** with only themselves in the room | Button is disabled; server rejects with `NEED_MORE_PLAYERS` if forced via DevTools. |
 | 7 | Creator clicks **Start Race** with B present | Both see countdown 3 → 2 → 1 → GO, then the race screen. |
 | 8 | Both type correct answers | Each car advances on both browsers (own car moves on Enter; opponent moves on next server tick). |

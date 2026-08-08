@@ -1154,6 +1154,12 @@ button:disabled {
   text-align: center;
 }
 .error-toast.visible { transform: translateX(-50%) translateY(0); }
+/* Neutral variant — used for "the host changed the settings" notices, which
+   are information rather than something the player did wrong. */
+.error-toast.info {
+  background: var(--navy);
+  color: #fff;
+}
 
 /* ============================================================
    FOOTER
