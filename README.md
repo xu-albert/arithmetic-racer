@@ -22,9 +22,9 @@ Runs `wrangler dev`. Open http://localhost:8787.
 npm test
 ```
 
-Runs `node --test public/src/*.test.js` (pure game logic) and `vitest run` (Worker routes).
+Runs the pure-logic suite under `node --test`, then the Worker and Durable Object suite under `vitest`.
 
-See [`docs/testing.md`](./docs/testing.md) for the full manual test plan — Quickplay smoke, the two-browser multiplayer matrix, regression things to watch for, and notes on deploys.
+See [`docs/testing.md`](./docs/testing.md) for what each suite covers, plus the full manual test plan — Quickplay smoke, the two-browser multiplayer matrix, regression things to watch for, and notes on deploys.
 
 ## Stack
 

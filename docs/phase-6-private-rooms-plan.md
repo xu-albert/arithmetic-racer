@@ -101,6 +101,10 @@ type RoomState = {
   createdAt: number;
   difficulty: 'easy' | 'medium' | 'hard';
   raceLength: number;      // default 20
+  lastRaceLength: number | null; // raceLength of the race that just finished, pinned
+                                 // in finishRace. The results scoreboard reads its
+                                 // denominator from here, because the host may change
+                                 // raceLength while those results are still on screen.
   state: 'lobby' | 'countdown' | 'racing' | 'finished';
   players: Player[];
   problemSequence: { problem: string; answer: number }[]; // populated on race start
