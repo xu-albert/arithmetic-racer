@@ -60,9 +60,15 @@ because a check that cannot reach the database must never report a match:
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token, for wrangler's non-interactive auth |
 | `CLOUDFLARE_ACCOUNT_ID` | The account owning both D1 databases |
 
-`check-schema-drift.mjs` only issues `SELECT` and `PRAGMA`, so **D1 read is all
-the permission the token needs** — do not grant it write or deploy scopes. Add
-both under *Settings → Secrets and variables → Actions*.
+Grant the token **D1 Write** (some token screens call it *D1 Edit*). No other
+scope is needed. `check-schema-drift.mjs` issues nothing but `SELECT` and
+`PRAGMA`, so D1 Read alone may well be enough — but that is **unverified**:
+`wrangler d1 execute --remote` posts every statement, read-only ones included,
+to the D1 `/query` endpoint, and the scope that endpoint requires is stated
+neither in Cloudflare's public documentation nor in its OpenAPI spec. Settling
+it would mean minting a read-only token and seeing whether the call 403s. Until
+someone does, Write is the choice that does not turn `main` red on a guess. Add
+both secrets under *Settings → Secrets and variables → Actions*.
 
 ### Never run `wrangler d1 migrations apply`
 

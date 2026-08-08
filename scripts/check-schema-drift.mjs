@@ -10,17 +10,24 @@
 // did not have. Nothing compared the migrations directory to reality.
 //
 // What is compared, per table: columns, foreign keys, CHECK constraints, and
-// the indexes SQLite builds behind PRIMARY KEY / UNIQUE — plus the explicit
-// CREATE INDEX statements as their own set. Constraints matter as much as
-// columns here: part of the drift that started all this was a `user_id TEXT`
-// that had quietly lost its `REFERENCES "user"(id)`, and a foreign key is
-// invisible to `PRAGMA table_info`.
+// the indexes SQLite builds behind PRIMARY KEY / UNIQUE. Constraints matter as
+// much as columns here: part of the drift that started all this was a
+// `user_id TEXT` that had quietly lost its `REFERENCES "user"(id)`, and a
+// foreign key is invisible to `PRAGMA table_info`.
 //
-// Everything is compared as *sets*, never as raw `sqlite_master` SQL text. A
+// Those four are compared as *sets*, never as raw `sqlite_master` SQL text. A
 // column added by ALTER TABLE lands at the end of the table definition, so a
 // database that applied 0003 and 0007 in a different order than a fresh replay
 // produces byte-different DDL for an identical schema. Declaration order is not
 // meaningful here — every INSERT in the codebase names its columns explicitly.
+//
+// Explicit CREATE INDEX statements are the exception. They are keyed by index
+// name and compared by their whitespace-normalized DDL text, which is stricter
+// than a set comparison and deliberately so: it covers the indexed columns,
+// their sort order and any WHERE clause, none of which a name-only comparison
+// would notice. The cost is that editing an already-applied migration's
+// CREATE INDEX — reformatting it, or adding an inline comment — reports
+// `index differs` for a schema that is semantically identical.
 //
 // Usage:
 //   node scripts/check-schema-drift.mjs                 # prod + preview
@@ -32,6 +39,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { checkConstraints } from "./sql-constraints.mjs";
 
 const DATABASES = { prod: "arithmetic-racer", preview: "arithmetic-racer-preview" };
 
@@ -114,40 +123,6 @@ function actualSchema(binding) {
     }
     return payload.map((r) => r.results ?? []);
   });
-}
-
-/**
- * Pull the CHECK constraints out of a stored CREATE TABLE, whitespace-normalized
- * so formatting differences are not drift. Neither `PRAGMA table_info` nor any
- * other pragma exposes them, and they are load-bearing: `difficulty`, `finished`,
- * `kind` and `handled` are all constrained this way.
- */
-function checkConstraints(sql) {
-  if (!sql) return [];
-  const found = [];
-  const opener = /\bCHECK\s*\(/gi;
-  let match;
-  while ((match = opener.exec(sql)) !== null) {
-    let depth = 1;
-    let quote = null;
-    let i = opener.lastIndex;
-    while (i < sql.length && depth > 0) {
-      const ch = sql[i];
-      if (quote) {
-        if (ch === quote) quote = null;
-      } else if (ch === "'" || ch === '"') {
-        quote = ch;
-      } else if (ch === "(") {
-        depth++;
-      } else if (ch === ")") {
-        depth--;
-      }
-      i++;
-    }
-    found.push(`CHECK (${sql.slice(opener.lastIndex, i - 1).replace(/\s+/g, " ").trim()})`);
-    opener.lastIndex = i;
-  }
-  return found;
 }
 
 /**

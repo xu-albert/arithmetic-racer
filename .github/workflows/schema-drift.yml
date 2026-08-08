@@ -54,7 +54,7 @@ jobs:
           if [ -n "$missing" ]; then
             echo "::error::Cannot check schema drift: missing repository secret(s):$missing." \
                  "Create them under Settings > Secrets and variables > Actions." \
-                 "The API token needs D1 read access on the account owning" \
+                 "The API token needs D1 Write (D1 Edit) on the account owning" \
                  "arithmetic-racer and arithmetic-racer-preview. See migrations/README.md."
             exit 1
           fi
