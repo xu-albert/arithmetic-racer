@@ -37,15 +37,6 @@
       background: #fff;
     }
     .doc textarea { min-height: 5.5rem; resize: vertical; }
-    .doc label.optin {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.5rem;
-      font-weight: 400;
-      margin-bottom: 0.2rem;
-    }
-    .doc label.optin input { width: auto; margin: 0.25rem 0 0; flex: none; }
-    .doc .optin-hint { margin: 0 0 0 1.55rem; color: var(--navy-mute); font-size: 0.85rem; }
     .doc button {
       margin-top: 1.2rem;
       width: 100%;
@@ -70,23 +61,6 @@
     }
     .form-note.error { display: block; background: #fdecea; color: #a3231a; }
     .form-note.ok { display: block; background: #eaf7ea; color: #2f6d2f; }
-    .context-note {
-      margin: 1.4rem 0 0;
-      padding: 0.7rem 0.85rem;
-      border-radius: 8px;
-      background: #f3f7fb;
-      font-size: 0.85rem;
-      color: var(--navy-mute);
-    }
-    .context-note summary { cursor: pointer; color: var(--navy-soft); }
-    .context-note dl {
-      display: grid;
-      grid-template-columns: max-content minmax(0, 1fr);
-      gap: 0.15rem 0.7rem;
-      margin: 0.6rem 0 0;
-    }
-    .context-note dt { color: var(--navy-mute); }
-    .context-note dd { margin: 0; word-break: break-word; color: var(--navy-soft); }
   </style>
 </head>
 <body>
@@ -128,69 +102,17 @@
       </label>
       <input type="email" id="email" name="email" autocomplete="email" placeholder="you@example.com" />
 
-      <label class="optin" for="link-device">
-        <input type="checkbox" id="link-device" />
-        <span id="link-device-label"></span>
-      </label>
-      <p class="optin-hint" id="link-device-hint"></p>
-
-      <details class="context-note">
-        <summary>We also attach some technical details automatically</summary>
-        <p>
-          So you never have to answer &ldquo;which browser were you using?&rdquo;.
-          The list below is generated from what this report actually carries, so
-          it is the whole of it — nothing reaches us about you that is not listed
-          here, and it updates if you change the box above. No cookies, no
-          password.
-        </p>
-        <dl id="context-preview"></dl>
-      </details>
-
       <button type="submit" id="submit-btn">Send bug report</button>
       <p class="form-note" id="form-note" role="status" aria-live="polite"></p>
     </form>
   </main>
 
   <script type="module">
-    import {
-      bugContextField,
-      collectBugPayload,
-      describeBugContext,
-    } from "/src/bug-report-context.js";
+    import { collectBugPayload } from "/src/bug-report-context.js";
 
     const form = document.getElementById("bug-form");
     const note = document.getElementById("form-note");
     const btn = document.getElementById("submit-btn");
-
-    // Every opt-in field in the descriptor gets a box here, and nothing is
-    // hand-listed: the payload, the disclosure and this wording all come from
-    // the same declaration, so the three cannot disagree.
-    const OPT_IN_BOXES = new Map([["device_id", document.getElementById("link-device")]]);
-    for (const [key, box] of OPT_IN_BOXES) {
-      const field = bugContextField(key);
-      document.getElementById(`${box.id}-label`).textContent = field.optInLabel;
-      document.getElementById(`${box.id}-hint`).textContent = field.optInHint;
-    }
-
-    const optInKeys = () =>
-      [...OPT_IN_BOXES].filter(([, box]) => box.checked).map(([key]) => key);
-
-    // Shows the reporter the actual values being attached, not a description of
-    // them — the point of a disclosure is that it can be checked against what
-    // is sent, which is why both come from describeBugContext/collectBugPayload.
-    const preview = document.getElementById("context-preview");
-    function renderPreview() {
-      preview.replaceChildren();
-      for (const row of describeBugContext(window, { optIn: optInKeys() })) {
-        const dt = document.createElement("dt");
-        dt.textContent = row.label;
-        const dd = document.createElement("dd");
-        dd.textContent = row.value;
-        preview.append(dt, dd);
-      }
-    }
-    renderPreview();
-    for (const [, box] of OPT_IN_BOXES) box.addEventListener("change", renderPreview);
 
     function show(kindClass, text) {
       note.className = `form-note ${kindClass}`;
@@ -219,7 +141,7 @@
             where: value("where") || undefined,
             steps: value("steps") || undefined,
             email: value("email") || undefined,
-            ...collectBugPayload(window, { optIn: optInKeys() }),
+            ...collectBugPayload(window),
           }),
         });
         if (res.status === 429) {
@@ -239,7 +161,6 @@
           return;
         }
         form.reset();
-        renderPreview();
         show("ok", "Thanks — your bug report was received.");
       } catch {
         show("error", "Couldn't reach the server. Please check your connection and try again.");

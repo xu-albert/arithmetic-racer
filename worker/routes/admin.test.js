@@ -571,6 +571,32 @@ describe("admin dashboard — captured context", () => {
     expect(body).toContain("{not json");
   });
 
+  it("surfaces the device id so looking up that browser's races needs no D1 query", async () => {
+    await env.DB.prepare(
+      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
+        "VALUES (?, NULL, 'the race froze', 'bug', NULL, ?, 0, ?, ?)"
+    ).bind(crypto.randomUUID(), "dev-abc123", Date.now(), CONTEXT).run();
+    expect(await dashboard()).toMatch(/device<\/dt><dd>dev-abc123<\/dd>/);
+  });
+
+  it("shows the device id even when a submission captured no context", async () => {
+    await env.DB.prepare(
+      "INSERT INTO contact_messages (id, message, kind, device_id, handled, created_at) " +
+        "VALUES (?, 'plain question', 'general', ?, 0, ?)"
+    ).bind(crypto.randomUUID(), "dev-xyz789", Date.now()).run();
+    expect(await dashboard()).toMatch(/device<\/dt><dd>dev-xyz789<\/dd>/);
+  });
+
+  it("escapes HTML in the device id", async () => {
+    await env.DB.prepare(
+      "INSERT INTO contact_messages (id, message, kind, device_id, handled, created_at) " +
+        "VALUES (?, 'plain question', 'general', ?, 0, ?)"
+    ).bind(crypto.randomUUID(), "<img src=x onerror=alert(1)>", Date.now()).run();
+    const body = await dashboard();
+    expect(body).not.toContain("<img src=x onerror=alert(1)>");
+    expect(body).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
   it("renders no context block for a message that has none", async () => {
     await env.DB.prepare(
       "INSERT INTO contact_messages (id, message, kind, handled, created_at) VALUES (?, 'plain question', 'general', 0, ?)"

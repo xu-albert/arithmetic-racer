@@ -312,7 +312,7 @@ async function loadContactMessages(env, kind = null, limit = 50) {
   const binds = kind ? [kind, limit] : [limit];
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, email, message, kind, user_id, handled, created_at, context
+      `SELECT id, email, message, kind, user_id, device_id, handled, created_at, context
          FROM contact_messages
          ${where}
         ORDER BY created_at DESC, id DESC
@@ -345,22 +345,32 @@ const CONTEXT_FIELD_ORDER = [
 ];
 
 /**
- * Render a bug report's captured context, collapsed. It is reference material
+ * Render a submission's captured context, collapsed. It is reference material
  * for a report already being read, so it should not push the message text of
  * every other row off the screen.
+ *
+ * `deviceId` lives in its own column rather than the blob, but it belongs in
+ * the same block: it is the handle for looking up this browser's races, and
+ * without it here that lookup means a hand-written D1 query.
  */
-function renderContext(contextJson) {
-  if (!contextJson) return "";
+function renderContext(contextJson, deviceId = null) {
+  const deviceRow = deviceId
+    ? `<dt>device</dt><dd>${escapeHtml(deviceId)}</dd>`
+    : "";
 
-  let context;
-  try {
-    context = JSON.parse(contextJson);
-  } catch {
-    // Stored by an older or broken writer. Showing the raw text beats hiding
-    // that something is there.
-    return `<details class="ctx"><summary>context (unparseable)</summary><pre>${escapeHtml(contextJson)}</pre></details>`;
+  let context = null;
+  if (contextJson) {
+    try {
+      context = JSON.parse(contextJson);
+    } catch {
+      // Stored by an older or broken writer. Showing the raw text beats hiding
+      // that something is there.
+      return `<details class="ctx"><summary>context (unparseable)</summary><pre>${escapeHtml(contextJson)}</pre></details>`;
+    }
   }
-  if (!context || typeof context !== "object") return "";
+  if (!context || typeof context !== "object") {
+    return deviceRow ? `<details class="ctx"><summary>context</summary><dl>${deviceRow}</dl></details>` : "";
+  }
 
   const known = new Set(CONTEXT_FIELD_ORDER.map(([key]) => key));
   const entries = [
@@ -369,7 +379,7 @@ function renderContext(contextJson) {
     // for still gets shown, under its raw key.
     ...Object.keys(context).filter((key) => !known.has(key)).map((key) => [key, key]),
   ];
-  if (!entries.length) return "";
+  if (!entries.length && !deviceRow) return "";
 
   const rows = entries
     .map(([key, label]) => {
@@ -377,7 +387,7 @@ function renderContext(contextJson) {
       return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`;
     })
     .join("");
-  return `<details class="ctx"><summary>context</summary><dl>${rows}</dl></details>`;
+  return `<details class="ctx"><summary>context</summary><dl>${rows}${deviceRow}</dl></details>`;
 }
 
 function contactHref(token, kind) {
@@ -410,7 +420,7 @@ function renderContactTable(messages, now) {
       <td class="kind kind-${escapeHtml(m.kind)}">${escapeHtml(m.kind)}</td>
       <td>${escapeHtml(m.email ?? "—")}</td>
       <td>${m.user_id ? "signed in" : "anonymous"}</td>
-      <td class="msg">${escapeHtml(m.message)}${renderContext(m.context)}</td>
+      <td class="msg">${escapeHtml(m.message)}${renderContext(m.context, m.device_id)}</td>
       <td>${m.handled ? "handled" : "open"}</td>
     </tr>`;
     })

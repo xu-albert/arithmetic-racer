@@ -1,48 +1,44 @@
-// The single source of truth for everything a bug report attaches beyond the
+// The single source of truth for everything a bug report carries beyond the
 // words the reporter typed.
 //
-// Both halves read this one list: public/bug-report.html builds its request
-// payload *and* renders its on-page disclosure from it, and
-// worker/routes/contact.js derives its storage allowlist from it. That is the
-// point — a hand-written disclosure can drift from what is actually sent, a
-// generated one cannot. A field that is not declared here is neither collected
-// nor stored; a field that is declared here is shown to the reporter before
-// they press send.
+// Three things read this one list: public/bug-report.html builds its request
+// payload from it, worker/routes/contact.js derives its storage allowlist from
+// it, and public/privacy.html is held to it — a test asserts the privacy page
+// documents every entry declared here, so a field cannot be collected without
+// being written down somewhere the reporter can read it. The form itself makes
+// no promises about data; the privacy page is the whole account.
 //
-// This file lives under public/src/ because that is the one place both sides
+// This file lives under public/src/ because that is the one place both halves
 // can reach: public/ has no build step, so the browser loads it as an ES module
 // exactly as written, and the Worker is esbuild-bundled, so the same file
-// imports cleanly there. Keep it dependency-free — the `collect` and `preview`
-// functions take a window rather than reaching for a global, so they run under
-// node:test too.
+// imports cleanly there. Keep it dependency-free — `collect` takes a window
+// rather than reaching for a global, so it runs under node:test too.
 
 /**
  * @typedef {object} BugContextField
- * @property {string} key Key in the request payload and in the stored row.
- * @property {string} label Human label, shown to the reporter.
- * @property {"client"|"server"} source Where the value comes from. The server
- *   never reads a server-sourced field off the request body, so those cannot be
- *   spoofed by a report claiming to be something it isn't.
+ * @property {string} key Identifier for the field: its key in the request
+ *   payload and stored row where it has one, and the value the privacy page
+ *   marks the sentence documenting it with.
+ * @property {"client"|"server"} source Where the value comes from. `server`
+ *   means the request body is never consulted for it — it is read from the
+ *   request itself or the session — so a report cannot spoof it by claiming to
+ *   be something it isn't. Only `client` fields have a `collect`.
  * @property {"text"|"number"|"boolean"} type
- * @property {"context"|"column"} storedIn Whether the row keeps it inside the
- *   `context` JSON blob or in a column of its own.
+ * @property {"context"|"column"|"request"|"rate-limit"} storedIn Where the
+ *   value ends up. `context` is a key in the row's JSON blob and `column` is a
+ *   column of its own; `request` travels with the request but is never written
+ *   to the row, and `rate-limit` is held in Workers KV by the limiter rather
+ *   than in D1. Only `context` entries can ever be read from the request body
+ *   — see CLIENT_CONTEXT_FIELDS.
  * @property {number} [maxLength] Cap the server applies to a text field.
  * @property {boolean} [pathOnly] Strip query string and fragment before storing.
- * @property {boolean} [optIn] Not sent unless the reporter explicitly asks for it.
- * @property {string} [optInLabel] Checkbox label for an opt-in field.
- * @property {string} [optInHint] Explains to the reporter what ticking it means.
  * @property {(win: Window) => string|number|undefined} [collect] Client fields.
- * @property {(win: Window) => string|undefined} [preview] A server-sourced field
- *   whose real value the browser can nonetheless show truthfully.
- * @property {string} [description] Shown in place of a value when the browser
- *   cannot know what the server will record.
  */
 
 /** @type {BugContextField[]} */
 export const BUG_CONTEXT_FIELDS = [
   {
     key: "page",
-    label: "Page you came from",
     source: "client",
     type: "text",
     storedIn: "context",
@@ -61,7 +57,6 @@ export const BUG_CONTEXT_FIELDS = [
   },
   {
     key: "screen",
-    label: "Screen size",
     source: "client",
     type: "text",
     storedIn: "context",
@@ -70,7 +65,6 @@ export const BUG_CONTEXT_FIELDS = [
   },
   {
     key: "viewport",
-    label: "Window size",
     source: "client",
     type: "text",
     storedIn: "context",
@@ -79,7 +73,6 @@ export const BUG_CONTEXT_FIELDS = [
   },
   {
     key: "dpr",
-    label: "Pixel ratio",
     source: "client",
     type: "number",
     storedIn: "context",
@@ -87,92 +80,88 @@ export const BUG_CONTEXT_FIELDS = [
   },
   {
     key: "ua",
-    label: "Browser and OS",
     source: "server",
     type: "text",
     storedIn: "context",
-    description: "the identification string your browser sends with every request",
-    preview: (win) => win.navigator?.userAgent,
   },
   {
     key: "browser",
-    label: "Browser name and version",
     source: "server",
     type: "text",
     storedIn: "context",
-    description: "read from the line above — for example “Chrome 141”",
   },
   {
     key: "os",
-    label: "Operating system",
     source: "server",
     type: "text",
     storedIn: "context",
-    description: "read from the line above — for example “macOS”",
   },
   {
     key: "app_version",
-    label: "App version",
     source: "server",
     type: "text",
     storedIn: "context",
-    description: "the version of Arithmetic Racer serving this page",
   },
   {
     key: "signed_in",
-    label: "Whether you are signed in",
     source: "server",
     type: "boolean",
     storedIn: "context",
-    description: "yes or no, read from your session",
   },
   {
-    // The request carries the session cookie, so a report filed while signed in
-    // is linked to the account whether or not the reporter also ticks the
-    // device box below — a stronger link than the one that is opt-in. It is
-    // declared here because the disclosure promises completeness: whatever the
-    // row ends up holding about the reporter has to be on this list.
+    // Read from the session, never from the body, so it is only ever the
+    // account that actually filed the report.
     key: "user_id",
-    label: "Your account id",
     source: "server",
     type: "text",
     storedIn: "column",
-    description:
-      "only if you are signed in — the id of your account, so a reply can find you",
   },
   {
-    // The one opt-in field, and the only one that is an identity link rather
-    // than technical context: the device ID joins this report to the reporter's
-    // entire race history through race_results.device_id. Everything else above
-    // describes the browser the bug happened in; this describes the person. That
-    // linkage is genuinely useful when triaging a "my times are wrong" report,
-    // but it is only worth having if the reporter agrees to it, so it defaults
-    // off and is sent only when the box is ticked.
+    // Joins the report to this browser's race history through
+    // race_results.device_id, which is what makes a "my times are wrong"
+    // report actionable for someone who never made an account.
     key: "device_id",
-    label: "Your device ID",
     source: "client",
     type: "text",
     storedIn: "column",
     maxLength: 128,
-    optIn: true,
-    optInLabel: "Link this report to my past races",
-    optInHint:
-      "Attaches the random device ID this browser saved, which lets us look up the " +
-      "races you have played on this device. Off unless you tick it.",
     collect: (win) => win.localStorage?.getItem("deviceId") || undefined,
+  },
+  {
+    // Not stored on the row, but it is the reason user_id above can be known:
+    // the submit is a same-origin fetch, so the browser attaches the sign-in
+    // cookie by default. Declared so the privacy page has to account for it.
+    key: "session_cookie",
+    source: "server",
+    type: "text",
+    storedIn: "request",
+  },
+  {
+    // Also not on the row: the per-IP counter the rate limiter writes to
+    // Workers KV with a one-hour TTL. It outlives the request, so it belongs on
+    // the same list as everything else the reporter is entitled to know about.
+    key: "rate_limit_ip",
+    source: "server",
+    type: "text",
+    storedIn: "rate-limit",
   },
 ];
 
-/** Client-supplied fields the server keeps inside the `context` blob. */
+/**
+ * The Worker's allowlist: the only fields ever read out of the request body.
+ * Narrowing on `storedIn === "context"` as well as `source` is what keeps a new
+ * kind of declaration — a cookie, a rate-limit record, a future column — from
+ * silently widening what a submitted body is allowed to write.
+ */
 export const CLIENT_CONTEXT_FIELDS = BUG_CONTEXT_FIELDS.filter(
   (field) => field.source === "client" && field.storedIn === "context"
 );
 
 /**
  * Fields the row keeps in a column of its own rather than in the `context`
- * blob. Every one of these is data about the reporter, which is why the guard
- * test in worker/routes/contact.test.js compares the persisted columns against
- * this list: a column can only hold what the disclosure already declares.
+ * blob. The guard test in worker/routes/contact.test.js compares the columns a
+ * real submission persists against this list, so a column can only hold what
+ * the descriptor declares.
  */
 export const COLUMN_FIELDS = BUG_CONTEXT_FIELDS.filter(
   (field) => field.storedIn === "column"
@@ -181,10 +170,6 @@ export const COLUMN_FIELDS = BUG_CONTEXT_FIELDS.filter(
 /** @returns {BugContextField|undefined} */
 export function bugContextField(key) {
   return BUG_CONTEXT_FIELDS.find((field) => field.key === key);
-}
-
-function isSent(field, optIn) {
-  return !field.optIn || optIn.includes(field.key);
 }
 
 function readValue(win, read) {
@@ -199,46 +184,22 @@ function readValue(win, read) {
 }
 
 /**
- * Build the context half of the request payload straight from the descriptor.
+ * Build the client's half of the request payload straight from the descriptor.
+ * Everything the browser can supply goes every time — the form asks nothing and
+ * promises nothing, and public/privacy.html is where the reporter finds out
+ * what that is.
  *
  * @param {Window} win
- * @param {{ optIn?: string[] }} [options] Keys of opt-in fields the reporter ticked.
- * @returns {{ context: object, [key: string]: unknown }} Spread into the request body.
+ * @returns {{ context: object, [key: string]: unknown }} Spread into the body.
  */
-export function collectBugPayload(win, { optIn = [] } = {}) {
+export function collectBugPayload(win) {
   const payload = { context: {} };
   for (const field of BUG_CONTEXT_FIELDS) {
-    if (field.source !== "client" || !isSent(field, optIn)) continue;
+    if (field.source !== "client" || !field.collect) continue;
     const value = readValue(win, field.collect);
     if (value === undefined) continue;
     if (field.storedIn === "column") payload[field.key] = value;
     else payload.context[field.key] = value;
   }
   return payload;
-}
-
-/**
- * The disclosure shown to the reporter, derived from the same descriptor as the
- * payload, so the list is what is sent rather than a description of it. Client
- * fields show the value being attached; server fields show the real value where
- * the browser can know it and a plain description where it cannot.
- *
- * @param {Window} win
- * @param {{ optIn?: string[] }} [options]
- * @returns {{ key: string, label: string, value: string }[]}
- */
-export function describeBugContext(win, { optIn = [] } = {}) {
-  const rows = [];
-  for (const field of BUG_CONTEXT_FIELDS) {
-    if (!isSent(field, optIn)) continue;
-    if (field.source === "client") {
-      const value = readValue(win, field.collect);
-      if (value === undefined) continue;
-      rows.push({ key: field.key, label: field.label, value: String(value) });
-      continue;
-    }
-    const previewed = field.preview ? readValue(win, field.preview) : undefined;
-    rows.push({ key: field.key, label: field.label, value: String(previewed ?? field.description) });
-  }
-  return rows;
 }

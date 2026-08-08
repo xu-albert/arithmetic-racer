@@ -1,14 +1,22 @@
-// Tests for the bug-report context descriptor and the two functions derived
-// from it. The invariant worth defending here is that the disclosure the
-// reporter reads and the payload the form sends come from the same declaration:
-// a field can be added, but it cannot be added silently.
+// Tests for the bug-report context descriptor, the payload built from it, and
+// the privacy page held to it.
+//
+// The invariant worth defending is that one list governs three places: what the
+// browser attaches, what the Worker will read out of a request body, and what
+// the reporter can read about it. The form itself says nothing about data, so
+// the privacy page is the only account there is — G2 below is what stops a
+// field being collected without one.
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   BUG_CONTEXT_FIELDS,
+  CLIENT_CONTEXT_FIELDS,
+  COLUMN_FIELDS,
   collectBugPayload,
-  describeBugContext,
 } from "./bug-report-context.js";
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/141.0.0.0";
@@ -28,14 +36,6 @@ function fakeWindow(overrides = {}) {
   };
 }
 
-const serverKeys = () =>
-  BUG_CONTEXT_FIELDS.filter((f) => f.source === "server").map((f) => f.key);
-
-/** Every key the payload actually carries, context blob and columns alike. */
-function sentKeys(payload) {
-  return [...Object.keys(payload.context), ...Object.keys(payload).filter((k) => k !== "context")];
-}
-
 test("collects the technical context the browser can see", () => {
   const { context } = collectBugPayload(fakeWindow());
   assert.equal(context.screen, "3024x1964");
@@ -44,22 +44,28 @@ test("collects the technical context the browser can see", () => {
   assert.equal(context.page, "/race/hard");
 });
 
-test("sends no device id unless the reporter opted in", () => {
+test("attaches the device id on every report", () => {
+  // No checkbox and no conditional send: the form asks nothing and promises
+  // nothing, and public/privacy.html accounts for what that means.
   const payload = collectBugPayload(fakeWindow());
-  assert.equal("device_id" in payload, false);
-  assert.equal("device_id" in payload.context, false);
-});
-
-test("sends the device id when the reporter opted in", () => {
-  const payload = collectBugPayload(fakeWindow(), { optIn: ["device_id"] });
   assert.equal(payload.device_id, "dev-abc");
-  // It belongs to the row, not the context blob — that is where the column is.
+  // It belongs to the row's own column, not the context blob.
   assert.equal("device_id" in payload.context, false);
 });
 
-test("omits the device id when opted in but the browser has none stored", () => {
-  const payload = collectBugPayload(fakeWindow({ store: {} }), { optIn: ["device_id"] });
+test("omits the device id when the browser has none stored", () => {
+  const payload = collectBugPayload(fakeWindow({ store: {} }));
   assert.equal("device_id" in payload, false);
+});
+
+test("never sends a server-determined field from the client", () => {
+  // The account id is read from the session and the user agent from the
+  // request header; a report must not be able to claim either.
+  const payload = collectBugPayload(fakeWindow());
+  const sent = new Set([...Object.keys(payload.context), ...Object.keys(payload)]);
+  for (const field of BUG_CONTEXT_FIELDS.filter((f) => f.source === "server")) {
+    assert.equal(sent.has(field.key), false, `${field.key} must not be client-sent`);
+  }
 });
 
 test("keeps no page for a cross-origin referrer", () => {
@@ -85,69 +91,80 @@ test("a browser that refuses to answer does not block the report", () => {
       screen: undefined,
     },
   });
-  const payload = collectBugPayload(hostile, { optIn: ["device_id"] });
+  const payload = collectBugPayload(hostile);
   assert.equal("device_id" in payload, false);
   assert.equal("screen" in payload.context, false);
   assert.equal(payload.context.viewport, "1512x845");
 });
 
-test("the disclosure lists exactly what is sent, plus the server-supplied fields", () => {
-  // The reason the descriptor exists: a hand-written disclosure drifts from the
-  // payload, a generated one cannot. Holds with the opt-in box either way.
-  const win = fakeWindow();
-  for (const optIn of [[], ["device_id"]]) {
-    const shown = describeBugContext(win, { optIn }).map((row) => row.key);
-    const expected = [...sentKeys(collectBugPayload(win, { optIn })), ...serverKeys()];
-    assert.deepEqual(shown.slice().sort(), expected.slice().sort());
+test("the request-body allowlist admits only context-blob fields", () => {
+  // The Worker reads nothing else out of a submitted body. Declaring a cookie,
+  // a rate-limit record or a new column must never widen that, which is why the
+  // allowlist narrows on storedIn and not only on source.
+  for (const field of CLIENT_CONTEXT_FIELDS) {
+    assert.equal(field.storedIn, "context");
+    assert.equal(field.source, "client");
   }
-});
-
-test("the disclosure omits a field the browser could not collect", () => {
-  const win = fakeWindow({ referrer: "" });
-  assert.equal(
-    describeBugContext(win).some((row) => row.key === "page"),
-    false
-  );
-});
-
-test("shows the real user agent rather than describing it", () => {
-  const row = describeBugContext(fakeWindow()).find((r) => r.key === "ua");
-  assert.equal(row.value, UA);
-});
-
-test("describes the server-derived fields the browser cannot know", () => {
-  const rows = describeBugContext(fakeWindow());
-  for (const key of ["browser", "os", "app_version", "signed_in", "user_id"]) {
-    const row = rows.find((r) => r.key === key);
-    assert.ok(row, `${key} must appear in the disclosure even though the client never sends it`);
-    assert.ok(row.value.length > 0);
-    assert.ok(row.label.length > 0);
-  }
-});
-
-test("discloses the account link the request carries without the client sending it", () => {
-  // The session cookie rides along on a same-origin submit, so a signed-in
-  // report is linked to the account whatever the reporter ticks. The client
-  // must not try to supply it, and the disclosure must still name it.
-  const win = fakeWindow();
-  const payload = collectBugPayload(win, { optIn: ["device_id"] });
-  assert.equal("user_id" in payload, false);
-  assert.equal("user_id" in payload.context, false);
-  assert.ok(describeBugContext(win).some((row) => row.key === "user_id"));
-});
-
-test("every declared field carries what both sides need to handle it", () => {
+  const admitted = new Set(CLIENT_CONTEXT_FIELDS.map((f) => f.key));
   for (const field of BUG_CONTEXT_FIELDS) {
-    assert.ok(field.label, `${field.key} needs a label to be disclosable`);
+    if (field.storedIn !== "context" || field.source !== "client") {
+      assert.equal(admitted.has(field.key), false, `${field.key} must stay out of the allowlist`);
+    }
+  }
+});
+
+test("every declared field carries what its consumers need", () => {
+  const seen = new Set();
+  for (const field of BUG_CONTEXT_FIELDS) {
+    assert.equal(seen.has(field.key), false, `duplicate key ${field.key}`);
+    seen.add(field.key);
     assert.ok(["client", "server"].includes(field.source));
-    assert.ok(["context", "column"].includes(field.storedIn));
+    assert.ok(["context", "column", "request", "rate-limit"].includes(field.storedIn));
     if (field.source === "client") assert.equal(typeof field.collect, "function");
+    if (field.source === "server") assert.equal(field.collect, undefined);
     if (field.type === "text" && field.source === "client") {
       assert.equal(typeof field.maxLength, "number");
     }
-    if (field.optIn) {
-      assert.ok(field.optInLabel, `${field.key} is opt-in and needs a checkbox label`);
-      assert.ok(field.optInHint, `${field.key} is opt-in and needs to say what ticking it means`);
-    }
   }
+  assert.deepEqual(
+    COLUMN_FIELDS.map((f) => f.key).sort(),
+    BUG_CONTEXT_FIELDS.filter((f) => f.storedIn === "column").map((f) => f.key).sort()
+  );
+});
+
+// --- G2: the privacy page documents every declared field --------------------
+//
+// public/privacy.html is served byte-for-byte to the reporter, and the
+// `data-collects` attribute in its "what is stored" table is a deliberately
+// owned contract: each value names the descriptor key that the sentence it
+// wraps documents. That attribute set — not the prose around it — is what this
+// asserts on, so rewording a sentence is free and dropping a field is not.
+
+const PRIVACY_HTML = join(dirname(fileURLToPath(import.meta.url)), "..", "privacy.html");
+
+function documentedFieldKeys() {
+  const html = readFileSync(PRIVACY_HTML, "utf8");
+  const keys = new Set();
+  for (const [, value] of html.matchAll(/\sdata-collects="([^"]*)"/g)) {
+    for (const key of value.split(/\s+/).filter(Boolean)) keys.add(key);
+  }
+  return keys;
+}
+
+test("the privacy page documents every field the descriptor declares", () => {
+  const documented = documentedFieldKeys();
+  const missing = BUG_CONTEXT_FIELDS.map((f) => f.key).filter((key) => !documented.has(key));
+  assert.deepEqual(
+    missing,
+    [],
+    `collected but not documented on the privacy page: ${missing.join(", ")}`
+  );
+});
+
+test("the privacy page documents nothing the descriptor does not declare", () => {
+  // The other direction, so a marker left behind by a removed field is caught
+  // rather than quietly claiming something is collected when it is not.
+  const declared = new Set(BUG_CONTEXT_FIELDS.map((f) => f.key));
+  const stale = [...documentedFieldKeys()].filter((key) => !declared.has(key));
+  assert.deepEqual(stale, [], `documented but not collected: ${stale.join(", ")}`);
 });

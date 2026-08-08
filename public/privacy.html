@@ -126,18 +126,32 @@
           </tr>
           <tr>
             <td>
-              A bug report — what you wrote, plus a technical snapshot: your browser
-              and operating system, the identification string your browser sends with
-              every request, your screen size, window size and pixel ratio, the page
-              on this site you came to the form from (the path only, never the query
-              string), the app version, whether you were signed in, and your account
-              id if you were
+              A bug report — what you wrote, plus a technical snapshot taken as you
+              send it: <span data-collects="browser">your browser</span> and
+              <span data-collects="os">operating system</span>,
+              <span data-collects="ua">the identification string your browser sends
+              with every request</span>,
+              <span data-collects="screen">your screen size</span>,
+              <span data-collects="viewport">the size of the window</span> and
+              <span data-collects="dpr">its pixel ratio</span>,
+              <span data-collects="page">the page on this site you came to the form
+              from</span> (the path only, never the query string),
+              <span data-collects="app_version">the app version</span>,
+              <span data-collects="signed_in">whether you were signed in</span> and
+              <span data-collects="user_id">your account id if you were</span>, and
+              <span data-collects="device_id">the device ID from your browser</span>
             </td>
             <td>
-              Only when you submit the <a href="/bug-report">bug report form</a>, which
-              lists the whole snapshot before you send it. Your device ID is attached
-              only if you tick the box to link the report to your past races — it is
-              off unless you do. Kept until the bug is dealt with.
+              Only when you submit the <a href="/bug-report">bug report form</a>. All
+              of it goes automatically — there is nothing to tick and nothing to turn
+              off, which is why this page rather than that form is the full account of
+              what a report carries. Sending one also means
+              <span data-collects="session_cookie">your sign-in cookie travels with the
+              request</span>, which is how the account id is known, and
+              <span data-collects="rate_limit_ip">your IP address is counted for an
+              hour</span> so the form cannot be flooded — that record holds the address
+              and a number, nothing else, and expires on its own. Kept until the bug is
+              dealt with.
             </td>
           </tr>
         </tbody>

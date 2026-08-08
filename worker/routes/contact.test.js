@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from "vite
 import { env } from "cloudflare:test";
 import { handleContact } from "./contact.js";
 import { APP_VERSION } from "../version.js";
-import { BUG_CONTEXT_FIELDS } from "../../public/src/bug-report-context.js";
+import { BUG_CONTEXT_FIELDS, COLUMN_FIELDS } from "../../public/src/bug-report-context.js";
 import { _setTestUserId } from "../session.js";
 
 beforeAll(async () => {
@@ -471,11 +471,11 @@ describe("POST /api/contact — captured context", () => {
 
   it("persists no user-data column the shared descriptor does not declare", async () => {
     // The columns half of the same promise. A bug report filed while signed in
-    // carries the session cookie, so the row picks up an account link the
-    // reporter never ticked a box for — the disclosure has to name it, and this
-    // is what makes that enforceable rather than aspirational. Exercised with a
-    // real signed-in reporter on purpose: with user_id null the assertion
-    // cannot fail, which is precisely how the account link went unnoticed.
+    // carries the session cookie, so the row picks up an account link nothing on
+    // the form mentions — the privacy page has to name it, and this is what
+    // makes that enforceable rather than aspirational. Exercised with a real
+    // signed-in reporter on purpose: with user_id null the assertion cannot
+    // fail, which is precisely how the account link went unnoticed.
     await seedUser("u-reporter");
     _setTestUserId("u-reporter");
     await submitBug({ device_id: "dev-abc" });
@@ -495,11 +495,11 @@ describe("POST /api/contact — captured context", () => {
       "email",
       "context",
     ]);
-    const persisted = Object.entries(row)
-      .filter(([column, value]) => value !== null && !NOT_ABOUT_THE_REPORTER.has(column))
-      .map(([column]) => column);
-    const declared = BUG_CONTEXT_FIELDS.filter((f) => f.storedIn === "column").map((f) => f.key);
-    expect(persisted.sort()).toEqual(declared.sort());
+    // Every remaining column, not just the ones this submission populated. A
+    // column that is null here but filled on some other path is exactly the
+    // shape of gap that let the account link go undeclared.
+    const persisted = Object.keys(row).filter((column) => !NOT_ABOUT_THE_REPORTER.has(column));
+    expect(persisted.sort()).toEqual(COLUMN_FIELDS.map((f) => f.key).sort());
   });
 
   it("leaves the account link empty for a report filed while signed out", async () => {
@@ -508,8 +508,8 @@ describe("POST /api/contact — captured context", () => {
   });
 
   it("stores the device id when the report carries one", async () => {
-    // Sent only when the reporter ticked the opt-in box; the form's half of
-    // that is covered in public/src/bug-report-context.test.js.
+    // The form attaches this on every report; its half is covered in
+    // public/src/bug-report-context.test.js.
     await submitBug({ device_id: "dev-abc" });
     expect((await rows())[0].device_id).toBe("dev-abc");
   });

@@ -18,8 +18,8 @@
 // went wrong" and "what did you expect" are actually required rather than
 // merely marked required in the form. They also carry a context snapshot; what
 // is and is not kept is declared once in public/src/bug-report-context.js,
-// which the form reads too, so the disclosure it shows the reporter and the
-// allowlist enforced here cannot describe different things.
+// which the form reads too, so the allowlist enforced here and the account of
+// it on the privacy page cannot describe different things.
 
 import { readUserId } from "../session.js";
 import { sendTransactional } from "../email.js";
@@ -39,9 +39,7 @@ const MAX_BUG_FIELD_LEN = 1500;
 // `where` is a single-line answer, and it has to fit in the budget above.
 const MAX_BUG_WHERE_LEN = 200;
 
-// The device ID is the one piece of the snapshot the reporter opts into (see
-// the descriptor for why), so it arrives only when they ticked the box. Its cap
-// comes from the same declaration as the rest.
+// Cap from the same declaration as the rest of the snapshot.
 const MAX_DEVICE_ID_LEN = bugContextField("device_id").maxLength;
 
 // Workers KV requires expirationTtl >= 60s. Three messages an hour per IP is
