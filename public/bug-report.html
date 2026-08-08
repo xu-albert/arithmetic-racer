@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Report a bug — Arithmetic Racer</title>
+  <meta name="description" content="Report a bug in Arithmetic Racer." />
+  <meta name="robots" content="noindex,nofollow" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏎️</text></svg>" />
+  <link rel="stylesheet" href="style-a.css" />
+  <style>
+    .doc {
+      max-width: 34rem;
+      margin: 1.5rem auto 3rem;
+      padding: 1.75rem clamp(1rem, 4vw, 2.25rem);
+      background: var(--card);
+      border-radius: 14px;
+      box-shadow: var(--card-shadow);
+      color: var(--navy-soft);
+      line-height: 1.6;
+    }
+    .doc h1 { color: var(--navy); margin: 0 0 0.5rem; }
+    .doc a { color: var(--car-blue); }
+    .doc .back { display: inline-block; margin-bottom: 1rem; color: var(--car-blue); }
+    .doc label { display: block; margin: 1.1rem 0 0.3rem; color: var(--navy); font-weight: 600; font-size: 0.95rem; }
+    .doc .hint { font-weight: 400; color: var(--navy-mute); font-size: 0.85rem; }
+    .doc input[type="email"],
+    .doc textarea {
+      width: 100%;
+      padding: 0.6rem 0.7rem;
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      font: inherit;
+      font-size: 1rem;
+      color: var(--navy-soft);
+      background: #fff;
+    }
+    .doc textarea { min-height: 5.5rem; resize: vertical; }
+    .doc button {
+      margin-top: 1.2rem;
+      width: 100%;
+      padding: 0.75rem 1rem;
+      font: inherit;
+      font-weight: 700;
+      font-size: 1rem;
+      color: #fff;
+      background: var(--green);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .doc button:hover:not(:disabled) { background: var(--green-hover); }
+    .doc button:disabled { opacity: 0.6; cursor: default; }
+    .form-note {
+      margin: 1rem 0 0;
+      padding: 0.7rem 0.85rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .form-note.error { display: block; background: #fdecea; color: #a3231a; }
+    .form-note.ok { display: block; background: #eaf7ea; color: #2f6d2f; }
+    .context-note {
+      margin: 1.4rem 0 0;
+      padding: 0.7rem 0.85rem;
+      border-radius: 8px;
+      background: #f3f7fb;
+      font-size: 0.85rem;
+      color: var(--navy-mute);
+    }
+    .context-note summary { cursor: pointer; color: var(--navy-soft); }
+    .context-note dl {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 0.15rem 0.7rem;
+      margin: 0.6rem 0 0;
+    }
+    .context-note dt { color: var(--navy-mute); }
+    .context-note dd { margin: 0; word-break: break-word; color: var(--navy-soft); }
+  </style>
+</head>
+<body>
+  <main class="doc">
+    <a class="back" href="/">&larr; Back to Arithmetic Racer</a>
+    <h1>Report a bug</h1>
+    <p>
+      Something broken, wrong, or stuck? Tell us what happened. For anything
+      else — a question, feedback, or deleting your data — use the
+      <a href="/contact">contact form</a>.
+    </p>
+
+    <form id="bug-form" novalidate>
+      <label for="what-happened">What went wrong?</label>
+      <textarea id="what-happened" name="what_happened" maxlength="1500" required
+        placeholder="The race froze on the third problem and my car stopped moving."></textarea>
+
+      <label for="expected">What did you expect to happen?</label>
+      <textarea id="expected" name="expected" maxlength="1500" required
+        placeholder="The next problem should have appeared after I pressed Enter."></textarea>
+
+      <label for="steps">
+        Steps to reproduce
+        <span class="hint">— optional, but it makes a bug far easier to fix</span>
+      </label>
+      <textarea id="steps" name="steps" maxlength="1500"
+        placeholder="1. Start a Quickplay race on hard&#10;2. Answer two problems&#10;3. …"></textarea>
+
+      <label for="email">
+        Your email
+        <span class="hint">— optional, only if you want a reply</span>
+      </label>
+      <input type="email" id="email" name="email" autocomplete="email" placeholder="you@example.com" />
+
+      <details class="context-note">
+        <summary>We also attach some technical details automatically</summary>
+        <p>
+          So you never have to answer &ldquo;which browser were you using?&rdquo;. We
+          record the app version you are running and whether you are signed in,
+          plus exactly the following — and nothing else. No cookies, no
+          password, no web addresses, nothing else from the game.
+        </p>
+        <dl id="context-preview"></dl>
+      </details>
+
+      <button type="submit" id="submit-btn">Send bug report</button>
+      <p class="form-note" id="form-note" role="status" aria-live="polite"></p>
+    </form>
+  </main>
+
+  <script type="module">
+    const form = document.getElementById("bug-form");
+    const note = document.getElementById("form-note");
+    const btn = document.getElementById("submit-btn");
+
+    /**
+     * The technical snapshot sent with the report. Everything here is shown to
+     * the reporter first (see #context-preview) — if a field would be
+     * uncomfortable to display back to them, it does not belong in this object.
+     *
+     * `page` is a path with no query string on purpose. A URL on this site can
+     * carry a one-time password-reset token or a private room's invite slug,
+     * and neither is worth capturing. The worker strips any that slips through
+     * and ignores every key not on its own allowlist, so this is the polite
+     * half of the rule rather than the enforcing half.
+     *
+     * Browser, OS, app version and signed-in status are deliberately *not*
+     * collected here — the worker derives them from the request itself, which
+     * it can actually trust.
+     */
+    function collectContext() {
+      const context = {};
+      try {
+        context.screen = `${window.screen.width}x${window.screen.height}`;
+        context.viewport = `${window.innerWidth}x${window.innerHeight}`;
+        context.dpr = Math.round((window.devicePixelRatio || 1) * 100) / 100;
+        const from = document.referrer ? new URL(document.referrer) : null;
+        if (from && from.origin === window.location.origin) context.page = from.pathname;
+      } catch {
+        // Context is a convenience. Never let collecting it block a report.
+      }
+      return context;
+    }
+
+    const context = collectContext();
+
+    // Shows the reporter the actual values being sent, not a description of
+    // them — the point of the disclosure is that it can be checked. The
+    // browser line is the same string the worker reads off the request.
+    const PREVIEW_ROWS = [
+      ["Page you came from", context.page],
+      ["Screen size", context.screen],
+      ["Window size", context.viewport],
+      ["Pixel ratio", context.dpr],
+      ["Browser and OS", navigator.userAgent],
+    ];
+    const preview = document.getElementById("context-preview");
+    for (const [label, value] of PREVIEW_ROWS) {
+      if (value === undefined) continue;
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      preview.append(dt, dd);
+    }
+
+    function show(kindClass, text) {
+      note.className = `form-note ${kindClass}`;
+      note.textContent = text;
+    }
+
+    const value = (id) => document.getElementById(id).value.trim();
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const whatHappened = value("what-happened");
+      const expected = value("expected");
+      if (!whatHappened) return show("error", "Please describe what went wrong.");
+      if (!expected) return show("error", "Please say what you expected to happen instead.");
+
+      btn.disabled = true;
+      show("", "");
+      try {
+        const res = await fetch("/api/contact", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: "bug",
+            what_happened: whatHappened,
+            expected,
+            steps: value("steps") || undefined,
+            email: value("email") || undefined,
+            device_id: localStorage.getItem("deviceId") || undefined,
+            context,
+          }),
+        });
+        if (res.status === 429) {
+          show("error", "That's a few reports in a short time — please try again later.");
+          return;
+        }
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          const reason = {
+            empty_what_happened: "Please describe what went wrong.",
+            empty_expected: "Please say what you expected to happen instead.",
+            field_too_long: "That's a bit long — please shorten it.",
+            message_too_long: "That's a bit long — please shorten it.",
+            invalid_email: "That email address doesn't look right.",
+          }[body.error];
+          show("error", reason ?? "Something went wrong sending that. Please try again.");
+          return;
+        }
+        form.reset();
+        show("ok", "Thanks — your bug report was received.");
+      } catch {
+        show("error", "Couldn't reach the server. Please check your connection and try again.");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

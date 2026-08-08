@@ -289,24 +289,123 @@ export async function handleAdminUser(request, env) {
   return new Response(body, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
+// Kinds the contact table can be filtered to, and their dashboard labels.
+// Matches the CHECK constraint in migrations/0007_contact_bug_reports.sql; an
+// unknown ?kind= falls back to showing everything rather than an empty table.
+const CONTACT_KINDS = [
+  ["bug", "Bug reports"],
+  ["general", "General"],
+  ["deletion", "Deletion"],
+];
+
 /**
  * Newest contact submissions. Capped rather than paginated — if the backlog
  * ever exceeds this, the answer is to deal with it, not to scroll.
+ *
+ * @param {string|null} kind Restrict to one kind, or null for all.
  */
-async function loadContactMessages(env, limit = 50) {
+async function loadContactMessages(env, kind = null, limit = 50) {
+  const where = kind ? "WHERE kind = ?" : "";
+  const binds = kind ? [kind, limit] : [limit];
   try {
     const { results } = await env.DB.prepare(
-      `SELECT id, email, message, kind, user_id, handled, created_at
+      `SELECT id, email, message, kind, user_id, handled, created_at, context
          FROM contact_messages
+         ${where}
         ORDER BY created_at DESC, id DESC
         LIMIT ?`
-    ).bind(limit).all();
+    ).bind(...binds).all();
     return results ?? [];
   } catch {
-    // The table arrives in migration 0005. An un-migrated database should
-    // degrade to an empty section rather than take down the whole dashboard.
+    // The table arrives in migration 0005 and gains `context` in 0007. An
+    // un-migrated database should degrade to an empty section rather than take
+    // down the whole dashboard.
     return [];
   }
+}
+
+// Order the captured fields are shown in — most identifying of the bug first,
+// rather than the arbitrary order JSON.stringify happened to produce.
+const CONTEXT_FIELD_ORDER = [
+  ["browser", "browser"],
+  ["os", "OS"],
+  ["page", "page"],
+  ["app_version", "version"],
+  ["signed_in", "signed in"],
+  ["viewport", "viewport"],
+  ["screen", "screen"],
+  ["dpr", "pixel ratio"],
+  ["ua", "user agent"],
+];
+
+/**
+ * Render a bug report's captured context, collapsed. It is reference material
+ * for a report already being read, so it should not push the message text of
+ * every other row off the screen.
+ */
+function renderContext(contextJson) {
+  if (!contextJson) return "";
+
+  let context;
+  try {
+    context = JSON.parse(contextJson);
+  } catch {
+    // Stored by an older or broken writer. Showing the raw text beats hiding
+    // that something is there.
+    return `<details class="ctx"><summary>context (unparseable)</summary><pre>${escapeHtml(contextJson)}</pre></details>`;
+  }
+  if (!context || typeof context !== "object") return "";
+
+  const known = new Set(CONTEXT_FIELD_ORDER.map(([key]) => key));
+  const entries = [
+    ...CONTEXT_FIELD_ORDER.filter(([key]) => context[key] !== undefined && context[key] !== null),
+    // Anything a newer writer added that this dashboard doesn't know a label
+    // for still gets shown, under its raw key.
+    ...Object.keys(context).filter((key) => !known.has(key)).map((key) => [key, key]),
+  ];
+  if (!entries.length) return "";
+
+  const rows = entries
+    .map(([key, label]) => {
+      const value = typeof context[key] === "boolean" ? (context[key] ? "yes" : "no") : context[key];
+      return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`;
+    })
+    .join("");
+  return `<details class="ctx"><summary>context</summary><dl>${rows}</dl></details>`;
+}
+
+function contactHref(token, kind) {
+  return `/admin/?token=${encodeURIComponent(token)}${kind ? `&kind=${kind}` : ""}`;
+}
+
+function renderContactFilters(activeKind, token, counts) {
+  const link = (kind, label) => {
+    const total = counts[kind ?? "all"]?.total ?? 0;
+    const text = `${label}${total ? ` (${total})` : ""}`;
+    return kind === activeKind
+      ? `<strong>${escapeHtml(text)}</strong>`
+      : `<a href="${escapeHtml(contactHref(token, kind))}">${escapeHtml(text)}</a>`;
+  };
+  const links = [link(null, "All"), ...CONTACT_KINDS.map(([kind, label]) => link(kind, label))];
+  return raw(`<p class="contact-filters">${links.join(" · ")}</p>`);
+}
+
+/**
+ * Top-of-page banner for unhandled bug reports.
+ *
+ * The contact notification email has never actually fired in production
+ * (neither LOOPS_TEMPLATE_CONTACT nor CONTACT_EMAIL is configured), which
+ * makes this dashboard the only place a bug report is ever seen. A section
+ * below the fold is not good enough for the sole delivery path, so an
+ * outstanding report announces itself before anything else on the page.
+ */
+function renderBugAlert(counts, token) {
+  const unhandled = counts.bug?.unhandled ?? 0;
+  if (!unhandled) return raw("");
+  const label = `${unhandled} unhandled bug report${unhandled === 1 ? "" : "s"}`;
+  return raw(
+    `<p class="bug-alert"><a href="${escapeHtml(contactHref(token, "bug"))}">${escapeHtml(label)}</a></p>`
+  );
 }
 
 function renderContactTable(messages, now) {
@@ -316,13 +415,14 @@ function renderContactTable(messages, now) {
       const whenIso = new Date(m.created_at).toISOString();
       // escapeHtml on the message body is load-bearing, not cosmetic: this is
       // arbitrary text a stranger typed into a public form, rendered into the
-      // operator's own authenticated page.
+      // operator's own authenticated page. The same goes for every context
+      // value below — those are attacker-controlled too.
       return `<tr class="${m.handled ? "contact-row handled" : "contact-row"}">
       <td><span title="${escapeHtml(whenIso)}">${escapeHtml(relativeTime(now, m.created_at))}</span></td>
-      <td>${escapeHtml(m.kind)}</td>
+      <td class="kind kind-${escapeHtml(m.kind)}">${escapeHtml(m.kind)}</td>
       <td>${escapeHtml(m.email ?? "—")}</td>
       <td>${m.user_id ? "signed in" : "anonymous"}</td>
-      <td class="msg">${escapeHtml(m.message)}</td>
+      <td class="msg">${escapeHtml(m.message)}${renderContext(m.context)}</td>
       <td>${m.handled ? "handled" : "open"}</td>
     </tr>`;
     })
@@ -333,6 +433,33 @@ function renderContactTable(messages, now) {
     </thead>
     <tbody>${body}</tbody>
   </table>`);
+}
+
+/**
+ * Per-kind totals for the filter links (so a filter shows what it will find)
+ * and unhandled counts (so the bug alert knows whether to appear).
+ *
+ * @returns {Record<string, {total: number, unhandled: number}>} Keyed by kind,
+ *   plus an `all` bucket. Kinds with no rows are simply absent.
+ */
+async function loadContactCounts(env) {
+  const counts = { all: { total: 0, unhandled: 0 } };
+  try {
+    const { results } = await env.DB
+      .prepare(
+        `SELECT kind, COUNT(*) AS total, SUM(CASE WHEN handled = 0 THEN 1 ELSE 0 END) AS unhandled
+           FROM contact_messages GROUP BY kind`
+      )
+      .all();
+    for (const row of results ?? []) {
+      counts[row.kind] = { total: Number(row.total), unhandled: Number(row.unhandled) };
+      counts.all.total += Number(row.total);
+      counts.all.unhandled += Number(row.unhandled);
+    }
+  } catch {
+    // Same degradation as loadContactMessages: no table, no counts, no crash.
+  }
+  return counts;
 }
 
 export async function handleAdminIndex(request, env) {
@@ -348,7 +475,13 @@ export async function handleAdminIndex(request, env) {
   const token = url.searchParams.get("token") ?? "";
   const cursorBase = `/admin/?token=${encodeURIComponent(token)}`;
   const rows = await loadRecentRaces(env, { before, beforeId });
-  const messages = await loadContactMessages(env);
+
+  const requestedKind = url.searchParams.get("kind");
+  const contactKind = CONTACT_KINDS.some(([k]) => k === requestedKind) ? requestedKind : null;
+  const [messages, contactCounts] = await Promise.all([
+    loadContactMessages(env, contactKind),
+    loadContactCounts(env),
+  ]);
 
   const body = html`
     <!doctype html>
@@ -368,10 +501,21 @@ export async function handleAdminIndex(request, env) {
           table.contact th, table.contact td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; vertical-align: top; }
           table.contact .msg { white-space: pre-wrap; word-break: break-word; max-width: 32rem; }
           table.contact tr.handled { color: #999; }
+          table.contact .kind-bug { font-weight: 600; color: #a3231a; }
+          .bug-alert { margin: 0 0 1rem; padding: 0.5rem 0.75rem; border-radius: 6px; background: #fdecea; }
+          .bug-alert a { color: #a3231a; font-weight: 600; }
+          .contact-filters { margin: 0.5rem 0; color: #888; }
+          .contact-filters a { color: #444; }
+          details.ctx { margin-top: 0.5rem; font-size: 0.9em; }
+          details.ctx summary { cursor: pointer; color: #888; }
+          details.ctx dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.1rem 0.6rem; margin: 0.4rem 0 0; }
+          details.ctx dt { color: #888; }
+          details.ctx dd { margin: 0; word-break: break-word; }
         </style>
       </head>
       <body>
         <h1>Arithmetic Racer · admin</h1>
+        ${renderBugAlert(contactCounts, token)}
         <table class="tiles">
           <thead>
             <tr><th></th><th>Today</th><th>7 days</th><th>All-time</th></tr>
@@ -392,6 +536,7 @@ export async function handleAdminIndex(request, env) {
         <h2>Recent races</h2>
         ${renderRacesTable(rows, now, token, cursorBase)}
         <h2>Contact messages${messages.length ? ` (${messages.filter((m) => !m.handled).length} unhandled)` : ""}</h2>
+        ${renderContactFilters(contactKind, token, contactCounts)}
         ${renderContactTable(messages, now)}
       </body>
     </html>

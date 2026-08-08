@@ -10,7 +10,7 @@ npm test
 
 Two suites run back to back:
 
-- `node --test` over the pure modules (`public/src/*.test.js`, plus `server/room-stats.test.js`) — problem generation and validation, bot tier delays, the handle generator, and the shared room-config rules.
+- `node --test` over the pure modules (`public/src/*.test.js`, plus `server/room-stats.test.js`) — problem generation and validation, bot tier delays, the handle generator, and the shared room-config rules. `migrations/*.test.js` runs here too: it applies every migration to an in-memory SQLite database and asserts on the resulting schema (see `migrations/README.md`).
 - `vitest run` over the Worker and Durable Object tests (`worker/**`, `server/**`), which execute against real bindings via `@cloudflare/vitest-pool-workers`. `server/room-config.test.js` drives a full two-player private race inside a real `RaceRoom` DO.
 
 The manual probes below still cover what the DO tests don't (real sockets, browser UI, timing).

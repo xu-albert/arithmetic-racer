@@ -364,17 +364,20 @@ describe("per-user drill-down", () => {
 
 describe("admin dashboard — contact messages", () => {
   beforeAll(async () => {
-    // Mirror of migrations/0005_contact_messages.sql.
+    // Mirror of migrations/0005_contact_messages.sql as amended by
+    // migrations/0007_contact_bug_reports.sql. The migration files themselves
+    // are executed and asserted on in migrations/migrations.test.js.
     await env.DB.exec(
       "CREATE TABLE IF NOT EXISTS contact_messages (" +
         "id TEXT PRIMARY KEY, " +
         "email TEXT, " +
         "message TEXT NOT NULL, " +
-        "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion')), " +
+        "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
         "user_id TEXT, " +
         "device_id TEXT, " +
         "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
-        "created_at INTEGER NOT NULL" +
+        "created_at INTEGER NOT NULL, " +
+        "context TEXT" +
         ")"
     );
   });
@@ -383,16 +386,24 @@ describe("admin dashboard — contact messages", () => {
     await env.DB.exec("DELETE FROM contact_messages");
   });
 
-  async function insert({ id = crypto.randomUUID(), message, kind = "general", email = null, handled = 0 }) {
+  async function insert({
+    id = crypto.randomUUID(),
+    message,
+    kind = "general",
+    email = null,
+    handled = 0,
+    context = null,
+    created_at = Date.now(),
+  }) {
     await env.DB.prepare(
-      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at) " +
-        "VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)"
-    ).bind(id, email, message, kind, handled, Date.now()).run();
+      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
+        "VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)"
+    ).bind(id, email, message, kind, handled, created_at, context).run();
   }
 
-  async function dashboard() {
+  async function dashboard(query = "") {
     const res = await handleAdminIndex(
-      new Request("https://x/admin/?token=t"),
+      new Request(`https://x/admin/?token=t${query}`),
       { ...env, ADMIN_TOKEN: "t" }
     );
     return res.text();
@@ -423,5 +434,197 @@ describe("admin dashboard — contact messages", () => {
 
   it("renders an empty state rather than failing", async () => {
     expect(await dashboard()).toContain("No contact messages");
+  });
+});
+
+describe("admin dashboard — finding bug reports", () => {
+  // The contact notification email has never been configured in production,
+  // so this dashboard is the only place a bug report is ever read. "Findable
+  // here" is the delivery guarantee, not a convenience.
+  beforeEach(async () => {
+    await env.DB.exec("DELETE FROM contact_messages");
+  });
+
+  async function insert(row) {
+    await env.DB.prepare(
+      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
+        "VALUES (?, NULL, ?, ?, NULL, NULL, ?, ?, ?)"
+    )
+      .bind(
+        row.id ?? crypto.randomUUID(),
+        row.message,
+        row.kind ?? "general",
+        row.handled ?? 0,
+        row.created_at ?? Date.now(),
+        row.context ?? null
+      )
+      .run();
+  }
+
+  async function dashboard(query = "") {
+    const res = await handleAdminIndex(
+      new Request(`https://x/admin/?token=t${query}`),
+      { ...env, ADMIN_TOKEN: "t" }
+    );
+    return res.text();
+  }
+
+  it("filters the table to bug reports with ?kind=bug", async () => {
+    await insert({ message: "a general question", kind: "general" });
+    await insert({ message: "the race froze", kind: "bug" });
+    await insert({ message: "delete me please", kind: "deletion" });
+
+    const body = await dashboard("&kind=bug");
+    expect(body).toContain("the race froze");
+    expect(body).not.toContain("a general question");
+    expect(body).not.toContain("delete me please");
+  });
+
+  it("filters to the other kinds too", async () => {
+    await insert({ message: "a general question", kind: "general" });
+    await insert({ message: "the race froze", kind: "bug" });
+
+    const body = await dashboard("&kind=general");
+    expect(body).toContain("a general question");
+    expect(body).not.toContain("the race froze");
+  });
+
+  it("shows everything when unfiltered", async () => {
+    await insert({ message: "a general question", kind: "general" });
+    await insert({ message: "the race froze", kind: "bug" });
+    const body = await dashboard();
+    expect(body).toContain("a general question");
+    expect(body).toContain("the race froze");
+  });
+
+  it("ignores an unknown kind rather than showing an empty table", async () => {
+    await insert({ message: "the race froze", kind: "bug" });
+    const body = await dashboard("&kind=nonsense");
+    expect(body).toContain("the race froze");
+  });
+
+  it("offers filter links that carry the admin token", async () => {
+    await insert({ message: "the race froze", kind: "bug" });
+    const body = await dashboard();
+    expect(body).toContain("Bug reports");
+    expect(body).toMatch(/href="\/admin\/\?token=t(&amp;|&)kind=bug"/);
+  });
+
+  it("counts each kind on its filter link", async () => {
+    await insert({ message: "one", kind: "bug" });
+    await insert({ message: "two", kind: "bug" });
+    await insert({ message: "three", kind: "general" });
+    const body = await dashboard();
+    expect(body).toContain("Bug reports (2)");
+    expect(body).toContain("General (1)");
+  });
+
+  it("announces unhandled bug reports at the top of the page", async () => {
+    await insert({ message: "the race froze", kind: "bug" });
+    const body = await dashboard();
+    expect(body).toContain("1 unhandled bug report");
+    // Above the summary tiles — below the fold is not good enough for the only
+    // delivery path there is.
+    expect(body.indexOf("unhandled bug report")).toBeLessThan(body.indexOf("races finished"));
+  });
+
+  it("pluralizes the announcement", async () => {
+    await insert({ message: "one", kind: "bug" });
+    await insert({ message: "two", kind: "bug" });
+    expect(await dashboard()).toContain("2 unhandled bug reports");
+  });
+
+  it("says nothing when every bug report is handled", async () => {
+    await insert({ message: "the race froze", kind: "bug", handled: 1 });
+    expect(await dashboard()).not.toContain("unhandled bug report");
+  });
+
+  it("says nothing when the only unhandled messages are other kinds", async () => {
+    await insert({ message: "a general question", kind: "general" });
+    expect(await dashboard()).not.toContain("unhandled bug report");
+  });
+});
+
+describe("admin dashboard — captured context", () => {
+  const CONTEXT = JSON.stringify({
+    browser: "Chrome 141",
+    os: "macOS",
+    page: "/some/route",
+    app_version: "0.1.0",
+    signed_in: false,
+    viewport: "1512x845",
+    screen: "3024x1964",
+    dpr: 2,
+    ua: "Mozilla/5.0 (Macintosh) Chrome/141.0.0.0",
+  });
+
+  beforeEach(async () => {
+    await env.DB.exec("DELETE FROM contact_messages");
+  });
+
+  async function insertWithContext(context, message = "the race froze") {
+    await env.DB.prepare(
+      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
+        "VALUES (?, NULL, ?, 'bug', NULL, NULL, 0, ?, ?)"
+    ).bind(crypto.randomUUID(), message, Date.now(), context).run();
+  }
+
+  async function dashboard() {
+    const res = await handleAdminIndex(
+      new Request("https://x/admin/?token=t"),
+      { ...env, ADMIN_TOKEN: "t" }
+    );
+    return res.text();
+  }
+
+  it("surfaces every captured field when reading a report", async () => {
+    await insertWithContext(CONTEXT);
+    const body = await dashboard();
+    for (const value of ["Chrome 141", "macOS", "/some/route", "0.1.0", "1512x845", "3024x1964"]) {
+      expect(body).toContain(value);
+    }
+  });
+
+  it("labels the fields rather than dumping raw JSON keys", async () => {
+    await insertWithContext(CONTEXT);
+    const body = await dashboard();
+    expect(body).toContain("user agent");
+    expect(body).toContain("pixel ratio");
+  });
+
+  it("renders booleans readably", async () => {
+    await insertWithContext(JSON.stringify({ signed_in: true }));
+    const body = await dashboard();
+    expect(body).toMatch(/signed in<\/dt><dd>yes<\/dd>/);
+  });
+
+  it("shows unknown keys from a newer writer rather than hiding them", async () => {
+    await insertWithContext(JSON.stringify({ browser: "Chrome 141", future_field: "kept" }));
+    expect(await dashboard()).toContain("future_field");
+  });
+
+  it("escapes HTML in context values", async () => {
+    // Client-controlled, exactly like the message body — the allowlist bounds
+    // which keys are stored, not what a stranger can put inside one.
+    await insertWithContext(JSON.stringify({ viewport: "<img src=x onerror=alert(1)>" }));
+    const body = await dashboard();
+    expect(body).not.toContain("<img src=x onerror=alert(1)>");
+    expect(body).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("shows unparseable context rather than silently swallowing it", async () => {
+    await insertWithContext("{not json");
+    const body = await dashboard();
+    expect(body).toContain("unparseable");
+    expect(body).toContain("{not json");
+  });
+
+  it("renders no context block for a message that has none", async () => {
+    await env.DB.prepare(
+      "INSERT INTO contact_messages (id, message, kind, handled, created_at) VALUES (?, 'plain question', 'general', 0, ?)"
+    ).bind(crypto.randomUUID(), Date.now()).run();
+    const body = await dashboard();
+    expect(body).toContain("plain question");
+    expect(body).not.toContain("<details class=\"ctx\"");
   });
 });

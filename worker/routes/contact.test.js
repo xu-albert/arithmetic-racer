@@ -1,12 +1,17 @@
 // Tests for POST /api/contact.
 //
-// Mirrors migrations/0005_contact_messages.sql inline, matching the pattern in
+// Mirrors migrations/0005_contact_messages.sql as amended by
+// migrations/0007_contact_bug_reports.sql, inline, matching the pattern in
 // race-result.test.js (vitest-pool-workers gives an ephemeral in-memory D1 per
-// test file). If that migration changes, update this block to match.
+// test file). If those migrations change, update this block to match — and
+// note that D1's exec() runs one statement per line, which is why this is a
+// single-line paraphrase rather than the file itself. The migration files
+// proper are executed and asserted on in migrations/migrations.test.js.
 
 import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from "vitest";
 import { env } from "cloudflare:test";
 import { handleContact } from "./contact.js";
+import { APP_VERSION } from "../version.js";
 
 beforeAll(async () => {
   await env.DB.exec(
@@ -14,11 +19,12 @@ beforeAll(async () => {
       "id TEXT PRIMARY KEY, " +
       "email TEXT, " +
       "message TEXT NOT NULL, " +
-      "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion')), " +
+      "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
       "user_id TEXT, " +
       "device_id TEXT, " +
       "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
-      "created_at INTEGER NOT NULL" +
+      "created_at INTEGER NOT NULL, " +
+      "context TEXT" +
       ")"
   );
 });
@@ -155,6 +161,252 @@ describe("POST /api/contact — email notification", () => {
     const sendMail = vi.fn().mockResolvedValue({ ok: true });
     await handleContact(post({ message: "my secret situation" }), testEnv(), { sendMail });
     expect(JSON.stringify(sendMail.mock.calls[0])).not.toContain("my secret situation");
+  });
+});
+
+const CHROME_MAC =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+
+/** A valid bug report, overridable field by field. */
+function bugBody(overrides = {}) {
+  return {
+    kind: "bug",
+    what_happened: "the race froze on problem 3",
+    expected: "the next problem should have appeared",
+    ...overrides,
+  };
+}
+
+async function submitBug(body = {}, { headers = {}, envOverrides } = {}) {
+  const res = await handleContact(
+    post(bugBody(body), { "user-agent": CHROME_MAC, ...headers }),
+    envOverrides ?? testEnv()
+  );
+  return res;
+}
+
+async function firstContext() {
+  const [row] = await rows();
+  return row.context == null ? null : JSON.parse(row.context);
+}
+
+describe("POST /api/contact — bug reports", () => {
+  it("accepts the bug kind", async () => {
+    const res = await submitBug();
+    expect(res.status).toBe(200);
+    expect((await rows())[0].kind).toBe("bug");
+  });
+
+  it("requires what_happened", async () => {
+    const res = await submitBug({ what_happened: "   " });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "empty_what_happened" });
+    expect(await rows()).toHaveLength(0);
+  });
+
+  it("requires expected", async () => {
+    // Enforced here rather than only in the form: "required" that lives in
+    // HTML is a suggestion, and this is the field that makes a report a bug
+    // report rather than a general message.
+    const res = await submitBug({ expected: "" });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "empty_expected" });
+    expect(await rows()).toHaveLength(0);
+  });
+
+  it("treats steps as optional", async () => {
+    const res = await submitBug({ steps: undefined });
+    expect(res.status).toBe(200);
+    expect((await rows())[0].message).not.toContain("Steps to reproduce");
+  });
+
+  it("rejects an over-long field", async () => {
+    const res = await submitBug({ steps: "x".repeat(1501) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "field_too_long" });
+  });
+
+  it("composes the fields into one labelled message", async () => {
+    await submitBug({ steps: "1. start a race\n2. wait" });
+    const { message } = (await rows())[0];
+    expect(message).toContain("What went wrong:\nthe race froze on problem 3");
+    expect(message).toContain("What they expected:\nthe next problem should have appeared");
+    expect(message).toContain("Steps to reproduce:\n1. start a race\n2. wait");
+  });
+
+  it("ignores a message field sent alongside the bug fields", async () => {
+    // The composed fields are the report. A stray `message` must not be able
+    // to replace or bypass them.
+    await submitBug({ message: "totally different text" });
+    expect((await rows())[0].message).not.toContain("totally different text");
+  });
+
+  it("still requires a valid email when one is given", async () => {
+    const res = await submitBug({ email: "nope" });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_email" });
+  });
+
+  it("accepts a report with no email", async () => {
+    const res = await submitBug();
+    expect(res.status).toBe(200);
+    expect((await rows())[0].email).toBe(null);
+  });
+
+  it("is rate limited on the same counter as every other submission", async () => {
+    const e = testEnv();
+    for (let i = 0; i < 3; i++) {
+      expect((await handleContact(post(bugBody()), e)).status).toBe(200);
+    }
+    expect((await handleContact(post(bugBody()), e)).status).toBe(429);
+    expect(await rows()).toHaveLength(3);
+  });
+
+  it("still stores the report when the notification email fails", async () => {
+    // The row is the durable record — and in this deployment it is the only
+    // one, since the notification is not configured in production at all.
+    const sendMail = vi.fn().mockRejectedValue(new Error("loops down"));
+    const res = await handleContact(
+      post(bugBody(), { "user-agent": CHROME_MAC }),
+      testEnv(),
+      { sendMail }
+    );
+    expect(res.status).toBe(200);
+    expect(await rows()).toHaveLength(1);
+  });
+
+  it("does not put the report text in the notification email", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ ok: true });
+    await handleContact(
+      post(bugBody({ what_happened: "my secret situation" })),
+      testEnv(),
+      { sendMail }
+    );
+    expect(JSON.stringify(sendMail.mock.calls[0])).not.toContain("my secret situation");
+  });
+});
+
+describe("POST /api/contact — captured context", () => {
+  it("derives browser and OS from the request's own user agent", async () => {
+    await submitBug();
+    const context = await firstContext();
+    expect(context.ua).toBe(CHROME_MAC);
+    expect(context.browser).toBe("Chrome 141");
+    expect(context.os).toBe("macOS");
+  });
+
+  it("records the deployed app version", async () => {
+    await submitBug();
+    expect((await firstContext()).app_version).toBe(APP_VERSION);
+  });
+
+  it("records guest submissions as not signed in", async () => {
+    await submitBug();
+    expect((await firstContext()).signed_in).toBe(false);
+  });
+
+  it("keeps the screen, viewport and pixel-ratio fields", async () => {
+    await submitBug({ context: { screen: "3024x1964", viewport: "1512x845", dpr: 2 } });
+    const context = await firstContext();
+    expect(context.screen).toBe("3024x1964");
+    expect(context.viewport).toBe("1512x845");
+    expect(context.dpr).toBe(2);
+  });
+
+  it("keeps the page path the reporter came from", async () => {
+    await submitBug({ context: { page: "/some/route" } });
+    expect((await firstContext()).page).toBe("/some/route");
+  });
+
+  it("strips a query string or fragment from the page path", async () => {
+    // Defence in depth. A URL on this site can carry a one-time
+    // password-reset token or a private room's invite slug; neither may be
+    // stored, whatever the client chose to send.
+    await submitBug({ context: { page: "/reset-password?token=super-secret#frag" } });
+    const context = await firstContext();
+    expect(context.page).toBe("/reset-password");
+    expect(JSON.stringify(context)).not.toContain("super-secret");
+  });
+
+  it("drops every context key that is not on the allowlist", async () => {
+    // The context object is entirely client-controlled, so it is an allowlist
+    // and not a passthrough: no cookies, no tokens, no localStorage dumps.
+    await submitBug({
+      context: {
+        cookie: "session=abc123",
+        authorization: "Bearer super-secret",
+        localStorage: { everything: "here" },
+        screen: "800x600",
+      },
+    });
+    const context = await firstContext();
+    expect(context).not.toHaveProperty("cookie");
+    expect(context).not.toHaveProperty("authorization");
+    expect(context).not.toHaveProperty("localStorage");
+    expect(JSON.stringify(context)).not.toContain("super-secret");
+    expect(JSON.stringify(context)).not.toContain("abc123");
+    expect(context.screen).toBe("800x600");
+  });
+
+  it("does not let the client dictate the server-derived fields", async () => {
+    await submitBug({
+      context: { app_version: "999.0.0", signed_in: true, browser: "Netscape 1", ua: "spoofed" },
+    });
+    const context = await firstContext();
+    expect(context.app_version).toBe(APP_VERSION);
+    expect(context.signed_in).toBe(false);
+    expect(context.browser).toBe("Chrome 141");
+    expect(context.ua).toBe(CHROME_MAC);
+  });
+
+  it("caps an over-long context string rather than rejecting the report", async () => {
+    await submitBug({ context: { viewport: "x".repeat(500) } });
+    expect((await firstContext()).viewport.length).toBeLessThanOrEqual(32);
+  });
+
+  it("ignores context of the wrong shape", async () => {
+    for (const context of ["a string", 42, ["an", "array"], null]) {
+      await env.DB.exec("DELETE FROM contact_messages");
+      const res = await submitBug({ context });
+      expect(res.status).toBe(200);
+      expect(await firstContext()).toMatchObject({ app_version: APP_VERSION });
+    }
+  });
+
+  it("stores context that json_extract can query", async () => {
+    await submitBug();
+    const row = await env.DB
+      .prepare("SELECT json_extract(context, '$.os') AS os FROM contact_messages")
+      .first();
+    expect(row.os).toBe("macOS");
+  });
+
+  it("survives a request with no user-agent header at all", async () => {
+    const res = await handleContact(
+      new Request("https://example.com/api/contact", {
+        method: "POST",
+        headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.7" },
+        body: JSON.stringify(bugBody()),
+      }),
+      testEnv()
+    );
+    expect(res.status).toBe(200);
+    const context = await firstContext();
+    expect(context).not.toHaveProperty("browser");
+    expect(context.app_version).toBe(APP_VERSION);
+  });
+
+  it("captures nothing for general and deletion messages", async () => {
+    // A deletion request has no reason to carry a browser fingerprint, and
+    // this column exists for bug reports specifically.
+    for (const kind of ["general", "deletion"]) {
+      await env.DB.exec("DELETE FROM contact_messages");
+      await handleContact(
+        post({ message: "hello", kind, context: { screen: "800x600" } }, { "user-agent": CHROME_MAC }),
+        testEnv()
+      );
+      expect((await rows())[0].context).toBe(null);
+    }
   });
 });
 
