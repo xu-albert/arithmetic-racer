@@ -38,11 +38,30 @@ beforeAll(async () => {
       "suspect_reason TEXT" +
       ")"
   );
+  // Mirror of migrations/0005_contact_messages.sql as amended by
+  // migrations/0007_contact_bug_reports.sql. The migration files themselves are
+  // executed and asserted on in migrations/migrations.test.js. It lives at file
+  // level, not inside the first describe that needs it, so every suite in this
+  // file still has its schema when run on its own (`vitest -t "…"`).
+  await env.DB.exec(
+    "CREATE TABLE IF NOT EXISTS contact_messages (" +
+      "id TEXT PRIMARY KEY, " +
+      "email TEXT, " +
+      "message TEXT NOT NULL, " +
+      "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
+      "user_id TEXT, " +
+      "device_id TEXT, " +
+      "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
+      "created_at INTEGER NOT NULL, " +
+      "context TEXT" +
+      ")"
+  );
 });
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
   await env.DB.exec(`DELETE FROM "user"`);
+  await env.DB.exec("DELETE FROM contact_messages");
 });
 
 describe("timingSafeEqualStrings", () => {
@@ -363,29 +382,6 @@ describe("per-user drill-down", () => {
 });
 
 describe("admin dashboard — contact messages", () => {
-  beforeAll(async () => {
-    // Mirror of migrations/0005_contact_messages.sql as amended by
-    // migrations/0007_contact_bug_reports.sql. The migration files themselves
-    // are executed and asserted on in migrations/migrations.test.js.
-    await env.DB.exec(
-      "CREATE TABLE IF NOT EXISTS contact_messages (" +
-        "id TEXT PRIMARY KEY, " +
-        "email TEXT, " +
-        "message TEXT NOT NULL, " +
-        "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
-        "user_id TEXT, " +
-        "device_id TEXT, " +
-        "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
-        "created_at INTEGER NOT NULL, " +
-        "context TEXT" +
-        ")"
-    );
-  });
-
-  beforeEach(async () => {
-    await env.DB.exec("DELETE FROM contact_messages");
-  });
-
   async function insert({
     id = crypto.randomUUID(),
     message,
@@ -441,10 +437,6 @@ describe("admin dashboard — finding bug reports", () => {
   // The contact notification email has never been configured in production,
   // so this dashboard is the only place a bug report is ever read. "Findable
   // here" is the delivery guarantee, not a convenience.
-  beforeEach(async () => {
-    await env.DB.exec("DELETE FROM contact_messages");
-  });
-
   async function insert(row) {
     await env.DB.prepare(
       "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at, context) " +
@@ -536,12 +528,26 @@ describe("admin dashboard — finding bug reports", () => {
 
   it("says nothing when every bug report is handled", async () => {
     await insert({ message: "the race froze", kind: "bug", handled: 1 });
-    expect(await dashboard()).not.toContain("unhandled bug report");
+    const body = await dashboard();
+    expect(body).not.toContain("unhandled bug report");
+    expect(body).not.toContain("[object Object]");
   });
 
   it("says nothing when the only unhandled messages are other kinds", async () => {
     await insert({ message: "a general question", kind: "general" });
-    expect(await dashboard()).not.toContain("unhandled bug report");
+    const body = await dashboard();
+    expect(body).not.toContain("unhandled bug report");
+    expect(body).not.toContain("[object Object]");
+  });
+
+  it("renders nothing at all where the banner goes when there is none", async () => {
+    // Zero unhandled bug reports is the ordinary state of this page, so the
+    // no-banner case is the one that renders on nearly every load. Asserting
+    // only the absence of the banner text let a stringified placeholder object
+    // sit between the heading and the tiles unnoticed.
+    const body = await dashboard();
+    expect(body).not.toContain("[object Object]");
+    expect(body).toMatch(/<h1>[^<]*<\/h1>\s*<table class="tiles">/);
   });
 });
 
@@ -556,10 +562,6 @@ describe("admin dashboard — captured context", () => {
     screen: "3024x1964",
     dpr: 2,
     ua: "Mozilla/5.0 (Macintosh) Chrome/141.0.0.0",
-  });
-
-  beforeEach(async () => {
-    await env.DB.exec("DELETE FROM contact_messages");
   });
 
   async function insertWithContext(context, message = "the race froze") {
@@ -590,6 +592,13 @@ describe("admin dashboard — captured context", () => {
     const body = await dashboard();
     expect(body).toContain("user agent");
     expect(body).toContain("pixel ratio");
+  });
+
+  it("labels the captured path as where they came from, not where the bug was", async () => {
+    // It is referrer-derived, so it is the page they reached the form from.
+    // Where the bug happened is a question the form asks outright.
+    await insertWithContext(CONTEXT);
+    expect(await dashboard()).toMatch(/came from<\/dt><dd>\/some\/route<\/dd>/);
   });
 
   it("renders booleans readably", async () => {

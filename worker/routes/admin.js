@@ -44,7 +44,10 @@ function html(strings, ...values) {
     if (i < values.length) {
       const v = values[i];
       if (Array.isArray(v)) out += v.join("");
-      else if (v && typeof v === "object" && v.__html) out += v.__html;
+      // Tested on the property, not its truthiness: raw("") is a legitimate
+      // "render nothing", and an emptiness check here would send the wrapper
+      // object down the escaping path and print [object Object].
+      else if (v && typeof v === "object" && typeof v.__html === "string") out += v.__html;
       else out += escapeHtml(v ?? "");
     }
   }
@@ -329,7 +332,10 @@ async function loadContactMessages(env, kind = null, limit = 50) {
 const CONTEXT_FIELD_ORDER = [
   ["browser", "browser"],
   ["os", "OS"],
-  ["page", "page"],
+  // Derived from the referrer, so it is the page they navigated to the form
+  // from — not necessarily where the bug happened. The form asks that
+  // separately and it is composed into the message.
+  ["page", "came from"],
   ["app_version", "version"],
   ["signed_in", "signed in"],
   ["viewport", "viewport"],

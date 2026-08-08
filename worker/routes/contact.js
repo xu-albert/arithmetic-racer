@@ -16,22 +16,33 @@
 // Bug reports (`kind: "bug"`, from /bug-report) come in as separate fields
 // rather than one blob and are composed into `message` here, so that "what
 // went wrong" and "what did you expect" are actually required rather than
-// merely marked required in the form. They also carry a context snapshot; see
-// CONTEXT_TEXT_FIELDS for what is and is not kept.
+// merely marked required in the form. They also carry a context snapshot; what
+// is and is not kept is declared once in public/src/bug-report-context.js,
+// which the form reads too, so the disclosure it shows the reporter and the
+// allowlist enforced here cannot describe different things.
 
 import { readUserId } from "../session.js";
 import { sendTransactional } from "../email.js";
 import { logError, logWarn, KINDS } from "../logger.js";
 import { describeUserAgent } from "../user-agent.js";
 import { APP_VERSION } from "../version.js";
+import { CLIENT_CONTEXT_FIELDS, bugContextField } from "../../public/src/bug-report-context.js";
 
 const MAX_MESSAGE_LEN = 5000;
 const KINDS_ALLOWED = new Set(["general", "deletion", "bug"]);
 
-// Per-field cap for the bug form. Three of these still fit inside
-// MAX_MESSAGE_LEN once composed, so a valid set of fields can never produce a
-// message the length check then rejects.
+// Per-field caps for the bug form. Their sum plus the section labels stays
+// under MAX_MESSAGE_LEN, so a set of fields that passes field_too_long can
+// never compose into a message that the length check then rejects: three long
+// fields at 1500 plus `where` at 200 is 4700, and the labels add ~80.
 const MAX_BUG_FIELD_LEN = 1500;
+// `where` is a single-line answer, and it has to fit in the budget above.
+const MAX_BUG_WHERE_LEN = 200;
+
+// The device ID is the one piece of the snapshot the reporter opts into (see
+// the descriptor for why), so it arrives only when they ticked the box. Its cap
+// comes from the same declaration as the rest.
+const MAX_DEVICE_ID_LEN = bugContextField("device_id").maxLength;
 
 // Workers KV requires expirationTtl >= 60s. Three messages an hour per IP is
 // far above any genuine use and well below what makes spamming worthwhile.
@@ -41,24 +52,6 @@ const RATE_LIMIT_WINDOW_S = 3600;
 // Deliberately permissive: this only catches obvious typos so we can tell the
 // user immediately. Real validation of an address is whether mail to it works.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-// Allowlist, not passthrough. `context` arrives from the page, so storing it
-// as sent would mean storing whatever anyone chose to put in it. Every key not
-// named here is dropped: no cookies, no tokens, no auth headers, no
-// localStorage. Adding a key is a deliberate decision that the field is safe.
-//
-// `page` is a path only. It deliberately excludes the query string, which on
-// this site can hold a one-time password-reset token (/reset-password?token=)
-// or a private room's invite slug (?room=) — neither belongs in a bug report,
-// and neither is worth the debugging value of the rest of the URL.
-const CONTEXT_TEXT_FIELDS = {
-  page: 256,     // same-origin path the reporter came from
-  screen: 32,    // "1512x982"
-  viewport: 32,  // "1200x800"
-};
-
-// Numeric context, same allowlist rule.
-const CONTEXT_NUMBER_FIELDS = new Set(["dpr"]);
 
 function bad(error) {
   return Response.json({ error }, { status: 400 });
@@ -73,20 +66,27 @@ function trimmedString(value) {
  * rather than JSON-encoded because this is read by a human in the dashboard,
  * and because it keeps bug reports greppable alongside every other message.
  */
-function composeBugMessage({ whatHappened, expected, steps }) {
-  const sections = [
-    `What went wrong:\n${whatHappened}`,
-    `What they expected:\n${expected}`,
-  ];
+function composeBugMessage({ whatHappened, expected, where, steps }) {
+  const sections = [];
+  if (where) sections.push(`Where in the app:\n${where}`);
+  sections.push(`What went wrong:\n${whatHappened}`);
+  sections.push(`What they expected:\n${expected}`);
   if (steps) sections.push(`Steps to reproduce:\n${steps}`);
   return sections.join("\n\n");
 }
 
 /**
- * Build the stored context snapshot from the allowlist above plus the fields
- * the server is authoritative for. Anything the server can determine itself —
- * user agent, whether the sender is signed in, which version is deployed — is
- * taken from the server, so a report cannot misdescribe its own origin.
+ * Build the stored context snapshot: an allowlist, not a passthrough. `context`
+ * arrives from the page, so storing it as sent would mean storing whatever
+ * anyone chose to put in it. Every key the descriptor does not declare as
+ * client-supplied is dropped — no cookies, no tokens, no auth headers, no
+ * localStorage — and declaring one is a deliberate decision that it is safe to
+ * capture *and* an undertaking to show it to the reporter, since the form's
+ * disclosure is generated from the same list.
+ *
+ * Anything the server can determine itself — user agent, whether the sender is
+ * signed in, which version is deployed — is taken from the server rather than
+ * the body, so a report cannot misdescribe its own origin.
  *
  * @returns {object} Always an object; caller decides whether to store it.
  */
@@ -97,17 +97,19 @@ function buildContext(body, request, userId) {
       : {};
 
   const context = {};
-  for (const [key, maxLen] of Object.entries(CONTEXT_TEXT_FIELDS)) {
-    const value = trimmedString(sent[key]);
-    if (value) context[key] = value.slice(0, maxLen);
+  for (const field of CLIENT_CONTEXT_FIELDS) {
+    const raw = sent[field.key];
+    if (field.type === "number") {
+      if (typeof raw === "number" && Number.isFinite(raw)) context[field.key] = raw;
+      continue;
+    }
+    let value = trimmedString(raw).slice(0, field.maxLength);
+    // Second line of defence for path-only fields: strip a query string or
+    // fragment even if one reaches us, so the rule holds regardless of what the
+    // client sent. `page` can otherwise carry a reset token or an invite slug.
+    if (field.pathOnly) value = value.split(/[?#]/)[0];
+    if (value) context[field.key] = value;
   }
-  for (const key of CONTEXT_NUMBER_FIELDS) {
-    if (typeof sent[key] === "number" && Number.isFinite(sent[key])) context[key] = sent[key];
-  }
-
-  // Second line of defence on `page`: strip a query string or fragment even if
-  // one reaches us, so the rule holds regardless of what the client sent.
-  if (context.page) context.page = context.page.split(/[?#]/)[0];
 
   const ua = (request.headers.get("user-agent") ?? "").slice(0, 512);
   if (ua) context.ua = ua;
@@ -145,6 +147,7 @@ export async function handleContact(request, env, deps = {}) {
   if (kind === "bug") {
     const whatHappened = trimmedString(body.what_happened);
     const expected = trimmedString(body.expected);
+    const where = trimmedString(body.where);
     const steps = trimmedString(body.steps);
     // Both are required. A report of what broke without what was expected is
     // frequently unactionable — the two together are what make it a bug
@@ -154,11 +157,12 @@ export async function handleContact(request, env, deps = {}) {
     if (
       whatHappened.length > MAX_BUG_FIELD_LEN ||
       expected.length > MAX_BUG_FIELD_LEN ||
-      steps.length > MAX_BUG_FIELD_LEN
+      steps.length > MAX_BUG_FIELD_LEN ||
+      where.length > MAX_BUG_WHERE_LEN
     ) {
       return bad("field_too_long");
     }
-    message = composeBugMessage({ whatHappened, expected, steps });
+    message = composeBugMessage({ whatHappened, expected, where, steps });
   } else {
     message = trimmedString(body.message);
     if (message.length === 0) return bad("empty_message");
@@ -185,7 +189,8 @@ export async function handleContact(request, env, deps = {}) {
   }
 
   const userId = await readUserId(request, env).catch(() => null);
-  const deviceId = typeof body.device_id === "string" ? body.device_id.slice(0, 128) : null;
+  const deviceId =
+    typeof body.device_id === "string" ? body.device_id.slice(0, MAX_DEVICE_ID_LEN) : null;
 
   // Only bug reports capture context. General and deletion messages keep
   // exactly the shape they had before this column existed — there is no reason

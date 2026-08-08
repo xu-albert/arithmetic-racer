@@ -12,6 +12,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from "vite
 import { env } from "cloudflare:test";
 import { handleContact } from "./contact.js";
 import { APP_VERSION } from "../version.js";
+import { BUG_CONTEXT_FIELDS } from "../../public/src/bug-report-context.js";
 
 beforeAll(async () => {
   await env.DB.exec(
@@ -220,18 +221,45 @@ describe("POST /api/contact — bug reports", () => {
     expect((await rows())[0].message).not.toContain("Steps to reproduce");
   });
 
+  it("treats where-in-the-app as optional", async () => {
+    const res = await submitBug({ where: undefined });
+    expect(res.status).toBe(200);
+    expect((await rows())[0].message).not.toContain("Where in the app");
+  });
+
   it("rejects an over-long field", async () => {
     const res = await submitBug({ steps: "x".repeat(1501) });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "field_too_long" });
   });
 
+  it("rejects an over-long where-in-the-app", async () => {
+    const res = await submitBug({ where: "x".repeat(201) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "field_too_long" });
+  });
+
   it("composes the fields into one labelled message", async () => {
-    await submitBug({ steps: "1. start a race\n2. wait" });
+    await submitBug({ where: "a Quickplay race on hard", steps: "1. start a race\n2. wait" });
     const { message } = (await rows())[0];
+    expect(message).toContain("Where in the app:\na Quickplay race on hard");
     expect(message).toContain("What went wrong:\nthe race froze on problem 3");
     expect(message).toContain("What they expected:\nthe next problem should have appeared");
     expect(message).toContain("Steps to reproduce:\n1. start a race\n2. wait");
+  });
+
+  it("never composes a message the length check then rejects", async () => {
+    // The per-field caps exist so that a set of fields which passes
+    // field_too_long always fits inside MAX_MESSAGE_LEN once labelled. Every
+    // field at its maximum is the worst case.
+    const res = await submitBug({
+      what_happened: "a".repeat(1500),
+      expected: "b".repeat(1500),
+      steps: "c".repeat(1500),
+      where: "d".repeat(200),
+    });
+    expect(res.status).toBe(200);
+    expect((await rows())[0].message.length).toBeLessThanOrEqual(5000);
   });
 
   it("ignores a message field sent alongside the bug fields", async () => {
@@ -394,6 +422,41 @@ describe("POST /api/contact — captured context", () => {
     const context = await firstContext();
     expect(context).not.toHaveProperty("browser");
     expect(context.app_version).toBe(APP_VERSION);
+  });
+
+  it("stores exactly the fields the shared descriptor declares", async () => {
+    // The descriptor is what the form's disclosure is generated from, so a
+    // field stored but not declared is a field captured without telling the
+    // reporter — and a field declared but not stored is a promise the
+    // disclosure makes and the server does not keep. Both must fail here.
+    const declared = BUG_CONTEXT_FIELDS.filter((f) => f.storedIn === "context");
+    const sent = Object.fromEntries(
+      declared
+        .filter((f) => f.source === "client")
+        .map((f) => [f.key, f.type === "number" ? 2 : "sample"])
+    );
+    await submitBug({
+      context: { ...sent, cookie: "session=abc123", authorization: "Bearer super-secret" },
+    });
+    expect(Object.keys(await firstContext()).sort()).toEqual(declared.map((f) => f.key).sort());
+  });
+
+  it("stores the device id when the report carries one", async () => {
+    // Sent only when the reporter ticked the opt-in box; the form's half of
+    // that is covered in public/src/bug-report-context.test.js.
+    await submitBug({ device_id: "dev-abc" });
+    expect((await rows())[0].device_id).toBe("dev-abc");
+  });
+
+  it("stores no device id when the report does not carry one", async () => {
+    await submitBug();
+    expect((await rows())[0].device_id).toBe(null);
+  });
+
+  it("caps an over-long device id rather than rejecting the report", async () => {
+    const res = await submitBug({ device_id: "d".repeat(500) });
+    expect(res.status).toBe(200);
+    expect((await rows())[0].device_id.length).toBe(128);
   });
 
   it("captures nothing for general and deletion messages", async () => {
