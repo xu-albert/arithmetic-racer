@@ -1,6 +1,7 @@
 import { Server } from 'partyserver';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
+import { isConfigurableState } from '../public/src/room-config-rules.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
 import { containsProfanity } from '../worker/username-validator.js';
 import { logError, KINDS } from '../worker/logger.js';
@@ -25,6 +26,10 @@ export function freshState(id) {
     difficulty: 'medium',
     raceLength: 10,
     state: 'lobby',
+    // raceLength of the most recently finished race. The live `raceLength` can
+    // move while results are still on screen (the host may reconfigure between
+    // races), so the finished scoreboard reads its denominator from here.
+    lastRaceLength: null,
     players: [],
     problemSequence: [],
     raceStartedAt: null,
@@ -325,7 +330,12 @@ export class RaceRoom extends Server {
     const player = this.playerFor(connection);
     if (!player) return this.sendError(connection, 'BAD_STATE', 'No player; send hello first');
     if (!player.isCreator) return this.sendError(connection, 'NOT_CREATOR', 'Only the host can change config');
-    if (this.state.state !== 'lobby') return this.sendError(connection, 'BAD_STATE', 'Config can only change in lobby');
+    // Allowed in 'lobby' and 'finished' — see room-config-rules.js. Restricting
+    // this to 'lobby' froze a room's difficulty after its first race, since
+    // 'finished' is where the host sits until they hit Race Again.
+    if (!isConfigurableState(this.state.state)) {
+      return this.sendError(connection, 'BAD_STATE', 'Config can only change between races');
+    }
 
     if (!DIFFICULTIES.includes(msg.difficulty)) {
       return this.sendError(connection, 'INVALID_INPUT', 'Invalid difficulty');
@@ -454,6 +464,9 @@ export class RaceRoom extends Server {
     }
     this.state.state = 'finished';
     this.state.graceDeadline = null;
+    // Pin the denominator the scoreboard should use, before the host is free
+    // to change raceLength for the next race.
+    this.state.lastRaceLength = this.state.raceLength;
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 

@@ -1,4 +1,5 @@
 import { createRoomClient } from './room-client.js';
+import { canEditConfig } from './room-config-rules.js';
 
 const DIFFS = ['easy', 'medium', 'hard'];
 
@@ -73,11 +74,23 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
     return !!me?.isCreator;
   }
 
+  // Scores on the finished scoreboard belong to the race that just ran, so
+  // they keep that race's length even if the host has already dialled in a
+  // different one for the next race. Falls back to the live value for rooms
+  // that never recorded it (public quickmatch, pre-fix persisted state).
+  function scoreboardLength() {
+    if (currentState.state === 'finished' && currentState.lastRaceLength != null) {
+      return currentState.lastRaceLength;
+    }
+    return currentState.raceLength;
+  }
+
   function statusFor(p) {
-    if (p.dropped) return `left mid-race at ${p.score}/${currentState.raceLength}`;
+    const len = scoreboardLength();
+    if (p.dropped) return `left mid-race at ${p.score}/${len}`;
     if (p.finishMs != null) return `finished — ${(p.finishMs / 1000).toFixed(1)}s`;
-    if (p.dnf) return `${p.score}/${currentState.raceLength} — didn't finish`;
-    if (currentState.state === 'racing') return `racing — ${p.score}/${currentState.raceLength}`;
+    if (p.dnf) return `${p.score}/${len} — didn't finish`;
+    if (currentState.state === 'racing') return `racing — ${p.score}/${len}`;
     return null;
   }
 
@@ -131,17 +144,20 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
       playersList.append(li);
     }
 
-    // Difficulty buttons
+    // Difficulty buttons. Editable in 'lobby' AND 'finished' — the host lands
+    // in 'finished' after every race and that is exactly where they want to
+    // pick a different difficulty for the rematch.
     const inLobby = currentState.state === 'lobby';
     const isCreator = meIsCreator();
+    const configEditable = canEditConfig({ roomState: currentState.state, isCreator });
     diffBtns.forEach((btn) => {
       const matches = btn.dataset.difficulty === currentState.difficulty;
       btn.setAttribute('aria-pressed', matches ? 'true' : 'false');
-      btn.disabled = !inLobby || !isCreator;
+      btn.disabled = !configEditable;
     });
 
     // Race length input
-    lengthInput.disabled = !inLobby || !isCreator;
+    lengthInput.disabled = !configEditable;
     if (document.activeElement !== lengthInput) {
       lengthInput.value = String(currentState.raceLength);
     }
@@ -191,7 +207,11 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
       if (isPublic) {
         hint.textContent = '';
       } else {
-        hint.textContent = isCreator ? 'Click Race Again to rematch.' : 'Waiting for the host to rematch.';
+        // Spell out that the settings are live here — the controls sitting
+        // right above are enabled, but "Race Again" reads like the only move.
+        hint.textContent = isCreator
+          ? 'Change the difficulty or length if you like, then click Race Again.'
+          : 'Waiting for the host to rematch.';
       }
     }
   }
@@ -287,19 +307,25 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
     setTimeout(() => { client.close(); location.assign('/'); }, 100);
   });
 
-  // ----- error toast -----
-  function showError(msg) {
+  // ----- toasts -----
+  // Lives on <body>, so it reaches players sitting on the results or race
+  // screen rather than only those looking at the room lobby.
+  function showToast(msg, kind = 'error') {
     let toast = document.getElementById('error-toast');
     if (!toast) {
       toast = document.createElement('div');
       toast.id = 'error-toast';
-      toast.className = 'error-toast';
       document.body.append(toast);
     }
+    toast.className = `error-toast${kind === 'info' ? ' info' : ''}`;
     toast.textContent = msg;
     toast.classList.add('visible');
-    clearTimeout(showError._t);
-    showError._t = setTimeout(() => toast.classList.remove('visible'), 3000);
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => toast.classList.remove('visible'), 3000);
+  }
+
+  function showError(msg) {
+    showToast(msg, 'error');
   }
 
   // ----- subscribe -----
@@ -337,6 +363,14 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
       // state transition (lobby/finished).
       if (currentState.state !== 'racing' && currentState.state !== 'countdown') {
         render();
+      }
+    } else if (msg.type === 'config-changed') {
+      // The host can now change settings while everyone else is looking at the
+      // results screen. Announce it — a race that silently swaps difficulty
+      // under the other players is worse than one you can't reconfigure.
+      if (!meIsCreator()) {
+        const diff = msg.difficulty ? msg.difficulty[0].toUpperCase() + msg.difficulty.slice(1) : '';
+        showToast(`Host set the race to ${diff} · ${msg.raceLength} problems`, 'info');
       }
     } else if (msg.type === 'error') {
       showError(msg.message || msg.code);
