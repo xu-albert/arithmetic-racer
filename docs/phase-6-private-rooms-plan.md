@@ -39,7 +39,7 @@ These were debated; do NOT relitigate. Code against these.
 |---|---|---|
 | Identity model | Random handle (`BraveOtter` style, from existing `handles.js`) assigned server-side on first connect; editable inline in lobby; persistent via `localStorage.racerId` (UUID v4) so reloads keep the same identity | Zero-friction join, optional personalization, reuse existing module |
 | Room ID format | Three-word slug, kebab-case, drawn from existing `handles.js` wordlists, e.g. `brave-otter-eel` | URL-friendly, memorable, no new wordlist to maintain |
-| Race parameters | Creator sets difficulty + length between races — in `lobby` and in `finished`; defaults `medium` / 20 | Per requirement. **Amended post-launch:** this row originally said "in lobby before Start", and both the DO and the lobby UI implemented exactly that. A room therefore froze its difficulty after its first race, since `finished` is where the host sits until they press Race Again — the host's only escape was to abandon the room. The allowed phases now live in `public/src/room-config-rules.js`, imported by both halves so they cannot drift again. |
+| Race parameters | Creator sets difficulty + length between races — in `lobby` and in `finished`; defaults `medium` / 10 | Per requirement. **Amended post-launch:** this row originally said "in lobby before Start", and both the DO and the lobby UI implemented exactly that. A room therefore froze its difficulty after its first race, since `finished` is where the host sits until they press Race Again — the host's only escape was to abandon the room. The allowed phases now live in `public/src/room-config-rules.js`, imported by both halves so they cannot drift again. |
 | Minimum players to start | 2. Server rejects `start-race` if `players.length < 2` | Per requirement |
 | Bot fallback | None in private rooms. Bots stay in Quickplay only. If creator clicks Start with only themselves, the server rejects. (Solo flow remains Quickplay.) | Private rooms are humans-only |
 | Reconnection | If a WebSocket connects with a `playerId` already in the room, replace the prior connection (refresh allowed). After 30s without reconnection, the player is removed | Graceful refresh handling |
@@ -100,7 +100,7 @@ type RoomState = {
   id: string;              // slug like "brave-otter-eel"
   createdAt: number;
   difficulty: 'easy' | 'medium' | 'hard';
-  raceLength: number;      // default 20
+  raceLength: number;      // default 10
   lastRaceLength: number | null; // raceLength of the race that just finished, pinned
                                  // in finishRace. The results scoreboard reads its
                                  // denominator from here, because the host may change
@@ -321,7 +321,7 @@ Implement enough of the protocol that two browsers (with the lobby UI from Task 
 
 Required handlers and behaviors:
 
-- `onStart()`: load `RoomState` from `ctx.storage.get('state')`. If absent, init with `id` from `this.name` (the DO's instance name = room slug), `state = 'lobby'`, `difficulty = 'medium'`, `raceLength = 20`, empty `players`, etc.
+- `onStart()`: load `RoomState` from `ctx.storage.get('state')`. If absent, init with `id` from `this.name` (the DO's instance name = room slug), `state = 'lobby'`, `difficulty = 'medium'`, `raceLength = 10`, empty `players`, etc.
 - `onConnect(connection)`: do not add player yet; client must send `hello` first. Track an in-memory `Map<connectionId, playerId>` so you can look up players from connections.
 - `onMessage(connection, raw)`: parse JSON; ignore non-objects; dispatch on `type`:
   - `hello`: validate `playerId` matches UUID v4 regex. If a player with this `id` already exists, treat as reconnect: update the connection mapping, do NOT touch their score/finishMs. Otherwise add a new `Player` to `players[]`. If `players.length === 1` after add, set `isCreator = true`. If client sent `handle === null`, generate one with `generateHandle(Math.random, new Set(players.map(p=>p.handle)))`. Send `hello-ack` to this connection. Broadcast `player-joined` + `state`.
@@ -394,7 +394,7 @@ Implement the race lifecycle on top of Task 3's state machine.
       <button class="diff-btn" data-difficulty="hard">Hard</button>
     </div>
     <label>Race length
-      <input id="race-length-input" type="number" min="5" max="50" value="20" />
+      <input id="race-length-input" type="number" min="5" max="50" value="10" />
     </label>
   </div>
 
