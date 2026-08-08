@@ -9,11 +9,18 @@
 // each test file hand-built its own schema — they were exercising a shape prod
 // did not have. Nothing compared the migrations directory to reality.
 //
-// Compares column *sets*, not the raw `sqlite_master` SQL text. A column added
-// by ALTER TABLE lands at the end of the table definition, so a database that
-// applied 0003 and 0007 in a different order than a fresh replay produces
-// byte-different DDL for an identical schema. Column order is not meaningful
-// here — every INSERT in the codebase names its columns explicitly.
+// What is compared, per table: columns, foreign keys, CHECK constraints, and
+// the indexes SQLite builds behind PRIMARY KEY / UNIQUE — plus the explicit
+// CREATE INDEX statements as their own set. Constraints matter as much as
+// columns here: part of the drift that started all this was a `user_id TEXT`
+// that had quietly lost its `REFERENCES "user"(id)`, and a foreign key is
+// invisible to `PRAGMA table_info`.
+//
+// Everything is compared as *sets*, never as raw `sqlite_master` SQL text. A
+// column added by ALTER TABLE lands at the end of the table definition, so a
+// database that applied 0003 and 0007 in a different order than a fresh replay
+// produces byte-different DDL for an identical schema. Declaration order is not
+// meaningful here — every INSERT in the codebase names its columns explicitly.
 //
 // Usage:
 //   node scripts/check-schema-drift.mjs                 # prod + preview
@@ -32,6 +39,14 @@ const DATABASES = { prod: "arithmetic-racer", preview: "arithmetic-racer-preview
 // wrangler's tracker and is stale here by design: this project applies
 // migrations by hand with `--file=`, which never writes to it.
 const IGNORED_TABLES = new Set(["_cf_KV", "_cf_ALARM", "d1_migrations"]);
+
+// Per-table comparison groups, as `[key on the schema object, noun for errors]`.
+const PER_TABLE = [
+  ["columns", "column"],
+  ["foreignKeys", "foreign key"],
+  ["checks", "CHECK constraint"],
+  ["uniques", "PRIMARY KEY / UNIQUE index"],
+];
 
 function sqlite(dbPath, sql) {
   return execFileSync("sqlite3", ["-json", dbPath, sql], { encoding: "utf8" }).trim();
@@ -52,68 +67,182 @@ function expectedSchema() {
     for (const f of files) {
       execFileSync("sqlite3", [dbPath, `.read migrations/${f}`], { encoding: "utf8" });
     }
-    return readSchema((sql) => parse(sqlite(dbPath, sql)));
+    return readSchema((statements) => statements.map((sql) => parse(sqlite(dbPath, sql))));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
+/**
+ * wrangler prefixes the JSON payload with a banner on some versions, and those
+ * banners carry brackets of their own (`▲ [WARNING] …`). Anchor on a line
+ * boundary so a banner can never be mistaken for the start of the payload.
+ */
+function jsonPayload(out) {
+  const lines = out.split("\n");
+  const start = lines.findIndex((line) => line.trim().startsWith("["));
+  if (start === -1) throw new Error(`wrangler printed no JSON payload:\n${out}`);
+  return lines.slice(start).join("\n");
+}
+
 /** Read the live schema out of a D1 database over the wrangler CLI. */
 function actualSchema(binding) {
-  return readSchema((sql) => {
+  return readSchema((statements) => {
+    if (statements.length === 0) return [];
+    // One `--command` carries the whole batch; D1 answers with one result
+    // object per statement, in order.
     const out = execFileSync(
       "npx",
-      ["wrangler", "d1", "execute", binding, "--remote", "--json", "--command", sql],
+      [
+        "wrangler",
+        "d1",
+        "execute",
+        binding,
+        "--remote",
+        "--json",
+        "--command",
+        statements.map((sql) => `${sql};`).join("\n"),
+      ],
       { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }
     );
-    // wrangler prefixes the JSON payload with a banner on some versions.
-    const start = out.indexOf("[");
-    return JSON.parse(out.slice(start))[0].results;
+    const payload = JSON.parse(jsonPayload(out));
+    if (payload.length !== statements.length) {
+      throw new Error(
+        `wrangler returned ${payload.length} result(s) for ${statements.length} statement(s); ` +
+          `the batch cannot be matched up positionally.`
+      );
+    }
+    return payload.map((r) => r.results ?? []);
   });
 }
 
 /**
- * Collect {tables: {name -> [column, ...]}, indexes: {name -> sql}} using a
- * caller-supplied query function, so the local file and the remote D1 are read
- * through exactly the same logic.
+ * Pull the CHECK constraints out of a stored CREATE TABLE, whitespace-normalized
+ * so formatting differences are not drift. Neither `PRAGMA table_info` nor any
+ * other pragma exposes them, and they are load-bearing: `difficulty`, `finished`,
+ * `kind` and `handled` are all constrained this way.
+ */
+function checkConstraints(sql) {
+  if (!sql) return [];
+  const found = [];
+  const opener = /\bCHECK\s*\(/gi;
+  let match;
+  while ((match = opener.exec(sql)) !== null) {
+    let depth = 1;
+    let quote = null;
+    let i = opener.lastIndex;
+    while (i < sql.length && depth > 0) {
+      const ch = sql[i];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === "'" || ch === '"') {
+        quote = ch;
+      } else if (ch === "(") {
+        depth++;
+      } else if (ch === ")") {
+        depth--;
+      }
+      i++;
+    }
+    found.push(`CHECK (${sql.slice(opener.lastIndex, i - 1).replace(/\s+/g, " ").trim()})`);
+    opener.lastIndex = i;
+  }
+  return found;
+}
+
+/**
+ * Collect the full schema description using a caller-supplied batch query — it
+ * takes an array of statements and returns an array of row arrays, one per
+ * statement — so the local scratch file and the remote D1 are read through
+ * exactly the same logic. Two round trips: one to learn the names, one to
+ * describe everything they name.
  */
 function readSchema(query) {
-  const tables = {};
-  const names = query(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-  ).map((r) => r.name);
+  const [tableRows, indexRows] = query([
+    "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    "SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' ORDER BY name",
+  ]);
 
-  for (const name of names) {
-    if (IGNORED_TABLES.has(name)) continue;
-    tables[name] = query(`PRAGMA table_info("${name}")`)
+  const tableList = tableRows.filter((t) => !IGNORED_TABLES.has(t.name));
+  const indexList = indexRows.filter((i) => !IGNORED_TABLES.has(i.tbl_name));
+
+  const described = query([
+    ...tableList.flatMap((t) => [
+      `PRAGMA table_info("${t.name}")`,
+      `PRAGMA foreign_key_list("${t.name}")`,
+      `PRAGMA index_list("${t.name}")`,
+    ]),
+    ...indexList.map((i) => `PRAGMA index_info("${i.name}")`),
+  ]);
+
+  // Index columns first: the per-table constraint indexes are described by the
+  // columns they cover, not by their `sqlite_autoindex_<table>_<n>` name, whose
+  // number depends on the order the constraints were declared in.
+  const indexColumns = {};
+  indexList.forEach((index, i) => {
+    indexColumns[index.name] = described[tableList.length * 3 + i]
+      .slice()
+      .sort((a, b) => a.seqno - b.seqno)
+      .map((c) => c.name ?? "<expr>")
+      .join(", ");
+  });
+
+  const columns = {};
+  const foreignKeys = {};
+  const checks = {};
+  const uniques = {};
+
+  tableList.forEach((table, i) => {
+    const [tableInfo, fkList, idxList] = described.slice(i * 3, i * 3 + 3);
+    columns[table.name] = tableInfo
       .map((c) => `${c.name} ${c.type} notnull=${c.notnull} default=${c.dflt_value ?? "-"} pk=${c.pk}`)
       .sort();
-  }
+    foreignKeys[table.name] = fkList
+      .map(
+        (f) =>
+          `${f.from} -> ${f.table}(${f.to ?? "primary key"}) ` +
+          `on_update=${f.on_update} on_delete=${f.on_delete} match=${f.match}`
+      )
+      .sort();
+    checks[table.name] = checkConstraints(table.sql).sort();
+    // `origin: "c"` indexes come from CREATE INDEX and are compared below by
+    // their DDL; these are the ones SQLite builds for PRIMARY KEY and UNIQUE,
+    // which have no DDL of their own and were previously invisible.
+    uniques[table.name] = idxList
+      .filter((idx) => idx.origin !== "c")
+      .map((idx) => `${idx.origin} unique=${idx.unique} partial=${idx.partial} (${indexColumns[idx.name]})`)
+      .sort();
+  });
 
   const indexes = {};
-  for (const row of query(
-    "SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY name"
-  )) {
-    indexes[row.name] = row.sql.replace(/\s+/g, " ").trim();
+  for (const index of indexList) {
+    if (index.sql) indexes[index.name] = index.sql.replace(/\s+/g, " ").trim();
   }
-  return { tables, indexes };
+
+  return { columns, foreignKeys, checks, uniques, indexes };
+}
+
+function diff(problems, table, kind, want, have) {
+  const present = new Set(have);
+  for (const item of want) if (!present.has(item)) problems.push(`${table}: missing or altered ${kind} -> ${item}`);
+  const wanted = new Set(want);
+  for (const item of have) if (!wanted.has(item)) problems.push(`${table}: unexpected ${kind} -> ${item}`);
 }
 
 function compare(label, expected, actual) {
   const problems = [];
 
-  for (const [table, cols] of Object.entries(expected.tables)) {
-    if (!(table in actual.tables)) {
+  for (const table of Object.keys(expected.columns)) {
+    if (!(table in actual.columns)) {
       problems.push(`missing table: ${table}`);
       continue;
     }
-    const have = new Set(actual.tables[table]);
-    for (const col of cols) if (!have.has(col)) problems.push(`${table}: missing or altered column -> ${col}`);
-    const want = new Set(cols);
-    for (const col of actual.tables[table]) if (!want.has(col)) problems.push(`${table}: unexpected column -> ${col}`);
+    for (const [group, kind] of PER_TABLE) {
+      diff(problems, table, kind, expected[group][table], actual[group][table]);
+    }
   }
-  for (const table of Object.keys(actual.tables)) {
-    if (!(table in expected.tables)) problems.push(`unexpected table: ${table}`);
+  for (const table of Object.keys(actual.columns)) {
+    if (!(table in expected.columns)) problems.push(`unexpected table: ${table}`);
   }
 
   for (const [name, sql] of Object.entries(expected.indexes)) {

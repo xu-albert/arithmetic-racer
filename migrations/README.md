@@ -37,8 +37,32 @@ migration that was written but never applied fails loudly instead of waiting to
 be discovered by a broken INSERT.
 
 > These migrations are **not** idempotent, and nothing tracks which of them have
-> run — only apply a file that hasn't been applied to that database yet.
-> `0003`, `0005`, `0006`, and `0007` all fail or duplicate on a second apply.
+> run — only apply a file that hasn't been applied to that database yet. Every
+> file *except* `0004` fails on a second apply: `0001`, `0002` and `0006` are
+> bare `CREATE TABLE`, `0005` is a bare `CREATE INDEX`, and `0003` and `0007`
+> are `ALTER TABLE ADD COLUMN`. Only `0004` is safe to re-run, because it is a
+> `CREATE INDEX IF NOT EXISTS`.
+
+### Checked automatically
+
+`.github/workflows/schema-drift.yml` runs `npm run check:schema` on every push
+to `main` that touches `migrations/`, on a daily schedule, and on demand via
+**Run workflow**. It is deliberately *not* wired to `pull_request`: a PR that
+adds a migration hasn't had it applied to the live databases yet, so a PR
+trigger would fail the PRs doing the right thing.
+
+The workflow needs two **repository secrets**, which have to be created by hand
+before it can pass — until they exist it fails loudly rather than skipping,
+because a check that cannot reach the database must never report a match:
+
+| Secret name | What it is |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token, for wrangler's non-interactive auth |
+| `CLOUDFLARE_ACCOUNT_ID` | The account owning both D1 databases |
+
+`check-schema-drift.mjs` only issues `SELECT` and `PRAGMA`, so **D1 read is all
+the permission the token needs** — do not grant it write or deploy scopes. Add
+both under *Settings → Secrets and variables → Actions*.
 
 ### Never run `wrangler d1 migrations apply`
 
