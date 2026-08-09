@@ -15,9 +15,9 @@ its bundled npm), so treat that pin as build configuration, not a local preferen
 
 When changing dependencies:
 
-- Refresh the lockfile with **npm 11 or newer**: `npm install --package-lock-only`.
-  npm 10 will not add the foreign-platform entries back, and CI on Node 22 will not
-  notice they are gone.
+- Refresh the lockfile with **npm 11 or newer** — run `npx npm@11 install --package-lock-only`,
+  which works without leaving `.nvmrc`'s Node 22 (it bundles npm 10, and npm 10 will not add
+  the foreign-platform entries back, nor will CI on Node 22 notice they are gone).
 - **Never** delete `package-lock.json` to regenerate it from scratch. A clean resolve
   ignores the currently pinned versions and dies on an `ERESOLVE` conflict, because
   `wrangler`'s newest release peer-requires `@cloudflare/workers-types@^5` while
