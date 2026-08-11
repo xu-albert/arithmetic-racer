@@ -23,6 +23,7 @@
 
 import { readUserId } from "../session.js";
 import { sendTransactional } from "../email.js";
+import { isMissingColumnError } from "../db.js";
 import { logError, logWarn, KINDS } from "../logger.js";
 import { describeUserAgent } from "../user-agent.js";
 import { APP_VERSION } from "../version.js";
@@ -122,6 +123,42 @@ function buildContext(body, request, userId) {
 }
 
 /**
+ * Store the row, tolerating a database still on the pre-0007 schema.
+ *
+ * `context` arrives with migration 0007, which is applied by hand, while the
+ * Worker deploys from a push — so a build that names the column can meet a
+ * database that does not have it yet. Rather than probe the schema on every
+ * request, the write assumes the column and retries once without it, and only
+ * for the one error that says the column is missing. General and deletion
+ * messages capture no context anyway, so that retry loses nothing; contact is
+ * the only channel for deletion requests and must not go down for a deploy
+ * ordering. A bug report still fails there, because the same migration is what
+ * widens `kind` to permit one at all.
+ */
+async function insertMessage(env, row) {
+  const common = [row.id, row.email, row.message, row.kind, row.userId, row.deviceId, row.createdAt];
+  try {
+    await env.DB.prepare(
+      `INSERT INTO contact_messages
+         (id, email, message, kind, user_id, device_id, handled, created_at, context)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`
+    )
+      .bind(...common, row.context)
+      .run();
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+    logWarn(KINDS.CONTACT_SCHEMA_BEHIND, err, { kind: row.kind });
+    await env.DB.prepare(
+      `INSERT INTO contact_messages
+         (id, email, message, kind, user_id, device_id, handled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?)`
+    )
+      .bind(...common)
+      .run();
+  }
+}
+
+/**
  * @param {Request} request
  * @param {object} env
  * @param {{ sendMail?: Function }} [deps] Injection seam for tests.
@@ -197,13 +234,16 @@ export async function handleContact(request, env, deps = {}) {
 
   const id = crypto.randomUUID();
   try {
-    await env.DB.prepare(
-      `INSERT INTO contact_messages
-         (id, email, message, kind, user_id, device_id, handled, created_at, context)
-       VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`
-    )
-      .bind(id, email, message, kind, userId ?? null, deviceId, Date.now(), context)
-      .run();
+    await insertMessage(env, {
+      id,
+      email,
+      message,
+      kind,
+      userId: userId ?? null,
+      deviceId,
+      createdAt: Date.now(),
+      context,
+    });
   } catch (err) {
     logError(KINDS.CONTACT_DB, err, { kind });
     return Response.json({ error: "db_error" }, { status: 500 });

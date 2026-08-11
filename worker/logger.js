@@ -23,6 +23,7 @@ export const KINDS = {
   LOBBY_RELEASE_FAILED: "lobby_release_failed",
   MATCHMAKING_KV: "matchmaking_kv",
   CONTACT_DB: "contact_db",
+  CONTACT_SCHEMA_BEHIND: "contact_schema_behind",
   CONTACT_NOTIFY_FAILED: "contact_notify_failed",
   CONTACT_RATE_LIMIT: "contact_rate_limit",
   RATE_LIMIT_UNAVAILABLE: "rate_limit_unavailable",

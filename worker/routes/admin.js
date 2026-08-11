@@ -1,6 +1,8 @@
 // Admin dashboard route. Token-gated `/admin/` and `/admin/users/:id`.
 // One file by design — split when v2 (live rooms) lands.
 
+import { isMissingColumnError } from "../db.js";
+
 /**
  * Constant-time string equality. Returns false on empty or length mismatch.
  * Uses TextEncoder + a manual XOR-reduce so we don't depend on
@@ -301,6 +303,10 @@ const CONTACT_KINDS = [
   ["deletion", "Deletion"],
 ];
 
+// Everything 0005 already had. `context` is selected on top of these, and
+// dropped from the list when the database has not reached 0007 yet.
+const CONTACT_COLUMNS = "id, email, message, kind, user_id, device_id, handled, created_at";
+
 /**
  * Newest contact submissions. Capped rather than paginated — if the backlog
  * ever exceeds this, the answer is to deal with it, not to scroll.
@@ -310,19 +316,30 @@ const CONTACT_KINDS = [
 async function loadContactMessages(env, kind = null, limit = 50) {
   const where = kind ? "WHERE kind = ?" : "";
   const binds = kind ? [kind, limit] : [limit];
-  try {
-    const { results } = await env.DB.prepare(
-      `SELECT id, email, message, kind, user_id, device_id, handled, created_at, context
+  const select = (columns) =>
+    env.DB.prepare(
+      `SELECT ${columns}
          FROM contact_messages
          ${where}
         ORDER BY created_at DESC, id DESC
         LIMIT ?`
     ).bind(...binds).all();
-    return results ?? [];
+
+  try {
+    try {
+      const { results } = await select(`${CONTACT_COLUMNS}, context`);
+      return results ?? [];
+    } catch (err) {
+      // `context` arrives in migration 0007, which is applied by hand while
+      // the Worker deploys from a push. A database one migration behind must
+      // still list its messages — there is simply no context to show for them.
+      if (!isMissingColumnError(err)) throw err;
+      const { results } = await select(CONTACT_COLUMNS);
+      return results ?? [];
+    }
   } catch {
-    // The table arrives in migration 0005 and gains `context` in 0007. An
-    // un-migrated database should degrade to an empty section rather than take
-    // down the whole dashboard.
+    // The table itself arrives in migration 0005. An un-migrated database
+    // should degrade to an empty section rather than take down the dashboard.
     return [];
   }
 }

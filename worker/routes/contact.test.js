@@ -8,12 +8,39 @@
 // single-line paraphrase rather than the file itself. The migration files
 // proper are executed and asserted on in migrations/migrations.test.js.
 
-import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, vi, afterEach, afterAll } from "vitest";
 import { env } from "cloudflare:test";
 import { handleContact } from "./contact.js";
 import { APP_VERSION } from "../version.js";
 import { BUG_CONTEXT_FIELDS, COLUMN_FIELDS } from "../../public/src/bug-report-context.js";
 import { _setTestUserId } from "../session.js";
+
+const CONTACT_MESSAGES_DDL =
+  "CREATE TABLE IF NOT EXISTS contact_messages (" +
+  "id TEXT PRIMARY KEY, " +
+  "email TEXT, " +
+  "message TEXT NOT NULL, " +
+  "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
+  `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
+  "device_id TEXT, " +
+  "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
+  "created_at INTEGER NOT NULL, " +
+  "context TEXT" +
+  ")";
+
+// The same table as 0005 left it: no `context`, and a `kind` CHECK that
+// predates 'bug'. This is the shape a database is in until 0007 is applied.
+const CONTACT_MESSAGES_DDL_0005 =
+  "CREATE TABLE IF NOT EXISTS contact_messages (" +
+  "id TEXT PRIMARY KEY, " +
+  "email TEXT, " +
+  "message TEXT NOT NULL, " +
+  "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion')), " +
+  `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
+  "device_id TEXT, " +
+  "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
+  "created_at INTEGER NOT NULL" +
+  ")";
 
 beforeAll(async () => {
   // Mirror of migrations/0001_better_auth.sql (user table only). Present so the
@@ -30,19 +57,7 @@ beforeAll(async () => {
       `"username" text unique` +
       `)`
   );
-  await env.DB.exec(
-    "CREATE TABLE IF NOT EXISTS contact_messages (" +
-      "id TEXT PRIMARY KEY, " +
-      "email TEXT, " +
-      "message TEXT NOT NULL, " +
-      "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
-      `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
-      "device_id TEXT, " +
-      "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
-      "created_at INTEGER NOT NULL, " +
-      "context TEXT" +
-      ")"
-  );
+  await env.DB.exec(CONTACT_MESSAGES_DDL);
 });
 
 beforeEach(async () => {
@@ -570,5 +585,72 @@ describe("POST /api/contact — rate limiting", () => {
     });
     const res = await handleContact(post({ message: "hi" }), e);
     expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /api/contact — database still on the pre-0007 schema", () => {
+  // Migrations are applied by hand while the Worker deploys from a push, so a
+  // build that names `context` can go live against a database that has no such
+  // column. Contact is the only channel for deletion requests, so that window
+  // must not cost a message. Runs against 0005's table shape verbatim.
+  const rebuild = async (ddl) => {
+    await env.DB.exec("DROP TABLE IF EXISTS contact_messages");
+    await env.DB.exec(ddl);
+  };
+
+  beforeAll(() => rebuild(CONTACT_MESSAGES_DDL_0005));
+  afterAll(() => rebuild(CONTACT_MESSAGES_DDL));
+
+  it("still stores a general message", async () => {
+    const res = await handleContact(post({ message: "hello", email: "a@b.com" }), testEnv());
+    expect(res.status).toBe(200);
+    const [row] = await rows();
+    expect(row.message).toBe("hello");
+    expect(row.email).toBe("a@b.com");
+    expect(row.kind).toBe("general");
+    // Proof the row really landed in the old shape rather than a migrated one.
+    expect(row).not.toHaveProperty("context");
+  });
+
+  it("still stores a deletion request", async () => {
+    const res = await handleContact(
+      post({ message: "please delete my data", kind: "deletion" }),
+      testEnv()
+    );
+    expect(res.status).toBe(200);
+    const [row] = await rows();
+    expect(row.kind).toBe("deletion");
+    expect(row.message).toBe("please delete my data");
+  });
+
+  it("stores a general message that arrived carrying a context object", async () => {
+    // Context is dropped for this kind regardless of schema; what matters is
+    // that a body carrying one cannot turn the submission into a 500.
+    const res = await handleContact(
+      post({ message: "hello", context: { screen: "800x600" } }, { "user-agent": CHROME_MAC }),
+      testEnv()
+    );
+    expect(res.status).toBe(200);
+    expect(await rows()).toHaveLength(1);
+  });
+
+  it("still emails the notification for a message stored this way", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ ok: true });
+    const res = await handleContact(post({ message: "ping" }), testEnv(), { sendMail });
+    expect(res.status).toBe(200);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  it("still reports a genuine database failure as db_error", async () => {
+    // The fallback is for one missing column, not a blanket retry — a real
+    // failure has to surface exactly as it did before.
+    await env.DB.exec("DROP TABLE contact_messages");
+    try {
+      const res = await handleContact(post({ message: "hello" }), testEnv());
+      expect(res.status).toBe(500);
+      expect((await res.json()).error).toBe("db_error");
+    } finally {
+      await env.DB.exec(CONTACT_MESSAGES_DDL_0005);
+    }
   });
 });

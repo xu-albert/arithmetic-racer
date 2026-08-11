@@ -2,9 +2,36 @@
 // Each test file gets its own ephemeral D1; we apply the user + race_results DDL
 // inline in beforeAll (same pattern as me.test.js).
 
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { env } from "cloudflare:test";
 import { timingSafeEqualStrings, handleAdminIndex, html, raw } from "./admin.js";
+
+const CONTACT_MESSAGES_DDL =
+  "CREATE TABLE IF NOT EXISTS contact_messages (" +
+  "id TEXT PRIMARY KEY, " +
+  "email TEXT, " +
+  "message TEXT NOT NULL, " +
+  "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
+  "user_id TEXT, " +
+  "device_id TEXT, " +
+  "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
+  "created_at INTEGER NOT NULL, " +
+  "context TEXT" +
+  ")";
+
+// The same table as 0005 left it: no `context`, and a `kind` CHECK that
+// predates 'bug'. This is the shape a database is in until 0007 is applied.
+const CONTACT_MESSAGES_DDL_0005 =
+  "CREATE TABLE IF NOT EXISTS contact_messages (" +
+  "id TEXT PRIMARY KEY, " +
+  "email TEXT, " +
+  "message TEXT NOT NULL, " +
+  "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion')), " +
+  "user_id TEXT, " +
+  "device_id TEXT, " +
+  "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
+  "created_at INTEGER NOT NULL" +
+  ")";
 
 beforeAll(async () => {
   await env.DB.exec(
@@ -43,19 +70,7 @@ beforeAll(async () => {
   // executed and asserted on in migrations/migrations.test.js. It lives at file
   // level, not inside the first describe that needs it, so every suite in this
   // file still has its schema when run on its own (`vitest -t "…"`).
-  await env.DB.exec(
-    "CREATE TABLE IF NOT EXISTS contact_messages (" +
-      "id TEXT PRIMARY KEY, " +
-      "email TEXT, " +
-      "message TEXT NOT NULL, " +
-      "kind TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general','deletion','bug')), " +
-      "user_id TEXT, " +
-      "device_id TEXT, " +
-      "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
-      "created_at INTEGER NOT NULL, " +
-      "context TEXT" +
-      ")"
-  );
+  await env.DB.exec(CONTACT_MESSAGES_DDL);
 });
 
 beforeEach(async () => {
@@ -628,5 +643,85 @@ describe("admin dashboard — captured context", () => {
     const body = await dashboard();
     expect(body).toContain("plain question");
     expect(body).not.toContain("<details class=\"ctx\"");
+  });
+});
+
+describe("admin dashboard — database still on the pre-0007 schema", () => {
+  // Migrations are applied by hand while the Worker deploys from a push, so
+  // this dashboard can run against a database that has no `context` column. It
+  // is the only place contact messages are ever read, so it has to keep listing
+  // them through that window — with no context to show, not with no messages.
+  const rebuild = async (ddl) => {
+    await env.DB.exec("DROP TABLE IF EXISTS contact_messages");
+    await env.DB.exec(ddl);
+  };
+
+  beforeAll(() => rebuild(CONTACT_MESSAGES_DDL_0005));
+  afterAll(() => rebuild(CONTACT_MESSAGES_DDL));
+
+  async function insertLegacy({
+    id = crypto.randomUUID(),
+    message,
+    kind = "general",
+    email = null,
+    device_id = null,
+    handled = 0,
+    created_at = Date.now(),
+  } = {}) {
+    await env.DB.prepare(
+      "INSERT INTO contact_messages (id, email, message, kind, user_id, device_id, handled, created_at) " +
+        "VALUES (?, ?, ?, ?, NULL, ?, ?, ?)"
+    ).bind(id, email, message, kind, device_id, handled, created_at).run();
+  }
+
+  it("lists existing messages instead of the empty state", async () => {
+    await insertLegacy({ message: "my printer is on fire", email: "a@b.com" });
+    await insertLegacy({ message: "please delete my data", kind: "deletion" });
+    const body = await dashboard();
+    expect(body).not.toContain("No contact messages");
+    expect(body).toContain("my printer is on fire");
+    expect(body).toContain("a@b.com");
+    expect(body).toContain("please delete my data");
+  });
+
+  it("still counts the unhandled ones and still filters by kind", async () => {
+    await insertLegacy({ message: "a general question", kind: "general" });
+    await insertLegacy({ message: "delete me please", kind: "deletion" });
+    await insertLegacy({ message: "already dealt with", kind: "general", handled: 1 });
+
+    const all = await dashboard();
+    expect(all).toContain("2 unhandled");
+    expect(all).toContain("General (2)");
+
+    const filtered = await dashboard("&kind=deletion");
+    expect(filtered).toContain("delete me please");
+    expect(filtered).not.toContain("a general question");
+  });
+
+  it("shows the device id, which lives outside the missing column", async () => {
+    await insertLegacy({ message: "the race froze", device_id: "dev-abc123" });
+    expect(await dashboard()).toMatch(/device<\/dt><dd>dev-abc123<\/dd>/);
+  });
+
+  it("still escapes a submitted message", async () => {
+    await insertLegacy({ message: "<img src=x onerror=alert(1)>" });
+    const body = await dashboard();
+    expect(body).not.toContain("<img src=x onerror=alert(1)>");
+    expect(body).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("still renders the empty state when there genuinely are no messages", async () => {
+    expect(await dashboard()).toContain("No contact messages");
+  });
+
+  it("degrades to the empty state when the table is missing altogether", async () => {
+    await env.DB.exec("DROP TABLE contact_messages");
+    try {
+      const body = await dashboard();
+      expect(body).toContain("No contact messages");
+      expect(body).toContain("Recent races");
+    } finally {
+      await env.DB.exec(CONTACT_MESSAGES_DDL_0005);
+    }
   });
 });
