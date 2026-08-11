@@ -376,6 +376,17 @@ describe("POST /api/contact — captured context", () => {
     expect((await firstContext()).signed_in).toBe(false);
   });
 
+  it("records a report filed with a session as signed in", async () => {
+    // The other half of the guest case above, and the one the spoofing test
+    // below cannot cover: it only ever asserts `false`, so a field wired to a
+    // constant would satisfy both. Exercised with a real session so the true
+    // branch is the thing being read.
+    await seedUser("u-reporter");
+    _setTestUserId("u-reporter");
+    await submitBug();
+    expect((await firstContext()).signed_in).toBe(true);
+  });
+
   it("keeps the screen, viewport and pixel-ratio fields", async () => {
     await submitBug({ context: { screen: "3024x1964", viewport: "1512x845", dpr: 2 } });
     const context = await firstContext();
