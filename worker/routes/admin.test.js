@@ -150,8 +150,14 @@ async function insertContact({
 }
 
 async function dashboard(query = "") {
+  return dashboardAt(`/admin/?token=t${query}`);
+}
+
+// Load a dashboard URL the page itself rendered, so a test can follow a link
+// the operator would click rather than hand-assembling the next request.
+async function dashboardAt(href) {
   const res = await handleAdminIndex(
-    new Request(`https://x/admin/?token=t${query}`),
+    new Request(`https://x${href}`),
     { ...env, ADMIN_TOKEN: "t" }
   );
   return res.text();
@@ -542,6 +548,81 @@ describe("admin dashboard — finding bug reports", () => {
     await insert({ message: "the race froze", kind: "bug" });
     await insert({ message: "fixed already", kind: "bug", handled: 1 });
     expect(await dashboard()).toContain("1 unhandled");
+  });
+});
+
+describe("admin dashboard — contact filter and race paging on one page", () => {
+  // Both lists live on the same page and keep their state in the same query
+  // string, so a link belonging to one of them must not reset the other.
+  const insert = insertContact;
+
+  const mkRace = (id, deviceId, playedAt) =>
+    env.DB.prepare(
+      `INSERT INTO race_results (id, user_id, device_id, difficulty, finished, finish_time_ms,
+         problems_total, problems_correct, problems_attempted, avg_time_per_problem_ms,
+         accuracy_pct, longest_streak, played_at) VALUES (?,null,?,'medium',1,48000,20,18,20,2400,90,7,?)`
+    ).bind(id, deviceId, playedAt);
+
+  // A full first page (RECENT_LIMIT rows) plus one straggler, which is what
+  // makes the "Older →" link appear and gives page 2 something to show.
+  async function seedTwoRacePages(now) {
+    const stmts = [];
+    for (let i = 0; i < 100; i++) {
+      stmts.push(mkRace(`p-${String(i).padStart(3, "0")}`, `r${String(i).padStart(3, "0")}`, now - i * 1000));
+    }
+    stmts.push(mkRace("p-oldest", "rzzz", now - 500000));
+    await env.DB.batch(stmts);
+  }
+
+  function hrefFor(body, label) {
+    const match = body.match(new RegExp(`<a href="([^"]+)">${label}`));
+    expect(match).not.toBeNull();
+    return match[1].replace(/&amp;/g, "&");
+  }
+
+  it("keeps the contact filter when advancing to the next page of races", async () => {
+    const now = Date.now();
+    await seedTwoRacePages(now);
+    await insert({ message: "the race froze", kind: "bug" });
+    await insert({ message: "a general question", kind: "general" });
+
+    const page1 = await dashboard("&kind=bug");
+    expect(page1).toContain("the race froze");
+    expect(page1).not.toContain("a general question");
+
+    const page2 = await dashboardAt(hrefFor(page1, "Older"));
+    // Paging really advanced...
+    expect(page2).toContain("dev:rzzz");
+    expect(page2).not.toContain("dev:r000");
+    // ...and the contact table is still filtered to bug reports.
+    expect(page2).toContain("the race froze");
+    expect(page2).not.toContain("a general question");
+  });
+
+  it("keeps the race cursor when a contact filter is clicked", async () => {
+    const now = Date.now();
+    await seedTwoRacePages(now);
+    await insert({ message: "the race froze", kind: "bug" });
+    await insert({ message: "a general question", kind: "general" });
+
+    const paged = await dashboardAt(hrefFor(await dashboard(), "Older"));
+    expect(paged).toContain("dev:rzzz");
+    expect(paged).not.toContain("dev:r000");
+
+    const filtered = await dashboardAt(hrefFor(paged, "Bug reports"));
+    // The filter applied...
+    expect(filtered).toContain("the race froze");
+    expect(filtered).not.toContain("a general question");
+    // ...without throwing away the page of races we were reading.
+    expect(filtered).toContain("dev:rzzz");
+    expect(filtered).not.toContain("dev:r000");
+  });
+
+  it("leaves no empty kind parameter on the 'All' link", async () => {
+    await insert({ message: "the race froze", kind: "bug" });
+    const all = hrefFor(await dashboard("&kind=bug"), "All");
+    expect(all).not.toMatch(/kind=/);
+    expect(await dashboardAt(all)).toContain("the race froze");
   });
 });
 

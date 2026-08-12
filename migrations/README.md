@@ -28,6 +28,12 @@ Always run both. Skipping the preview one is the schema-drift trap this setup ex
 > These migrations have no tracking table, so they are **not** idempotent — only
 > apply a file that hasn't been applied to that database yet.
 
+A file that rebuilds a table (create new, copy, drop, rename) is not applied as
+one transaction, so an apply that dies partway through can leave the old table
+dropped and the copy still under its temporary name. Record a restore point
+first — `npx wrangler d1 time-travel info arithmetic-racer` (and the same for
+`arithmetic-racer-preview`) — and keep the bookmark until the apply has finished.
+
 ## Ordering against the Worker deploy
 
 Applying a migration is a manual step; the Worker deploys itself from a

@@ -60,6 +60,19 @@ export function raw(s) {
   return { __html: s };
 }
 
+/**
+ * Build an admin URL, dropping params that are unset. The dashboard keeps the
+ * state of both of its lists in one query string, so every link has to carry
+ * the params it does not own as well as the ones it does.
+ */
+function adminHref(path, params) {
+  const query = Object.entries(params)
+    .filter(([, value]) => value != null && value !== "")
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join("&");
+  return query ? `${path}?${query}` : path;
+}
+
 function utcMidnightMs(now) {
   const d = new Date(now);
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
@@ -177,7 +190,7 @@ function whoCell(row, token) {
   return raw(escapeHtml(`(dev:${(row.device_id ?? "").slice(0, 9)}…)`));
 }
 
-function renderRacesTable(rows, now, token, cursorBase) {
+function renderRacesTable(rows, now, token, cursorHref) {
   if (rows.length === 0) {
     return raw(`<p class="empty">No races yet.</p>`);
   }
@@ -195,7 +208,7 @@ function renderRacesTable(rows, now, token, cursorBase) {
 
   const last = rows[rows.length - 1];
   const olderLink = rows.length === RECENT_LIMIT
-    ? `<a href="${escapeHtml(cursorBase + "&before=" + last.played_at + "&beforeId=" + encodeURIComponent(last.id))}">Older →</a>`
+    ? `<a href="${escapeHtml(cursorHref(last.played_at, last.id))}">Older →</a>`
     : "";
 
   return raw(`
@@ -259,7 +272,12 @@ export async function handleAdminUser(request, env) {
   const before = Number(url.searchParams.get("before")) || now;
   const beforeId = url.searchParams.get("beforeId");
   const token = url.searchParams.get("token") ?? "";
-  const cursorBase = `/admin/users/${encodeURIComponent(userId)}?token=${encodeURIComponent(token)}`;
+  const cursorHref = (cursorBefore, cursorBeforeId) =>
+    adminHref(`/admin/users/${encodeURIComponent(userId)}`, {
+      token,
+      before: cursorBefore,
+      beforeId: cursorBeforeId,
+    });
   const rows = await loadRecentRaces(env, { before, beforeId, userId });
 
   const handle = user.username ?? user.name ?? user.id;
@@ -287,7 +305,7 @@ export async function handleAdminUser(request, env) {
           <p><strong>id</strong> <code>${user.id}</code></p>
         </div>
         <h2>Recent races</h2>
-        ${renderRacesTable(rows, now, token, cursorBase)}
+        ${renderRacesTable(rows, now, token, cursorHref)}
       </body>
     </html>
   `;
@@ -407,17 +425,22 @@ function renderContext(contextJson, deviceId = null) {
   return `<details class="ctx"><summary>context</summary><dl>${rows}${deviceRow}</dl></details>`;
 }
 
-function contactHref(token, kind) {
-  return `/admin/?token=${encodeURIComponent(token)}${kind ? `&kind=${kind}` : ""}`;
+function contactHref(token, kind, cursor = {}) {
+  return adminHref("/admin/", {
+    token,
+    kind,
+    before: cursor.before,
+    beforeId: cursor.beforeId,
+  });
 }
 
-function renderContactFilters(activeKind, token, counts) {
+function renderContactFilters(activeKind, token, counts, cursor) {
   const link = (kind, label) => {
     const total = counts[kind ?? "all"]?.total ?? 0;
     const text = `${label}${total ? ` (${total})` : ""}`;
     return kind === activeKind
       ? `<strong>${escapeHtml(text)}</strong>`
-      : `<a href="${escapeHtml(contactHref(token, kind))}">${escapeHtml(text)}</a>`;
+      : `<a href="${escapeHtml(contactHref(token, kind, cursor))}">${escapeHtml(text)}</a>`;
   };
   const links = [link(null, "All"), ...CONTACT_KINDS.map(([kind, label]) => link(kind, label))];
   return raw(`<p class="contact-filters">${links.join(" · ")}</p>`);
@@ -480,14 +503,20 @@ export async function handleAdminIndex(request, env) {
   const now = Date.now();
   const summary = await loadSummary(env, now);
   const buckets = await load30DayBuckets(env, now);
-  const before = Number(url.searchParams.get("before")) || Date.now();
-  const beforeId = url.searchParams.get("beforeId");
+  const cursor = {
+    before: url.searchParams.get("before"),
+    beforeId: url.searchParams.get("beforeId"),
+  };
+  const before = Number(cursor.before) || now;
   const token = url.searchParams.get("token") ?? "";
-  const cursorBase = `/admin/?token=${encodeURIComponent(token)}`;
-  const rows = await loadRecentRaces(env, { before, beforeId });
 
   const requestedKind = url.searchParams.get("kind");
   const contactKind = CONTACT_KINDS.some(([k]) => k === requestedKind) ? requestedKind : null;
+
+  const cursorHref = (cursorBefore, cursorBeforeId) =>
+    adminHref("/admin/", { token, kind: contactKind, before: cursorBefore, beforeId: cursorBeforeId });
+  const rows = await loadRecentRaces(env, { before, beforeId: cursor.beforeId });
+
   const [messages, contactCounts] = await Promise.all([
     loadContactMessages(env, contactKind),
     loadContactCounts(env),
@@ -541,9 +570,9 @@ export async function handleAdminIndex(request, env) {
         </p>
         <p>Races per day (last 30) ${renderSparkline(buckets)}</p>
         <h2>Recent races</h2>
-        ${renderRacesTable(rows, now, token, cursorBase)}
+        ${renderRacesTable(rows, now, token, cursorHref)}
         <h2>Contact messages${messages.length ? ` (${messages.filter((m) => !m.handled).length} unhandled)` : ""}</h2>
-        ${renderContactFilters(contactKind, token, contactCounts)}
+        ${renderContactFilters(contactKind, token, contactCounts, cursor)}
         ${renderContactTable(messages, now)}
       </body>
     </html>
