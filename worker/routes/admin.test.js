@@ -2,9 +2,10 @@
 // Each test file gets its own ephemeral D1; we apply the user + race_results DDL
 // inline in beforeAll (same pattern as me.test.js).
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vitest";
 import { env } from "cloudflare:test";
 import { timingSafeEqualStrings, handleAdminIndex, html, raw } from "./admin.js";
+import { KINDS } from "../logger.js";
 
 const CONTACT_MESSAGES_DDL =
   "CREATE TABLE IF NOT EXISTS contact_messages (" +
@@ -623,6 +624,81 @@ describe("admin dashboard — contact filter and race paging on one page", () =>
     const all = hrefFor(await dashboard("&kind=bug"), "All");
     expect(all).not.toMatch(/kind=/);
     expect(await dashboardAt(all)).toContain("the race froze");
+  });
+
+  it("offers a way back to the first page once a cursor is present", async () => {
+    // Every other link on a paged view preserves the cursor, so without this
+    // one, paging forward is a trip the operator cannot walk back.
+    const now = Date.now();
+    await seedTwoRacePages(now);
+    await insert({ message: "the race froze", kind: "bug" });
+
+    const firstPage = await dashboard("&kind=bug");
+    expect(firstPage).not.toContain("← Newest");
+
+    const paged = await dashboardAt(hrefFor(firstPage, "Older"));
+    expect(paged).toContain("dev:rzzz");
+
+    const newest = hrefFor(paged, "← Newest");
+    expect(newest).not.toMatch(/before/);
+    expect(newest).toContain("kind=bug");
+
+    const back = await dashboardAt(newest);
+    expect(back).toContain("dev:r000");
+    expect(back).not.toContain("dev:rzzz");
+    // The kind filter came back with us rather than being reset on the way.
+    expect(back).toContain("the race froze");
+  });
+
+  it("still offers the way back when the cursor lands past the oldest race", async () => {
+    const now = Date.now();
+    await seedTwoRacePages(now);
+
+    const pastTheEnd = await dashboardAt(`/admin/?token=t&before=${now - 9999999}`);
+    expect(pastTheEnd).toContain("No races yet");
+
+    expect(await dashboardAt(hrefFor(pastTheEnd, "← Newest"))).toContain("dev:r000");
+  });
+});
+
+describe("admin dashboard — a failed contact read is not a silent empty inbox", () => {
+  // This dashboard is the only place a contact message is ever read, so a list
+  // that came back empty because the query failed must not render identically
+  // to a genuinely empty inbox with nothing recorded anywhere.
+  it("logs the degradation and still serves the rest of the page", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await env.DB.exec("DROP TABLE contact_messages");
+      const body = await dashboard();
+
+      expect(body).toContain("No contact messages");
+      expect(body).toContain("Recent races");
+
+      const logged = warn.mock.calls
+        .map(([line]) => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry) => entry?.kind === KINDS.CONTACT_DB);
+      expect(logged.map((entry) => entry.context.phase).sort()).toEqual(["counts", "list"]);
+      expect(logged.every((entry) => entry.err?.message)).toBe(true);
+    } finally {
+      warn.mockRestore();
+      await env.DB.exec(CONTACT_MESSAGES_DDL);
+    }
+  });
+
+  it("stays quiet on the ordinary empty inbox", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await dashboard()).toContain("No contact messages");
+      expect(warn.mock.calls.filter(([line]) => String(line).includes(KINDS.CONTACT_DB))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

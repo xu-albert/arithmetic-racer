@@ -2,6 +2,7 @@
 // One file by design — split when v2 (live rooms) lands.
 
 import { isMissingColumnError } from "../db.js";
+import { logWarn, KINDS } from "../logger.js";
 
 /**
  * Constant-time string equality. Returns false on empty or length mismatch.
@@ -71,6 +72,10 @@ function adminHref(path, params) {
     .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
     .join("&");
   return query ? `${path}?${query}` : path;
+}
+
+function hasCursor(cursor) {
+  return Boolean(cursor.before || cursor.beforeId);
 }
 
 function utcMidnightMs(now) {
@@ -190,9 +195,16 @@ function whoCell(row, token) {
   return raw(escapeHtml(`(dev:${(row.device_id ?? "").slice(0, 9)}…)`));
 }
 
-function renderRacesTable(rows, now, token, cursorHref) {
+function renderRacesTable(rows, now, token, cursorHref, paged = false) {
+  // Without this, a paged view is a one-way trip: every other link on the page
+  // preserves the cursor, so there is nothing left that walks it back.
+  const newestLink = paged
+    ? `<a href="${escapeHtml(cursorHref(null, null))}">← Newest</a>`
+    : "";
+
   if (rows.length === 0) {
-    return raw(`<p class="empty">No races yet.</p>`);
+    const emptyState = `<p class="empty">No races yet.</p>`;
+    return raw(newestLink ? `${emptyState}<p class="pagination">${newestLink}</p>` : emptyState);
   }
   const body = rows.map((r) => {
     const cls = r.finished ? "race-row" : "race-row dnf";
@@ -218,7 +230,7 @@ function renderRacesTable(rows, now, token, cursorHref) {
       </thead>
       <tbody>${body}</tbody>
     </table>
-    <p class="pagination">${olderLink}</p>
+    <p class="pagination">${[newestLink, olderLink].filter(Boolean).join(" · ")}</p>
   `);
 }
 
@@ -269,8 +281,11 @@ export async function handleAdminUser(request, env) {
   if (!user) return new Response("Not found", { status: 404 });
 
   const now = Date.now();
-  const before = Number(url.searchParams.get("before")) || now;
-  const beforeId = url.searchParams.get("beforeId");
+  const cursor = {
+    before: url.searchParams.get("before"),
+    beforeId: url.searchParams.get("beforeId"),
+  };
+  const before = Number(cursor.before) || now;
   const token = url.searchParams.get("token") ?? "";
   const cursorHref = (cursorBefore, cursorBeforeId) =>
     adminHref(`/admin/users/${encodeURIComponent(userId)}`, {
@@ -278,7 +293,7 @@ export async function handleAdminUser(request, env) {
       before: cursorBefore,
       beforeId: cursorBeforeId,
     });
-  const rows = await loadRecentRaces(env, { before, beforeId, userId });
+  const rows = await loadRecentRaces(env, { before, beforeId: cursor.beforeId, userId });
 
   const handle = user.username ?? user.name ?? user.id;
   const signupIso = user.createdAt ? new Date(user.createdAt).toISOString() : "—";
@@ -305,7 +320,7 @@ export async function handleAdminUser(request, env) {
           <p><strong>id</strong> <code>${user.id}</code></p>
         </div>
         <h2>Recent races</h2>
-        ${renderRacesTable(rows, now, token, cursorHref)}
+        ${renderRacesTable(rows, now, token, cursorHref, hasCursor(cursor))}
       </body>
     </html>
   `;
@@ -355,9 +370,10 @@ async function loadContactMessages(env, kind = null, limit = 50) {
       const { results } = await select(CONTACT_COLUMNS);
       return results ?? [];
     }
-  } catch {
+  } catch (err) {
     // The table itself arrives in migration 0005. An un-migrated database
     // should degrade to an empty section rather than take down the dashboard.
+    logWarn(KINDS.CONTACT_DB, err, { phase: "list" });
     return [];
   }
 }
@@ -489,8 +505,9 @@ async function loadContactCounts(env) {
       counts[row.kind] = { total: Number(row.total) };
       counts.all.total += Number(row.total);
     }
-  } catch {
+  } catch (err) {
     // Same degradation as loadContactMessages: no table, no counts, no crash.
+    logWarn(KINDS.CONTACT_DB, err, { phase: "counts" });
   }
   return counts;
 }
@@ -507,7 +524,10 @@ export async function handleAdminIndex(request, env) {
     before: url.searchParams.get("before"),
     beforeId: url.searchParams.get("beforeId"),
   };
-  const before = Number(cursor.before) || now;
+  // Read at the point of use, not from `now`: workerd's clock only advances on
+  // I/O, so `now` is still the timestamp of whatever wrote the newest race, and
+  // the strict `played_at < before` below would then hide that race.
+  const before = Number(cursor.before) || Date.now();
   const token = url.searchParams.get("token") ?? "";
 
   const requestedKind = url.searchParams.get("kind");
@@ -570,7 +590,7 @@ export async function handleAdminIndex(request, env) {
         </p>
         <p>Races per day (last 30) ${renderSparkline(buckets)}</p>
         <h2>Recent races</h2>
-        ${renderRacesTable(rows, now, token, cursorHref)}
+        ${renderRacesTable(rows, now, token, cursorHref, hasCursor(cursor))}
         <h2>Contact messages${messages.length ? ` (${messages.filter((m) => !m.handled).length} unhandled)` : ""}</h2>
         ${renderContactFilters(contactKind, token, contactCounts, cursor)}
         ${renderContactTable(messages, now)}
