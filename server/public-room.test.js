@@ -90,7 +90,7 @@ describe("PublicRaceRoom.handleHello — difficulty lock + auto-start", () => {
       const err = conn2.sent.find((m) => m.type === "error");
       expect(err).toBeTruthy();
       expect(err.code).toBe("BAD_DIFFICULTY");
-      expect(room.state.players.find((p) => p.id === p2)).toBeUndefined();
+      expect(room.state.players.find((p) => p.racerId === p2)).toBeUndefined();
     });
   });
 
@@ -236,14 +236,15 @@ describe("PublicRaceRoom.removePlayer", () => {
       room.state.difficulty = "easy";
       const playerIds = [];
       for (let i = 0; i < n; i++) {
-        const pid = crypto.randomUUID();
-        playerIds.push(pid);
         await room.handleHello(makeConn(), {
           type: "hello",
-          playerId: pid,
+          playerId: crypto.randomUUID(),
           handle: `Player${i + 1}`,
           difficulty: "medium",
         });
+        // The room mints its own ephemeral broadcast id; that — not the racerId
+        // the client sent — is what removePlayer and the wire messages key on.
+        playerIds.push(room.state.players.at(-1).id);
       }
       return fn(room, playerIds);
     });
@@ -485,59 +486,6 @@ describe("PublicRaceRoom.finishRace — bot finalization", () => {
   });
 });
 
-describe("PublicRaceRoom — broadcast identity hygiene", () => {
-  // Quick Match seats up to 5 strangers together, so anything this room puts on
-  // the wire reaches all of them. deviceId is the anon-identity join key used by
-  // claim-on-signup, so it must never leave the server — not in `state`, and not
-  // in the `finish` rankings (bug: the finishRace override skipped publicPlayer).
-  it("never puts deviceId/userId on the wire, and keeps bot markers", async () => {
-    await withRoom("test-privacy-" + crypto.randomUUID(), async (room) => {
-      const wire = [];
-      room.broadcast = (s) => wire.push(s);
-      // Restore the real broadcastState (withRoom stubs it out) so `state`
-      // pushes are checked by the same assertion as `finish`.
-      delete room.broadcastState;
-      const conns = [makeConn(), makeConn()];
-      room.getConnections = () => conns;
-      room.persistResults = async () => {};
-
-      room.state.raceLength = 10;
-      room.state.raceStartedAt = 1000;
-      room.state.state = "racing";
-      room.state.botTimelines = [[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]];
-      room.state.players = [
-        { id: "h-1", handle: "Alice", isBot: false, deviceId: "dev-alice", userId: "user-alice", score: 10, dropped: false, finishMs: 1100, dnf: false, attempts: 12, currentStreak: 3, longestStreak: 5 },
-        { id: "h-2", handle: "Bob", isBot: false, deviceId: "dev-bob", userId: null, score: 4, dropped: false, finishMs: null, dnf: false, attempts: 6, currentStreak: 0, longestStreak: 1 },
-        { id: "b-1", handle: "Zed", isBot: true, tier: "strong", score: 0, dropped: false, finishMs: null, dnf: false },
-      ];
-
-      room.broadcastState();
-      room.finishRace(1100);
-
-      const payloads = [...wire, ...conns.flatMap((c) => c.sent.map((m) => JSON.stringify(m)))];
-      const messages = payloads.map((p) => JSON.parse(p));
-      expect(messages.some((m) => m.type === "state")).toBe(true);
-      expect(messages.some((m) => m.type === "finish")).toBe(true);
-
-      for (const raw of payloads) {
-        expect(raw).not.toMatch(/"deviceId"/);
-        expect(raw).not.toMatch(/"userId"/);
-        expect(raw).not.toMatch(/dev-alice|dev-bob|user-alice/);
-      }
-
-      // Bot markers are deliberately public — disclosure over concealment.
-      const finish = messages.find((m) => m.type === "finish");
-      const bot = finish.rankings.find((p) => p.id === "b-1");
-      expect(bot.isBot).toBe(true);
-      expect(bot.tier).toBe("strong");
-      // …and the rankings are still usable for the scoreboard.
-      expect(finish.rankings.map((p) => p.handle).sort()).toEqual(["Alice", "Bob", "Zed"]);
-      expect(finish.rankings.find((p) => p.id === "h-1").isGuest).toBe(false);
-      expect(finish.rankings.find((p) => p.id === "h-2").isGuest).toBe(true);
-    });
-  });
-});
-
 describe("PublicRaceRoom — race_results persistence", () => {
   beforeEach(async () => {
     // Mirror migration so the test D1 has the room_id column.
@@ -597,7 +545,7 @@ describe("PublicRaceRoom.handleHello — identity stamping", () => {
         type: "hello", playerId, handle: "A", difficulty: "medium",
         deviceId: "dev-stamp", userId: "user-spoofed",
       });
-      const p = room.state.players.find((p) => p.id === playerId);
+      const p = room.state.players.find((p) => p.racerId === playerId);
       expect(p.deviceId).toBe("dev-stamp");
       expect(p.userId).toBe("user-from-cookie");
     });
@@ -610,7 +558,7 @@ describe("PublicRaceRoom.handleHello — identity stamping", () => {
         type: "hello", playerId, handle: "A", difficulty: "medium",
         deviceId: "dev-anon", userId: "victim-user-id",
       });
-      const p = room.state.players.find((p) => p.id === playerId);
+      const p = room.state.players.find((p) => p.racerId === playerId);
       expect(p.userId).toBeNull();
     });
   });
@@ -681,5 +629,145 @@ describe("publicPlayer — broadcast shape", () => {
     const bot = publicPlayer({ id: "bot-1", handle: "Z", isBot: true });
     expect(bot.isGuest).toBe(true);
     expect(bot.isBot).toBe(true);
+  });
+
+  it("strips the racerId reconnect secret", () => {
+    const secret = crypto.randomUUID();
+    const p = publicPlayer({ id: "p-1", racerId: secret, handle: "X", userId: null });
+    expect(p.racerId).toBeUndefined();
+    expect(p.id).toBe("p-1");
+    expect(JSON.stringify(p)).not.toContain(secret);
+  });
+});
+
+// Quick Match seats up to 5 strangers together, so anything this room puts on
+// the wire reaches all of them — including a socket that has not said hello.
+// Two things must never ride along: deviceId (the anon-identity join key used
+// by claim-on-signup) and racerId (the secret that reclaims a seat).
+describe("PublicRaceRoom — broadcast identity hygiene", () => {
+  it("never puts racerId/deviceId/userId on the wire, and keeps bot markers", async () => {
+    await withRoom("test-privacy-" + crypto.randomUUID(), async (room) => {
+      const wire = [];
+      room.broadcast = (s) => wire.push(s);
+      // Restore the real broadcastState (withRoom stubs it out) so `state`
+      // pushes are checked by the same assertion as `finish`.
+      delete room.broadcastState;
+      const conns = [makeConn(), makeConn()];
+      room.getConnections = () => conns;
+      room.persistResults = async () => {};
+
+      const aliceSecret = crypto.randomUUID();
+      room.state.raceLength = 10;
+      room.state.raceStartedAt = 1000;
+      room.state.state = "racing";
+      room.state.botTimelines = [[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]];
+      room.state.players = [
+        { id: "p-1", racerId: aliceSecret, handle: "Alice", isBot: false, deviceId: "dev-alice", userId: "user-alice", score: 10, dropped: false, finishMs: 1100, dnf: false, attempts: 12, currentStreak: 3, longestStreak: 5 },
+        { id: "p-2", racerId: crypto.randomUUID(), handle: "Bob", isBot: false, deviceId: "dev-bob", userId: null, score: 4, dropped: false, finishMs: null, dnf: false, attempts: 6, currentStreak: 0, longestStreak: 1 },
+        { id: "bot-1", handle: "Zed", isBot: true, tier: "strong", score: 0, dropped: false, finishMs: null, dnf: false },
+      ];
+
+      room.broadcastState();
+      room.finishRace(1100);
+
+      const payloads = [...wire, ...conns.flatMap((c) => c.sent.map((m) => JSON.stringify(m)))];
+      const messages = payloads.map((p) => JSON.parse(p));
+      expect(messages.some((m) => m.type === "state")).toBe(true);
+      expect(messages.some((m) => m.type === "finish")).toBe(true);
+
+      for (const raw of payloads) {
+        expect(raw).not.toMatch(/"racerId"/);
+        expect(raw).not.toMatch(/"deviceId"/);
+        expect(raw).not.toMatch(/"userId"/);
+        expect(raw).not.toContain(aliceSecret);
+        expect(raw).not.toMatch(/dev-alice|dev-bob|user-alice/);
+      }
+
+      // Bot markers are deliberately public — disclosure over concealment.
+      const finish = messages.find((m) => m.type === "finish");
+      const bot = finish.rankings.find((p) => p.id === "bot-1");
+      expect(bot.isBot).toBe(true);
+      expect(bot.tier).toBe("strong");
+      // …and the rankings are still usable for the scoreboard.
+      expect(finish.rankings.map((p) => p.handle).sort()).toEqual(["Alice", "Bob", "Zed"]);
+      expect(finish.rankings.find((p) => p.id === "p-1").isGuest).toBe(false);
+      expect(finish.rankings.find((p) => p.id === "p-2").isGuest).toBe(true);
+    });
+  });
+});
+
+describe("PublicRaceRoom.handleHello — seat ownership", () => {
+  it("a stranger replaying a broadcast id cannot take over the seat", async () => {
+    await withRoom("test-hijack-" + crypto.randomUUID(), async (room) => {
+      const victimConn = makeConn();
+      victimConn.state = { userId: "victim-user" };
+      await room.handleHello(victimConn, {
+        type: "hello", playerId: crypto.randomUUID(), handle: "Victim",
+        deviceId: "victim-device", difficulty: "medium",
+      });
+      const victim = room.state.players[0];
+
+      const attacker = makeConn();
+      attacker.state = { userId: "attacker-user" };
+      await room.handleHello(attacker, {
+        type: "hello", playerId: victim.id, handle: "Attacker",
+        deviceId: "attacker-device", difficulty: "medium",
+      });
+
+      expect(attacker.sent.find((m) => m.type === "error")?.code).toBe("INVALID_INPUT");
+      expect(room.state.players.length).toBe(1);
+      expect(victim.deviceId).toBe("victim-device");
+      expect(victim.userId).toBe("victim-user");
+    });
+  });
+
+  it("a hello with an unknown secret is a new joiner, so the ROOM_FULL gate applies", async () => {
+    // The old lookup let any hello quoting a seated player's id skip this gate
+    // entirely by landing on the reconnect branch.
+    await withRoom("test-hijack-full-" + crypto.randomUUID(), async (room) => {
+      for (let i = 1; i <= MAX_PLAYERS; i++) {
+        await room.handleHello(makeConn(), {
+          type: "hello", playerId: crypto.randomUUID(), handle: `H${i}`,
+          deviceId: `dev-${i}`, difficulty: "medium",
+        });
+      }
+      const seated = room.state.players.map((p) => p.id);
+      const attacker = makeConn();
+      await room.handleHello(attacker, {
+        type: "hello", playerId: crypto.randomUUID(), handle: "Attacker",
+        deviceId: "attacker-device", difficulty: "medium",
+      });
+      expect(attacker.sent.find((m) => m.type === "error")?.code).toBe("ROOM_FULL");
+      expect(room.state.players.map((p) => p.id)).toEqual(seated);
+    });
+  });
+
+  it("a reconnect with the right secret still skips the auto-start reset and the full gate", async () => {
+    await withRoom("test-reconnect-full-" + crypto.randomUUID(), async (room) => {
+      const secrets = [];
+      for (let i = 1; i <= MAX_PLAYERS; i++) {
+        const secret = crypto.randomUUID();
+        secrets.push(secret);
+        await room.handleHello(makeConn(), {
+          type: "hello", playerId: secret, handle: `H${i}`,
+          deviceId: `dev-${i}`, difficulty: "medium",
+        });
+      }
+      const seatId = room.state.players[0].id;
+      const deadline = room.state.autoStartDeadline;
+
+      const back = makeConn();
+      await room.handleHello(back, {
+        type: "hello", playerId: secrets[0], handle: "H1",
+        deviceId: "dev-1-new", difficulty: "medium",
+      });
+
+      expect(back.sent.some((m) => m.type === "error")).toBe(false);
+      expect(back.sent.find((m) => m.type === "hello-ack").playerId).toBe(seatId);
+      expect(room.state.players.length).toBe(MAX_PLAYERS);
+      expect(room.state.players[0].id).toBe(seatId);
+      expect(room.state.players[0].deviceId).toBe("dev-1-new");
+      expect(room.state.autoStartDeadline).toBe(deadline);
+    });
   });
 });

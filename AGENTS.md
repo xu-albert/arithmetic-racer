@@ -4,6 +4,23 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Add durable project-specific notes here as they are discovered through real work.
 
+## Room identity: two ids, only one of them public
+
+A room player carries two identifiers, and conflating them is a takeover bug:
+
+- `player.racerId` — the client's `localStorage` racerId, sent only in `hello`. It is
+  the **reconnect credential**: presenting it is the sole proof that a socket owns an
+  existing seat. Server-side only; `publicPlayer()` strips it, alongside `deviceId`/`userId`.
+- `player.id` — an ephemeral `p-<n>` id minted per room (`nextBroadcastId`). This is the
+  wire identity: `youAre`, every `playerId` field, `disconnectDeadlines` keys, and the
+  client's lane keying all use it. Non-UUID on purpose, so `handleHello`'s UUID gate makes
+  a broadcast id unusable as a credential.
+
+Anything a room broadcasts reaches sockets that have not said `hello` yet (`onConnect`
+pushes `publicState`), so every new broadcast must go through `publicPlayer()`.
+`server/room-identity.test.js` and the hygiene tests in `server/public-room.test.js` fail
+if a secret reaches the wire.
+
 ## Dependencies and the lockfile
 
 The Cloudflare Workers build runs `npm ci`, which hard-fails unless `package-lock.json`

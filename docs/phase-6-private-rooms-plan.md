@@ -127,6 +127,13 @@ Persist `RoomState` via `ctx.storage.put('state', state)` after every mutation. 
 
 JSON messages, one event per frame.
 
+> **Superseded on identity (2026-08-13).** The frame shapes below still hold, but the
+> two `playerId` senses have since been split: client → server it is the racerId
+> **reconnect secret**, while every server → client `playerId`/`player.id`/`youAre` is an
+> ephemeral per-room broadcast id. See "Room identity" in `AGENTS.md`; the plan's
+> "a known `playerId` is a reconnect" rule now means "a matching racerId", which is what
+> stops a stranger who read an id off the wire from claiming the seat.
+
 ### Client → Server
 
 ```ts
