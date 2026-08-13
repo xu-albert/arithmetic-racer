@@ -123,8 +123,9 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
         hostBadge.textContent = '(host)';
         li.append(hostBadge);
       }
-      // Server broadcasts isGuest (no userId). Bots read as guests too, so
-      // they blend in with the anonymous crowd.
+      // Server broadcasts isGuest (no userId). The badge only encodes account
+      // status, so bots carry it too — bot backfill is disclosed in the lobby
+      // copy, not hidden on the wire (isBot/tier stay in the payload).
       if (p.isGuest) {
         const guestBadge = document.createElement('span');
         guestBadge.className = 'badge badge-guest';
