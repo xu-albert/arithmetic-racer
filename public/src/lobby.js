@@ -191,7 +191,7 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
     // Hint
     if (currentState.state === 'lobby') {
       if (isPublic) {
-        hint.textContent = '';
+        hint.textContent = 'Any lane no human takes gets a practice bot.';
       } else if (!enoughPlayers) {
         hint.textContent = 'Waiting for at least 2 players to start…';
       } else if (!isCreator) {
