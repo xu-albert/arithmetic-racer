@@ -12,8 +12,11 @@ describe("PublicRaceRoom — scaffold", () => {
 
 import { computeAutoStartDeadline, MAX_PLAYERS, LONE_TIMEOUT_MS, GATHER_WINDOW_MS } from "../public/src/auto-start.js";
 
+// Distinct per socket, like the real Connection.id: the seat records which
+// socket owns it, and onClose only graces its owner.
 function makeConn() {
   return {
+    id: "sock-" + crypto.randomUUID(),
     sent: [],
     state: undefined,
     send(s) { this.sent.push(JSON.parse(s)); },
@@ -661,9 +664,10 @@ describe("PublicRaceRoom — broadcast identity hygiene", () => {
       room.state.raceStartedAt = 1000;
       room.state.state = "racing";
       room.state.botTimelines = [[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]];
+      const aliceConnId = "sock-" + crypto.randomUUID();
       room.state.players = [
-        { id: "p-1", racerId: aliceSecret, handle: "Alice", isBot: false, deviceId: "dev-alice", userId: "user-alice", score: 10, dropped: false, finishMs: 1100, dnf: false, attempts: 12, currentStreak: 3, longestStreak: 5 },
-        { id: "p-2", racerId: crypto.randomUUID(), handle: "Bob", isBot: false, deviceId: "dev-bob", userId: null, score: 4, dropped: false, finishMs: null, dnf: false, attempts: 6, currentStreak: 0, longestStreak: 1 },
+        { id: "p-1", racerId: aliceSecret, connId: aliceConnId, handle: "Alice", isBot: false, deviceId: "dev-alice", userId: "user-alice", score: 10, dropped: false, finishMs: 1100, dnf: false, attempts: 12, currentStreak: 3, longestStreak: 5 },
+        { id: "p-2", racerId: crypto.randomUUID(), connId: "sock-" + crypto.randomUUID(), handle: "Bob", isBot: false, deviceId: "dev-bob", userId: null, score: 4, dropped: false, finishMs: null, dnf: false, attempts: 6, currentStreak: 0, longestStreak: 1 },
         { id: "bot-1", handle: "Zed", isBot: true, tier: "strong", score: 0, dropped: false, finishMs: null, dnf: false },
       ];
 
@@ -679,7 +683,11 @@ describe("PublicRaceRoom — broadcast identity hygiene", () => {
         expect(raw).not.toMatch(/"racerId"/);
         expect(raw).not.toMatch(/"deviceId"/);
         expect(raw).not.toMatch(/"userId"/);
+        // Server-only seat bookkeeping: publicPlayer must strip it, or it
+        // rides ...rest to all five strangers in the match.
+        expect(raw).not.toMatch(/"connId"/);
         expect(raw).not.toContain(aliceSecret);
+        expect(raw).not.toContain(aliceConnId);
         expect(raw).not.toMatch(/dev-alice|dev-bob|user-alice/);
       }
 

@@ -118,10 +118,25 @@ export function publicPlayer(p) {
   // bots carry no userId, so they read as guests and blend in.
   //
   // racerId is the reconnect secret: whoever presents it in `hello` takes over
-  // the seat, so it must never reach another client. What survives here is
-  // `id`, the ephemeral per-room broadcast id (see nextBroadcastId).
-  const { attempts, longestStreak, currentStreak, deviceId, userId, racerId, ...rest } = p;
+  // the seat, so it must never reach another client. connId names the socket
+  // currently holding the seat — server-only bookkeeping for the eviction
+  // path. What survives here is `id`, the ephemeral per-room broadcast id
+  // (see nextBroadcastId).
+  const { attempts, longestStreak, currentStreak, deviceId, userId, racerId, connId, ...rest } = p;
   return { ...rest, isGuest: !userId };
+}
+
+/**
+ * True when `connection` is the socket that most recently claimed this seat.
+ *
+ * A seat has exactly one current owner, re-stamped by every accepted `hello`.
+ * Requires a real recorded owner AND a real connection id, so two unknowns
+ * never read as a match.
+ */
+export function ownsSeat(player, connection) {
+  const owner = player?.connId;
+  if (typeof owner !== 'string' || owner.length === 0) return false;
+  return owner === connection?.id;
 }
 
 // Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
@@ -215,6 +230,12 @@ export class RaceRoom extends Server {
     const player = this.playerFor(connection);
     if (!player) return;
 
+    // The secret alone does not make this close the seat's departure: a later
+    // socket presenting the same racerId (second tab, or an auto-reconnect that
+    // beat this close) took the seat over and is still live. Grace it and
+    // onAlarm would evict a connected player 30s later.
+    if (!ownsSeat(player, connection)) return;
+
     // Schedule a 30s reconnection grace (Task 9). If a fresh hello presenting
     // this seat's racerId arrives within the window, the disconnect is cancelled.
     const deadline = Date.now() + RECONNECT_GRACE_MS;
@@ -301,6 +322,9 @@ export class RaceRoom extends Server {
       delete this.state.disconnectDeadlines[existing.id];
       const currentConnState = connection.state ?? {};
       connection.setState({ ...currentConnState, playerId: existing.id, racerId });
+      // This socket is now the seat's owner; the one it displaced must no
+      // longer be able to open an eviction window against it.
+      existing.connId = connection.id;
       // Refresh identity from this connection (cookie may have changed).
       if (isValidDeviceId(msg.deviceId)) existing.deviceId = msg.deviceId;
       existing.userId = currentConnState.userId ?? null;
@@ -337,6 +361,9 @@ export class RaceRoom extends Server {
       id: nextBroadcastId(this.state),
       // Reconnect secret: server-side only, stripped by publicPlayer.
       racerId,
+      // Socket currently holding the seat; server-side only, and the only
+      // socket whose close opens the reconnect grace.
+      connId: connection.id,
       handle,
       isCreator,
       joinedAt: Date.now(),

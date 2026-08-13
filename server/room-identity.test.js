@@ -15,10 +15,19 @@ import { describe, it, expect } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import { adoptBroadcastIds, nextBroadcastId, publicPlayer, freshState } from "./room.js";
 
+// Distinct per socket, like the real Connection.id — the seat records which
+// socket owns it, and an ownership check that two undefineds satisfy would be
+// no check at all.
+let connSeq = 0;
+const connIds = [];
+
 // Keeps the raw JSON so tests can scan exactly what went over the wire,
 // not a re-serialization of it.
 function makeConn(state) {
+  const id = `sock-${++connSeq}-${crypto.randomUUID()}`;
+  connIds.push(id);
   return {
+    id,
     raw: [],
     state,
     send(s) { this.raw.push(s); },
@@ -286,6 +295,87 @@ describe("RaceRoom — a recycled broadcast id is not proof of ownership", () =>
   });
 });
 
+describe("RaceRoom — a seat has one current owner", () => {
+  it("a stale socket's close does not evict the live socket that took the seat over", async () => {
+    // Same racerId on two sockets: a second tab, or PartySocket's auto-reconnect
+    // landing before the DO noticed the old socket died. Both satisfy the
+    // racerId check, so without an owner the older close schedules an eviction
+    // against a player who is sitting right there.
+    await withRoom("two-tab-" + crypto.randomUUID(), async (room, { conns }) => {
+      const secret = crypto.randomUUID();
+      const tabA = await join(room, conns, { secret, handle: "Alice", deviceId: "dev-a", userId: "user-a" });
+      const player = room.state.players[0];
+      const broadcastId = player.id;
+      player.score = 5;
+
+      const tabB = makeConn({ userId: "user-a" });
+      conns.push(tabB);
+      await room.handleHello(tabB, { type: "hello", playerId: secret, handle: "Alice", deviceId: "dev-a" });
+      expect(room.state.players.length).toBe(1);
+      expect(tabB.state.playerId).toBe(broadcastId);
+
+      // Both sockets still resolve to the seat — the secret is the same.
+      expect(room.playerFor(tabA)?.id).toBe(broadcastId);
+      expect(room.playerFor(tabB)?.id).toBe(broadcastId);
+
+      await room.onClose(tabA);
+      expect(room.state.disconnectDeadlines[broadcastId]).toBeUndefined();
+
+      // Drive the alarm well past the grace window: nothing to expire.
+      room.state.idleCleanupAt = null;
+      await room.onAlarm();
+      expect(room.state.players.length).toBe(1);
+      expect(room.state.players[0].id).toBe(broadcastId);
+      expect(room.state.players[0].score).toBe(5);
+
+      // The live socket still owns the seat and can still act.
+      await room.handleSetHandle(tabB, { type: "set-handle", handle: "Alicia" });
+      expect(room.state.players[0].handle).toBe("Alicia");
+    });
+  });
+
+  it("the owning socket's close still opens the grace, and onAlarm still evicts", async () => {
+    await withRoom("owner-close-" + crypto.randomUUID(), async (room, { conns }) => {
+      const secret = crypto.randomUUID();
+      const tabA = await join(room, conns, { secret, handle: "Alice", deviceId: "dev-a" });
+      const broadcastId = room.state.players[0].id;
+
+      const tabB = makeConn({});
+      conns.push(tabB);
+      await room.handleHello(tabB, { type: "hello", playerId: secret, handle: "Alice", deviceId: "dev-a" });
+
+      // tabB is the owner now, so its close is the seat's real departure.
+      await room.onClose(tabB);
+      expect(room.state.disconnectDeadlines[broadcastId]).toBeGreaterThan(Date.now());
+
+      room.state.disconnectDeadlines[broadcastId] = Date.now() - 1;
+      await room.onAlarm();
+      expect(room.state.players).toEqual([]);
+      expect(room.state.disconnectDeadlines[broadcastId]).toBeUndefined();
+      // The displaced socket resolved to the seat by secret, but never owned it.
+      expect(room.playerFor(tabA)).toBeNull();
+    });
+  });
+
+  it("ownership never falls back to comparing two unknowns", async () => {
+    await withRoom("owner-unknown-" + crypto.randomUUID(), async (room, { conns }) => {
+      const secret = crypto.randomUUID();
+      const conn = await join(room, conns, { secret, handle: "Alice", deviceId: "dev-a" });
+      const player = room.state.players[0];
+      expect(player.connId).toBe(conn.id);
+
+      // A seat carried over from a build that recorded no owner, reached by a
+      // socket the runtime gave no id: unknown must not equal unknown.
+      delete player.connId;
+      delete conn.id;
+      // The seat still resolves by secret — only the eviction path is gated.
+      expect(room.playerFor(conn)?.id).toBe(player.id);
+      await room.onClose(conn);
+      expect(room.state.disconnectDeadlines).toEqual({});
+    });
+  });
+});
+
 describe("RaceRoom — broadcast hygiene", () => {
   it("never puts the racerId secret (or deviceId/userId) on the wire", async () => {
     await withRoom("wire-hygiene-" + crypto.randomUUID(), async (room, { conns, wire }) => {
@@ -324,9 +414,13 @@ describe("RaceRoom — broadcast hygiene", () => {
         expect(raw).not.toMatch(/"racerId"/);
         expect(raw).not.toMatch(/"deviceId"/);
         expect(raw).not.toMatch(/"userId"/);
+        // Seat bookkeeping naming the owning socket is server-only too — it
+        // rides ...rest in publicPlayer unless explicitly stripped.
+        expect(raw).not.toMatch(/"connId"/);
         expect(raw).not.toContain(aliceSecret);
         expect(raw).not.toContain(bobSecret);
         expect(raw).not.toMatch(/dev-alice|dev-bob|user-alice/);
+        for (const id of connIds) expect(raw).not.toContain(id);
       }
 
       // …and the roster is still usable: broadcast ids are present and stable.

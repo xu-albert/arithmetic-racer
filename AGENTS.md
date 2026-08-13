@@ -16,6 +16,15 @@ A room player carries two identifiers, and conflating them is a takeover bug:
   client's lane keying all use it. Non-UUID on purpose, so `handleHello`'s UUID gate makes
   a broadcast id unusable as a credential.
 
+A seat also records `player.connId`, the socket that most recently claimed it. The
+racerId says *which* seat a socket may act on; `connId` says which socket's close is
+that seat's departure. Without it, two sockets holding the same racerId (second tab,
+auto-reconnect beating the old close) both resolve, and the stale one's `onClose`
+schedules an eviction against a live player. `ownsSeat()` gates only the eviction path
+— never seat resolution — and demands a real owner *and* a real `connection.id`, so two
+unknowns never match. Any new server-only seat field must be added to `publicPlayer()`'s
+destructured strip list; it rides `...rest` onto the wire otherwise.
+
 A broadcast id is only unique within one incarnation of `state`: its counter (`nextPid`)
 is reset by `freshState()` on idle cleanup, so `p-1` is handed out again to a later
 arrival while a long-lived socket may still hold it. Connection state therefore carries

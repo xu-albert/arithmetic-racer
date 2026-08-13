@@ -13,6 +13,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 function makeConn(label) {
   return {
     label,
+    id: "sock-" + crypto.randomUUID(),
     sent: [],
     state: undefined,
     send(s) { this.sent.push(JSON.parse(s)); },

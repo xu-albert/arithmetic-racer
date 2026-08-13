@@ -107,6 +107,7 @@ describe("generated identifiers are profanity-free by construction", () => {
 
 function makeConn() {
   return {
+    id: "sock-" + crypto.randomUUID(),
     sent: [],
     state: undefined,
     send(s) { this.sent.push(JSON.parse(s)); },
