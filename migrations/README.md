@@ -29,6 +29,11 @@ The preview deploy that Cloudflare Workers Builds runs on every PR
    npm run check:schema
    ```
 
+   It needs the `sqlite3` CLI on `PATH` and a wrangler login for the account
+   owning both databases (it reads them with `wrangler d1 execute --remote`).
+   To check one database only: `npm run check:schema -- --db prod` (or
+   `--db preview`).
+
 Always run both applies. Skipping the preview one is the schema-drift trap this
 setup exists to prevent — and on 2026-07-28 it turned out **neither** database
 had received three of them. `npm run check:schema` replays `migrations/` into a
@@ -36,8 +41,10 @@ scratch SQLite database and diffs the result against live prod and preview, so a
 migration that was written but never applied fails loudly instead of waiting to
 be discovered by a broken INSERT.
 
-> These migrations are **not** idempotent, and nothing tracks which of them have
-> run — only apply a file that hasn't been applied to that database yet. Every
+> These migrations are **not** idempotent, and nothing usable tracks which of
+> them have run — wrangler's own `d1_migrations` ledger stopped reflecting
+> reality after `0002` (see *Never run `wrangler d1 migrations apply`* below).
+> Only apply a file that hasn't been applied to that database yet. Every
 > file *except* `0004` fails on a second apply: `0001`, `0002` and `0006` are
 > bare `CREATE TABLE`, `0005` is a bare `CREATE INDEX`, and `0003` and `0007`
 > are `ALTER TABLE ADD COLUMN`. Only `0004` is safe to re-run, because it is a

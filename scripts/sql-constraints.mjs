@@ -1,7 +1,6 @@
 // CHECK-constraint extraction for scripts/check-schema-drift.mjs. Kept apart
-// from that script because the script runs its comparison against live D1 on
-// import, which makes it unloadable from a test; this half is pure string work
-// and is covered by scripts/sql-constraints.test.mjs.
+// from that script because this half is pure string work with no sqlite3 or D1
+// dependency at all, and is covered on its own by scripts/sql-constraints.test.mjs.
 
 /**
  * Blank out line comments and block comments, leaving a space in their place so
