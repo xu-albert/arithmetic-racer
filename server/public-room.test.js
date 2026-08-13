@@ -499,6 +499,7 @@ describe("PublicRaceRoom — broadcast identity hygiene", () => {
       delete room.broadcastState;
       const conns = [makeConn(), makeConn()];
       room.getConnections = () => conns;
+      room.persistResults = async () => {};
 
       room.state.raceLength = 10;
       room.state.raceStartedAt = 1000;
