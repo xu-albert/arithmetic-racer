@@ -5,7 +5,7 @@
 // header dropdown) to reveal itself, fetch /api/me, and render. Listens for
 // `auth-changed` to re-fetch when the user signs in/out or renames.
 //
-// Pure helpers (fmtMs, computeHeadlineMs, fmtPct, etc.) are exported via the
+// Pure helpers (fmtMs, headlinePpm, fmtPct, etc.) are exported via the
 // `_internals` object for unit testing — see profile.test.js.
 
 import { getMe, setUsername } from "./stats-api.js";
@@ -27,6 +27,21 @@ function fmtMs(ms) {
 function fmtAvgMs(ms) {
   if (ms == null) return "—";
   return `${(ms / 1000).toFixed(1)}s`;
+}
+
+/**
+ * Format problems-per-minute — the headline speed number. One decimal, because
+ * PPM ranges roughly 10–40 here and whole numbers would hide real improvement.
+ */
+function fmtPpm(ppm) {
+  if (ppm == null || !Number.isFinite(ppm)) return "—";
+  return ppm.toFixed(1);
+}
+
+/** Format a race score. Points are stored unrounded; rounding is display-only. */
+function fmtPoints(points) {
+  if (points == null || !Number.isFinite(points)) return "—";
+  return Math.round(points).toLocaleString();
 }
 
 /** Format a 0..100 percentage with no decimals. */
@@ -61,21 +76,32 @@ function fmtDate(iso) {
 }
 
 /**
- * Headline metric: weighted average of per-problem time (ms) across the
- * three difficulty buckets, weighted by races_played. Null if zero races.
+ * The headline speed number for one difficulty: average problems per minute.
+ *
+ * Deliberately per-difficulty and never blended. The previous headline was a
+ * races-weighted average of per-problem time across all three tiers, which is
+ * exactly the cross-difficulty comparison the scoring model rules out — a hard
+ * problem takes roughly three times as long as an easy one, so a single
+ * blended speed says more about which tier you played than how fast you are.
+ * Three tiers, three numbers, no combining.
+ *
+ * @returns {number|null} null when the tier has no finished race yet.
  */
-function computeHeadlineMs(aggregates) {
-  if (!Array.isArray(aggregates)) return null;
-  let totalRaces = 0;
-  let weighted = 0;
-  for (const a of aggregates) {
-    const r = a?.races_played ?? 0;
-    if (r <= 0) continue;
-    totalRaces += r;
-    weighted += r * (a?.avg_problem_time_ms ?? 0);
-  }
-  if (totalRaces === 0) return null;
-  return weighted / totalRaces;
+function headlinePpm(aggregates, difficulty) {
+  const agg = findAgg(aggregates, difficulty);
+  const ppm = agg?.avg_ppm;
+  return typeof ppm === "number" && Number.isFinite(ppm) ? ppm : null;
+}
+
+/**
+ * Points earned in one difficulty. Null (rather than 0) when the tier has never
+ * been raced, so "no races yet" reads differently from "raced, earned nothing".
+ */
+function headlinePoints(aggregates, difficulty) {
+  const agg = findAgg(aggregates, difficulty);
+  if (!agg || (agg.races_played ?? 0) <= 0) return null;
+  const points = agg.total_points;
+  return typeof points === "number" && Number.isFinite(points) ? points : null;
 }
 
 /** Total races played across all difficulties. */
@@ -150,9 +176,25 @@ const PROFILE_HTML = `
         </h2>
         <p class="profile__email" id="profile-email"></p>
       </div>
+      <!-- Three tiers, three speeds. There is no combined number here on
+           purpose: the difficulties are separate pools and are never blended
+           into one score or ranking. -->
       <div class="profile__headline">
-        <span id="profile-headline-num">—</span>
-        <span class="profile__headline-label">avg/problem</span>
+        <div class="profile__headline-stat">
+          <span class="profile__headline-num" id="p-ppm-easy">—</span>
+          <span class="profile__headline-label">Easy PPM</span>
+          <span class="profile__headline-sub" id="p-points-easy">—</span>
+        </div>
+        <div class="profile__headline-stat">
+          <span class="profile__headline-num" id="p-ppm-medium">—</span>
+          <span class="profile__headline-label">Medium PPM</span>
+          <span class="profile__headline-sub" id="p-points-medium">—</span>
+        </div>
+        <div class="profile__headline-stat">
+          <span class="profile__headline-num" id="p-ppm-hard">—</span>
+          <span class="profile__headline-label">Hard PPM</span>
+          <span class="profile__headline-sub" id="p-points-hard">—</span>
+        </div>
       </div>
     </section>
 
@@ -179,14 +221,16 @@ const PROFILE_HTML = `
 
     <section class="profile__races">
       <h3>Latest Race Results</h3>
-      <table class="profile__table">
-        <thead>
-          <tr>
-            <th>Race #</th><th>Difficulty</th><th>Time</th><th>Accuracy</th><th>Avg/problem</th><th>Date</th>
-          </tr>
-        </thead>
-        <tbody id="profile-races-tbody"></tbody>
-      </table>
+      <div class="profile__table-wrap">
+        <table class="profile__table">
+          <thead>
+            <tr>
+              <th>Race #</th><th>Difficulty</th><th>Time</th><th>PPM</th><th>Points</th><th>Accuracy</th><th>Avg/problem</th><th>Date</th>
+            </tr>
+          </thead>
+          <tbody id="profile-races-tbody"></tbody>
+        </table>
+      </div>
       <p class="profile__empty" id="profile-empty" hidden>Race a few times and your stats will show up here.</p>
     </section>
   </div>
@@ -243,7 +287,10 @@ export function mountProfile(host) {
   function renderEmpty() {
     $("#profile-username-display").textContent = "—";
     $("#profile-email").textContent = "";
-    $("#profile-headline-num").textContent = "—";
+    for (const d of ["easy", "medium", "hard"]) {
+      $(`#p-ppm-${d}`).textContent = "—";
+      $(`#p-points-${d}`).textContent = "—";
+    }
     $("#t-best-easy").textContent = "—";
     $("#t-best-medium").textContent = "—";
     $("#t-best-hard").textContent = "—";
@@ -268,8 +315,11 @@ export function mountProfile(host) {
     $("#p-since").textContent = fmtDate(me.created_at);
 
     const aggs = me.aggregates || [];
-    const headlineMs = computeHeadlineMs(aggs);
-    $("#profile-headline-num").textContent = fmtAvgMs(headlineMs);
+    for (const d of ["easy", "medium", "hard"]) {
+      $(`#p-ppm-${d}`).textContent = fmtPpm(headlinePpm(aggs, d));
+      const points = headlinePoints(aggs, d);
+      $(`#p-points-${d}`).textContent = points == null ? "—" : `${fmtPoints(points)} pts`;
+    }
 
     $("#t-best-easy").textContent = fmtMs(findAgg(aggs, "easy")?.best_time_ms ?? null);
     $("#t-best-medium").textContent = fmtMs(findAgg(aggs, "medium")?.best_time_ms ?? null);
@@ -297,6 +347,8 @@ export function mountProfile(host) {
           <td>#${escapeHtml(String(r.race_seq ?? "—"))}</td>
           <td>${escapeHtml(diff)}</td>
           <td>${escapeHtml(finish)}</td>
+          <td>${escapeHtml(fmtPpm(r.ppm))}</td>
+          <td>${escapeHtml(fmtPoints(r.points))}</td>
           <td>${escapeHtml(fmtPct(r.accuracy_pct))}</td>
           <td>${escapeHtml(fmtAvgMs(r.avg_time_per_problem_ms))}</td>
           <td>${escapeHtml(fmtRelative(r.played_at))}</td>
@@ -456,10 +508,13 @@ function escapeHtml(str) {
 export const _internals = {
   fmtMs,
   fmtAvgMs,
+  fmtPpm,
+  fmtPoints,
   fmtPct,
   fmtRelative,
   fmtDate,
-  computeHeadlineMs,
+  headlinePpm,
+  headlinePoints,
   computeTotalRaces,
   computeOverallAccuracy,
   computeFinishRate,

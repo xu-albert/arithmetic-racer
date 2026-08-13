@@ -53,7 +53,7 @@ describe("POST /api/race-result — happy path", () => {
     const { results } = await env.DB.prepare(
       "SELECT id, user_id, device_id, difficulty, finished, finish_time_ms, " +
         "problems_total, problems_correct, problems_attempted, " +
-        "avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at, room_id " +
+        "avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at, room_id, points " +
         "FROM race_results"
     ).all();
 
@@ -74,6 +74,8 @@ describe("POST /api/race-result — happy path", () => {
     expect(typeof row.played_at).toBe("number");
     expect(row.played_at).toBeGreaterThan(0);
     expect(row.room_id).toBeNull();
+    // Scored on the way in: 18 correct in 48s = 22.5 ppm -> 18 x 22.5/60.
+    expect(row.points).toBeCloseTo(6.75, 6);
   });
 
   it("accepts unfinished races (quit) with finish_time_ms NULL", async () => {
@@ -84,11 +86,13 @@ describe("POST /api/race-result — happy path", () => {
     expect(res.status).toBe(200);
 
     const { results } = await env.DB.prepare(
-      "SELECT finished, finish_time_ms FROM race_results"
+      "SELECT finished, finish_time_ms, points FROM race_results"
     ).all();
     expect(results).toHaveLength(1);
     expect(results[0].finished).toBe(0);
     expect(results[0].finish_time_ms).toBeNull();
+    // A quit race is unscored, not scored zero.
+    expect(results[0].points).toBeNull();
   });
 });
 

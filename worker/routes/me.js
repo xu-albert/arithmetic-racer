@@ -40,6 +40,17 @@ export async function handleGetMe(request, env) {
     .first();
   if (!userRow) return new Response("not found", { status: 404 });
 
+  // Every score aggregate is GROUP BY difficulty and nothing collapses the
+  // three tiers together: easy/medium/hard are separate point pools, and a
+  // cross-difficulty total or ranking is not a thing this API produces.
+  //
+  // PPM is derived here rather than stored — it is problems_correct over
+  // minutes, both of which are already columns. `points` is stored (see
+  // migrations/0009_race_results_points.sql) because it accumulates and must
+  // not be retroactively rewritten by a formula change.
+  //
+  // Both PPM aggregates skip unfinished races: a quit race has no rate. That
+  // makes avg_ppm an average over races_finished, not races_played.
   const { results: aggRows } = await db(env)
     .prepare(
       `SELECT difficulty,
@@ -47,7 +58,12 @@ export async function handleGetMe(request, env) {
               SUM(CASE WHEN finished = 1 THEN 1 ELSE 0 END) AS races_finished,
               MIN(CASE WHEN finished = 1 THEN finish_time_ms END) AS best_time_ms,
               AVG(accuracy_pct) AS avg_accuracy,
-              AVG(avg_time_per_problem_ms) AS avg_problem_time_ms
+              AVG(avg_time_per_problem_ms) AS avg_problem_time_ms,
+              SUM(points) AS total_points,
+              AVG(CASE WHEN finished = 1 AND finish_time_ms > 0
+                       THEN problems_correct * 60000.0 / finish_time_ms END) AS avg_ppm,
+              MAX(CASE WHEN finished = 1 AND finish_time_ms > 0
+                       THEN problems_correct * 60000.0 / finish_time_ms END) AS best_ppm
          FROM race_results
         WHERE user_id = ?
         GROUP BY difficulty`
@@ -66,6 +82,9 @@ export async function handleGetMe(request, env) {
         best_time_ms: null,
         avg_accuracy: 0,
         avg_problem_time_ms: 0,
+        total_points: 0,
+        avg_ppm: null,
+        best_ppm: null,
       };
     }
     return {
@@ -75,6 +94,12 @@ export async function handleGetMe(request, env) {
       best_time_ms: r.best_time_ms == null ? null : Number(r.best_time_ms),
       avg_accuracy: r.avg_accuracy == null ? 0 : Number(r.avg_accuracy),
       avg_problem_time_ms: Math.round(Number(r.avg_problem_time_ms) || 0),
+      // 0 points is a real standing (raced, earned nothing), so it is not
+      // null-able. A missing PPM is different: with no finished race there is
+      // no speed to report, and 0 would read as "very slow".
+      total_points: r.total_points == null ? 0 : Number(r.total_points),
+      avg_ppm: r.avg_ppm == null ? null : Number(r.avg_ppm),
+      best_ppm: r.best_ppm == null ? null : Number(r.best_ppm),
     };
   });
 
@@ -85,7 +110,9 @@ export async function handleGetMe(request, env) {
     .prepare(
       `WITH ordered AS (
          SELECT difficulty, finish_time_ms, accuracy_pct,
-                avg_time_per_problem_ms, played_at,
+                avg_time_per_problem_ms, played_at, points,
+                CASE WHEN finished = 1 AND finish_time_ms > 0
+                     THEN problems_correct * 60000.0 / finish_time_ms END AS ppm,
                 ROW_NUMBER() OVER (ORDER BY played_at ASC) AS race_seq
            FROM race_results
           WHERE user_id = ?
@@ -103,6 +130,9 @@ export async function handleGetMe(request, env) {
     finish_time_ms: r.finish_time_ms == null ? null : Number(r.finish_time_ms),
     accuracy_pct: Number(r.accuracy_pct),
     avg_time_per_problem_ms: Number(r.avg_time_per_problem_ms),
+    // NULL on both for a DNF: that race earned nothing and set no pace.
+    points: r.points == null ? null : Number(r.points),
+    ppm: r.ppm == null ? null : Number(r.ppm),
     played_at: toIso(r.played_at),
   }));
 

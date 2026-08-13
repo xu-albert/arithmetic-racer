@@ -82,11 +82,21 @@
   word-break: break-all;
 }
 
+/* One column per difficulty. They sit side by side rather than stacking into a
+   single figure because the three tiers are separate pools — the layout is the
+   scoring model made visible. */
 .profile__headline {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1.4rem;
   text-align: right;
 }
-.profile__headline #profile-headline-num {
-  font-size: 2.2rem;
+.profile__headline-stat {
+  min-width: 0;
+}
+.profile__headline-num {
+  display: block;
+  font-size: 1.9rem;
   font-weight: 800;
   color: #1e3a5f;
   line-height: 1;
@@ -96,6 +106,15 @@
   color: #64748b;
   font-size: 0.9rem;
   margin-top: 0.2rem;
+  white-space: nowrap;
+}
+.profile__headline-sub {
+  display: block;
+  color: #2c5475;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-top: 0.1rem;
+  white-space: nowrap;
 }
 
 .profile__tiles {
@@ -170,6 +189,10 @@
   margin: 0 0 0.6rem;
   color: #1e3a5f;
   font-size: 1.05rem;
+}
+/* Eight columns is more than a phone can show; scroll the table, not the page. */
+.profile__table-wrap {
+  overflow-x: auto;
 }
 .profile__table {
   width: 100%;
@@ -286,7 +309,16 @@
     margin: 0 auto;
   }
   .profile__headline {
+    justify-content: center;
     text-align: center;
+    gap: 1rem;
+  }
+  .profile__headline-num {
+    font-size: 1.5rem;
+  }
+  .profile__headline-label,
+  .profile__headline-sub {
+    font-size: 0.8rem;
   }
   .profile__rename-card {
     min-width: 0;

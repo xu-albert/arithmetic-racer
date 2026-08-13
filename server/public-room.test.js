@@ -521,6 +521,11 @@ describe("PublicRaceRoom — race_results persistence", () => {
       expect(finished.room_id).toBe(actualRoomId);
       expect(dropped.finished).toBe(0);
       expect(dropped.finish_time_ms).toBeNull();
+      // A multiplayer race scores exactly like a solo one — same writer, same
+      // formula. 10 correct in 5s = 120 ppm -> 10 x 120/60 = 20 points.
+      expect(finished.points).toBeCloseTo(20, 6);
+      // The player who dropped out did not finish, so there is nothing to score.
+      expect(dropped.points).toBeNull();
     });
   });
 });

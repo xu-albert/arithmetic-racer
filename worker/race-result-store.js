@@ -7,6 +7,7 @@
 
 import { db } from "./db.js";
 import { assessPlausibility } from "./plausibility.js";
+import { computePoints } from "./race-score.js";
 
 export async function insertRaceResult(env, payload) {
   const id = crypto.randomUUID();
@@ -17,14 +18,21 @@ export async function insertRaceResult(env, payload) {
   // only one path applies is a bound with a hole in it.
   const { suspect, reason } = assessPlausibility(payload);
 
+  // Scored here for the same reason. It is stored rather than derived at read
+  // time so the formula can change without silently rewriting what past races
+  // were worth — see migrations/0009_race_results_points.sql. NULL for an
+  // unfinished race. PPM is left derived (problems_correct / minutes); it is a
+  // rate, not an earning, so nothing accumulates from it.
+  const points = computePoints(payload);
+
   await db(env)
     .prepare(
       `INSERT INTO race_results (
          id, user_id, device_id, difficulty, finished, finish_time_ms,
          problems_total, problems_correct, problems_attempted,
          avg_time_per_problem_ms, accuracy_pct, longest_streak,
-         played_at, room_id, suspect, suspect_reason
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+         played_at, room_id, suspect, suspect_reason, points
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
     .bind(
       id,
@@ -42,8 +50,9 @@ export async function insertRaceResult(env, payload) {
       playedAt,
       payload.room_id ?? null,
       suspect,
-      reason
+      reason,
+      points
     )
     .run();
-  return { id, played_at: playedAt, suspect, suspect_reason: reason };
+  return { id, played_at: playedAt, suspect, suspect_reason: reason, points };
 }

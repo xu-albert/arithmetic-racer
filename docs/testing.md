@@ -108,7 +108,7 @@ Useful scenarios to probe:
 These verify that each room race writes one row per player to `race_results`. Run against `npx wrangler dev`. Inspect with:
 
 ```bash
-npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, device_id, finished, finish_time_ms, room_id, played_at FROM race_results ORDER BY played_at DESC LIMIT 10"
+npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, device_id, finished, finish_time_ms, points, room_id, played_at FROM race_results ORDER BY played_at DESC LIMIT 10"
 ```
 
 | # | Scenario | Expected |
@@ -120,3 +120,5 @@ npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, 
 | R4 | One logged-in + one anon, both finish | Two rows; logged-in player's row has `user_id` set, anon has `user_id NULL` |
 | R5 | After R2, the logged-in player visits Profile | Their Recent Races list includes the just-finished room race |
 | R6 | Solo Quickplay race (regression check) | One row written via the route; `room_id = NULL`; existing solo stats behavior unchanged |
+| R7 | Any finished race (solo or room) | Row has non-NULL `points`; a quit race has `points NULL` |
+| R8 | After R7, the logged-in player visits Profile | Headline shows a PPM figure for that difficulty only — the other two tiers are unchanged — and the race's row shows its own PPM and Points |
