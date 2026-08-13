@@ -363,7 +363,7 @@ async function loadContactMessages(env, kind = null, limit = 50) {
       const { results } = await select(`${CONTACT_COLUMNS}, context`);
       return results ?? [];
     } catch (err) {
-      // `context` arrives in migration 0007, which is applied by hand while
+      // `context` arrives in migration 0008, which is applied by hand while
       // the Worker deploys from a push. A database one migration behind must
       // still list its messages — there is simply no context to show for them.
       if (!isMissingColumnError(err)) throw err;
@@ -371,7 +371,7 @@ async function loadContactMessages(env, kind = null, limit = 50) {
       return results ?? [];
     }
   } catch (err) {
-    // The table itself arrives in migration 0005. An un-migrated database
+    // The table itself arrives in migration 0006. An un-migrated database
     // should degrade to an empty section rather than take down the dashboard.
     logWarn(KINDS.CONTACT_DB, err, { phase: "list" });
     return [];

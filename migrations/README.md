@@ -46,9 +46,9 @@ be discovered by a broken INSERT.
 > reality after `0002` (see *Never run `wrangler d1 migrations apply`* below).
 > Only apply a file that hasn't been applied to that database yet. Every
 > file *except* `0004` fails on a second apply: `0001`, `0002` and `0006` are
-> bare `CREATE TABLE`, `0005` is a bare `CREATE INDEX`, and `0003` and `0007`
-> are `ALTER TABLE ADD COLUMN`. Only `0004` is safe to re-run, because it is a
-> `CREATE INDEX IF NOT EXISTS`.
+> bare `CREATE TABLE`, `0005` is a bare `CREATE INDEX`, `0003` and `0007` are
+> `ALTER TABLE ADD COLUMN`, and `0008` rebuilds a table it expects to exist.
+> Only `0004` is safe to re-run, because it is a `CREATE INDEX IF NOT EXISTS`.
 
 ### Checked automatically
 
@@ -101,7 +101,7 @@ read-only 2026-08-13:
 
 Only the first two migrations ever went through `wrangler d1 migrations apply`;
 everything since was applied with `--file=`, which never writes to that ledger.
-So wrangler believes `0003`–`0007` are unapplied on prod and that *nothing* is
+So wrangler believes `0003`–`0008` are unapplied on prod and that *nothing* is
 applied on preview. Running `wrangler d1 migrations apply` would replay
 non-idempotent DDL against databases that already have it, and the schemas are
 in fact at head — `npm run check:schema` is the authority on that, not the
@@ -169,9 +169,21 @@ up one:
 | `0006_race_results_suspect.sql` | `0007_race_results_suspect.sql` |
 | `0007_contact_bug_reports.sql` | `0008_contact_bug_reports.sql` |
 
-**Both databases were already at head when this happened**, so no file needs
-re-applying — but note that a number now means a different file than it did in
-older session logs and PR descriptions.
+The last row is later than the rest: `contact_bug_reports` landed on `main` as
+`0007` while this branch was open, and the rebase pushed it up one to keep the
+sequence gapless and unique.
+
+**The first four were already applied to both databases when this happened**, so
+none of them needs re-applying — but note that a number now means a different
+file than it did in older session logs and PR descriptions.
+
+`0008` is the exception, and it is a live drift, not something the renumber
+caused: as of 2026-08-13 `npm run check:schema` reports it unapplied on **both**
+prod and preview (no `context` column, and `kind` still checks against
+`('general', 'deletion')` only). Renaming an unapplied file is harmless — it is
+simply applied under the new name — but it does have to be applied, and until it
+is, bug reports cannot be stored. See *Ordering against the Worker deploy* above
+for why general and deletion messages keep working meanwhile.
 
 The renumber is safe against wrangler's `d1_migrations` ledger, re-verified
 2026-08-13: every renamed file is one that ledger has never recorded under

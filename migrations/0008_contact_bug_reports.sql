@@ -6,7 +6,7 @@
 --   1. `kind` gains 'bug'. SQLite cannot ALTER a CHECK constraint in place, so
 --      widening it means the rebuild dance below: create the new shape, copy,
 --      drop, rename, recreate indexes. Both indexes and the foreign key to
---      "user" are reproduced verbatim from 0005 — DROP TABLE takes a table's
+--      "user" are reproduced verbatim from 0006 — DROP TABLE takes a table's
 --      indexes with it, so a rebuild that forgot them would silently leave the
 --      admin dashboard doing full scans.
 --
@@ -20,7 +20,7 @@
 --      rebuild per field on a database that cannot cheaply drop columns.
 --      NULL for the kinds that capture nothing ('general', 'deletion').
 --
--- 0005's property is preserved: the row is the durable record and email is
+-- 0006's property is preserved: the row is the durable record and email is
 -- only best-effort notification. Nothing here makes storing depend on sending.
 --
 -- No other table has a foreign key *to* contact_messages, so the DROP/RENAME
@@ -52,7 +52,7 @@ DROP TABLE contact_messages;
 
 ALTER TABLE contact_messages_new RENAME TO contact_messages;
 
--- Verbatim from 0005: the dashboard lists newest-first and filters to
+-- Verbatim from 0006: the dashboard lists newest-first and filters to
 -- unhandled, and both indexes died with the old table above.
 CREATE INDEX idx_contact_messages_created ON contact_messages (created_at DESC, id DESC);
 CREATE INDEX idx_contact_messages_unhandled ON contact_messages (created_at DESC) WHERE handled = 0;
