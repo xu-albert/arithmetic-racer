@@ -485,6 +485,59 @@ describe("PublicRaceRoom.finishRace — bot finalization", () => {
   });
 });
 
+describe("PublicRaceRoom — broadcast identity hygiene", () => {
+  // Quick Match seats up to 5 strangers together, so anything this room puts on
+  // the wire reaches all of them. deviceId is the anon-identity join key used by
+  // claim-on-signup, so it must never leave the server — not in `state`, and not
+  // in the `finish` rankings (bug: the finishRace override skipped publicPlayer).
+  it("never puts deviceId/userId on the wire, and keeps bot markers", async () => {
+    await withRoom("test-privacy-" + crypto.randomUUID(), async (room) => {
+      const wire = [];
+      room.broadcast = (s) => wire.push(s);
+      // Restore the real broadcastState (withRoom stubs it out) so `state`
+      // pushes are checked by the same assertion as `finish`.
+      delete room.broadcastState;
+      const conns = [makeConn(), makeConn()];
+      room.getConnections = () => conns;
+      room.persistResults = async () => {};
+
+      room.state.raceLength = 10;
+      room.state.raceStartedAt = 1000;
+      room.state.state = "racing";
+      room.state.botTimelines = [[100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]];
+      room.state.players = [
+        { id: "h-1", handle: "Alice", isBot: false, deviceId: "dev-alice", userId: "user-alice", score: 10, dropped: false, finishMs: 1100, dnf: false, attempts: 12, currentStreak: 3, longestStreak: 5 },
+        { id: "h-2", handle: "Bob", isBot: false, deviceId: "dev-bob", userId: null, score: 4, dropped: false, finishMs: null, dnf: false, attempts: 6, currentStreak: 0, longestStreak: 1 },
+        { id: "b-1", handle: "Zed", isBot: true, tier: "strong", score: 0, dropped: false, finishMs: null, dnf: false },
+      ];
+
+      room.broadcastState();
+      room.finishRace(1100);
+
+      const payloads = [...wire, ...conns.flatMap((c) => c.sent.map((m) => JSON.stringify(m)))];
+      const messages = payloads.map((p) => JSON.parse(p));
+      expect(messages.some((m) => m.type === "state")).toBe(true);
+      expect(messages.some((m) => m.type === "finish")).toBe(true);
+
+      for (const raw of payloads) {
+        expect(raw).not.toMatch(/"deviceId"/);
+        expect(raw).not.toMatch(/"userId"/);
+        expect(raw).not.toMatch(/dev-alice|dev-bob|user-alice/);
+      }
+
+      // Bot markers are deliberately public — disclosure over concealment.
+      const finish = messages.find((m) => m.type === "finish");
+      const bot = finish.rankings.find((p) => p.id === "b-1");
+      expect(bot.isBot).toBe(true);
+      expect(bot.tier).toBe("strong");
+      // …and the rankings are still usable for the scoreboard.
+      expect(finish.rankings.map((p) => p.handle).sort()).toEqual(["Alice", "Bob", "Zed"]);
+      expect(finish.rankings.find((p) => p.id === "h-1").isGuest).toBe(false);
+      expect(finish.rankings.find((p) => p.id === "h-2").isGuest).toBe(true);
+    });
+  });
+});
+
 describe("PublicRaceRoom — race_results persistence", () => {
   beforeEach(async () => {
     // Mirror migration so the test D1 has the room_id column.

@@ -7,7 +7,7 @@
 //   - Auto-start timer fires the race after a configurable countdown.
 //   - Remaining seats filled with bots; bot timelines are precomputed (no per-tick alarms).
 
-import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS, COUNTDOWN_SECONDS, rankPlayers } from './room.js';
+import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS, COUNTDOWN_SECONDS, rankPlayers, publicPlayer } from './room.js';
 import { MAX_PLAYERS, computeAutoStartDeadline } from '../public/src/auto-start.js';
 import { pickBotTiers } from '../public/src/bot.js';
 import { computeBotTimelines, scoreBotAt } from '../public/src/bot-timeline.js';
@@ -205,7 +205,9 @@ export class PublicRaceRoom extends RaceRoom {
     this.state.state = 'finished';
     this.state.graceDeadline = null;
     const rankings = rankPlayers(this.state.players);
-    this.broadcast(JSON.stringify({ type: 'finish', rankings }));
+    // Mirror the base RaceRoom: strip identity (deviceId/userId) and server-only
+    // counters before the rankings reach the other players in the room.
+    this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
     // Fire-and-forget — DB error must not block the WS broadcast.
     this.persistResults().catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, phase: 'persist_results' }));
