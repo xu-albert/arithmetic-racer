@@ -16,6 +16,12 @@ A room player carries two identifiers, and conflating them is a takeover bug:
   client's lane keying all use it. Non-UUID on purpose, so `handleHello`'s UUID gate makes
   a broadcast id unusable as a credential.
 
+A broadcast id is only unique within one incarnation of `state`: its counter (`nextPid`)
+is reset by `freshState()` on idle cleanup, so `p-1` is handed out again to a later
+arrival while a long-lived socket may still hold it. Connection state therefore carries
+*both* halves, and `playerFor()` — the chokepoint every handler and `onClose` go through —
+requires both to match. Never resolve a socket to a seat by broadcast id alone.
+
 Anything a room broadcasts reaches sockets that have not said `hello` yet (`onConnect`
 pushes `publicState`), so every new broadcast must go through `publicPlayer()`.
 `server/room-identity.test.js` and the hygiene tests in `server/public-room.test.js` fail

@@ -185,6 +185,107 @@ describe("RaceRoom — the racerId is a reconnect secret, not a wire identity", 
   });
 });
 
+describe("RaceRoom — a recycled broadcast id is not proof of ownership", () => {
+  it("a stale socket cannot act as, or evict, whoever later occupies its old id", async () => {
+    // Broadcast ids are only unique within one incarnation of room state, but a
+    // socket's connection state outlives that: nothing clears it when the seat
+    // goes away. An idle-cleanup reset restarts the counter at p-1, so the next
+    // arrival inherits the id a long-lived socket is still holding.
+    await withRoom("recycled-id-" + crypto.randomUUID(), async (room, { conns }) => {
+      const attacker = await join(room, conns, {
+        secret: crypto.randomUUID(), handle: "Attacker", deviceId: "attacker-device", userId: "attacker-user",
+      });
+      const recycledId = room.state.players[0].id;
+
+      // Quit in the lobby, but keep the socket open — a real client closes it
+      // ~100ms later; an attacker's client simply does not.
+      await room.handleQuit(attacker);
+      expect(room.state.players).toEqual([]);
+      expect(attacker.state.playerId).toBe(recycledId);
+
+      // Idle cleanup re-mints the state, restarting the broadcast-id counter.
+      room.state.idleCleanupAt = Date.now() - 1;
+      await room.onAlarm();
+      expect(room.state.nextPid).toBe(1);
+
+      const victimSecret = crypto.randomUUID();
+      const victimConn = await join(room, conns, {
+        secret: victimSecret, handle: "Victim", deviceId: "victim-device", userId: "victim-user",
+      });
+      const victim = room.state.players[0];
+      expect(victim.id).toBe(recycledId);
+      expect(victim.isCreator).toBe(true);
+
+      // The stale socket presents a matching broadcast id but not the secret
+      // behind it, so it resolves to nobody at the one shared chokepoint…
+      expect(room.playerFor(attacker)).toBeNull();
+
+      // …and therefore none of the seat-owning actions land on the victim.
+      await room.handleSetHandle(attacker, { type: "set-handle", handle: "Pwned" });
+      expect(victim.handle).toBe("Victim");
+
+      await room.handleSetConfig(attacker, { type: "set-config", difficulty: "hard", raceLength: 5 });
+      expect(room.state.difficulty).toBe("medium");
+
+      await room.handleStartRace(attacker);
+      expect(room.state.state).toBe("lobby");
+
+      room.state.raceLength = 2;
+      room.state.problemSequence = [{ problem: "1 + 1", answer: 2 }, { problem: "2 + 2", answer: 4 }];
+      room.state.raceStartedAt = Date.now();
+      room.state.state = "racing";
+      await room.handleAnswer(attacker, { type: "answer", value: 2 });
+      expect(victim.score).toBe(0);
+      await room.handleQuit(attacker);
+      expect(victim.dropped).toBe(false);
+      room.state.state = "lobby";
+
+      // Closing the stale socket must not open a 30s grace on the live seat —
+      // onAlarm would evict the victim when it expired.
+      await room.onClose(attacker);
+      expect(room.state.disconnectDeadlines).toEqual({});
+      expect(room.state.players.length).toBe(1);
+      expect(victim.deviceId).toBe("victim-device");
+      expect(victim.userId).toBe("victim-user");
+
+      // The seat's real owner is unaffected: they can still act…
+      await room.handleSetHandle(victimConn, { type: "set-handle", handle: "Victoria" });
+      expect(victim.handle).toBe("Victoria");
+
+      // …and still reconnect on the secret after a genuine drop.
+      await room.onClose(victimConn);
+      expect(room.state.disconnectDeadlines[recycledId]).toBeGreaterThan(Date.now());
+      const rejoin = makeConn({ userId: "victim-user" });
+      conns.push(rejoin);
+      await room.handleHello(rejoin, {
+        type: "hello", playerId: victimSecret, handle: "Victoria", deviceId: "victim-device",
+      });
+      expect(room.state.disconnectDeadlines[recycledId]).toBeUndefined();
+      await room.handleSetHandle(rejoin, { type: "set-handle", handle: "Vee" });
+      expect(room.state.players[0].id).toBe(recycledId);
+      expect(room.state.players[0].handle).toBe("Vee");
+    });
+  });
+
+  it("tells a stale socket it owns nobody, and the seat holder who they are", async () => {
+    await withRoom("recycled-id-youare-" + crypto.randomUUID(), async (room, { conns }) => {
+      const attacker = await join(room, conns, { secret: crypto.randomUUID(), handle: "Attacker", deviceId: "a" });
+      await room.handleQuit(attacker);
+      room.state.idleCleanupAt = Date.now() - 1;
+      await room.onAlarm();
+
+      const victimConn = await join(room, conns, { secret: crypto.randomUUID(), handle: "Victim", deviceId: "v" });
+      const victim = room.state.players[0];
+      attacker.raw.length = 0;
+      victimConn.raw.length = 0;
+      room.broadcastState();
+
+      expect(attacker.messages().at(-1).youAre).toBeNull();
+      expect(victimConn.messages().at(-1).youAre).toBe(victim.id);
+    });
+  });
+});
+
 describe("RaceRoom — broadcast hygiene", () => {
   it("never puts the racerId secret (or deviceId/userId) on the wire", async () => {
     await withRoom("wire-hygiene-" + crypto.randomUUID(), async (room, { conns, wire }) => {

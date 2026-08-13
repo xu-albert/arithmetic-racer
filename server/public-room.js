@@ -72,9 +72,13 @@ export class PublicRaceRoom extends RaceRoom {
     // userId from connection state (cookie-derived, unspoofable). Reading
     // msg.userId would let any client attribute results to another account.
     const player = this.state.players.find((p) => !p.isBot && p.racerId === msg.playerId);
-    if (player) {
-      player.isCreator = false;
-    }
+    // Every path `super` accepts leaves a seat carrying this racerId — a new
+    // join pushes one, a reconnect resolves one — so no seat here means the
+    // hello was rejected. Stop before the bookkeeping below: otherwise a
+    // rejected hello still resets the auto-start deadline, and a client
+    // repeating one holds a lone player in the lobby forever (bug_002).
+    if (!player) return;
+    player.isCreator = false;
 
     if (this.state.state !== 'lobby') return;
 

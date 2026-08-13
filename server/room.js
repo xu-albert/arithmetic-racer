@@ -209,15 +209,16 @@ export class RaceRoom extends Server {
     // socket it has ever seen.
     this.socketLimiter.forget(connection.id);
 
-    const playerId = connection.state?.playerId;
-    if (!playerId) return;
-    const player = this.state.players.find((p) => p.id === playerId);
+    // Resolved through playerFor, not by broadcast id alone: a socket whose
+    // seat is gone must not open a grace window against whoever occupies that
+    // id now — that would evict a live player 30s later.
+    const player = this.playerFor(connection);
     if (!player) return;
 
     // Schedule a 30s reconnection grace (Task 9). If a fresh hello presenting
     // this seat's racerId arrives within the window, the disconnect is cancelled.
     const deadline = Date.now() + RECONNECT_GRACE_MS;
-    this.state.disconnectDeadlines[playerId] = deadline;
+    this.state.disconnectDeadlines[player.id] = deadline;
     await this.persist();
     await this.scheduleNextAlarm();
   }
@@ -299,7 +300,7 @@ export class RaceRoom extends Server {
       // Reconnect — preserve all per-race fields.
       delete this.state.disconnectDeadlines[existing.id];
       const currentConnState = connection.state ?? {};
-      connection.setState({ ...currentConnState, playerId: existing.id });
+      connection.setState({ ...currentConnState, playerId: existing.id, racerId });
       // Refresh identity from this connection (cookie may have changed).
       if (isValidDeviceId(msg.deviceId)) existing.deviceId = msg.deviceId;
       existing.userId = currentConnState.userId ?? null;
@@ -352,7 +353,7 @@ export class RaceRoom extends Server {
     this.state.players.push(player);
     this.state.idleCleanupAt = null;
 
-    connection.setState({ ...currentConnState, playerId: player.id });
+    connection.setState({ ...currentConnState, playerId: player.id, racerId });
     connection.send(JSON.stringify({ type: 'hello-ack', playerId: player.id, handle }));
     this.broadcast(JSON.stringify({ type: 'player-joined', player: publicPlayer(player) }));
     await this.persist();
@@ -584,11 +585,19 @@ export class RaceRoom extends Server {
   }
 
   playerFor(connection) {
-    // connection.state.playerId holds the seat's broadcast id, stamped by
-    // handleHello only after the racerId proved ownership of that seat.
+    // Both halves of the seat are stamped by handleHello, and only after the
+    // racerId proved ownership: playerId is the broadcast id, racerId the
+    // secret behind it. The broadcast id alone is NOT sufficient proof — it is
+    // drawn from a counter that lives in `state`, so an idle-cleanup reset (or
+    // the legacy re-key in adoptBroadcastIds) can hand `p-<n>` to a later
+    // player while some long-lived socket still carries it. Matching the
+    // secret too means such a socket resolves to nobody, which is what every
+    // handler and onClose need it to do.
     const pid = connection.state?.playerId;
-    if (!pid) return null;
-    return this.state.players.find((p) => p.id === pid) ?? null;
+    const racerId = connection.state?.racerId;
+    if (!pid || !racerId) return null;
+    // Bots hold neither a connection nor a secret; never resolvable here.
+    return this.state.players.find((p) => !p.isBot && p.id === pid && p.racerId === racerId) ?? null;
   }
 
   /**
@@ -607,7 +616,7 @@ export class RaceRoom extends Server {
   broadcastState() {
     // Each connection gets its own youAre, so we can't use this.broadcast.
     for (const c of this.getConnections()) {
-      const youAre = c.state?.playerId ?? null;
+      const youAre = this.playerFor(c)?.id ?? null;
       c.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre }));
     }
   }

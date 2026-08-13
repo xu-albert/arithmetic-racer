@@ -770,4 +770,30 @@ describe("PublicRaceRoom.handleHello — seat ownership", () => {
       expect(room.state.autoStartDeadline).toBe(deadline);
     });
   });
+
+  it("a rejected hello does not push out the lone player's auto-start deadline", async () => {
+    // A hello the base handler refuses seats nobody, so the bookkeeping after
+    // it must not run. Otherwise anyone can hold a lone player in the lobby
+    // indefinitely by re-sending a rejected hello every few seconds (bug_002).
+    await withRoom("test-rejected-hello-" + crypto.randomUUID(), async (room) => {
+      await room.handleHello(makeConn(), {
+        type: "hello", playerId: crypto.randomUUID(), handle: "Alone",
+        deviceId: "dev-1", difficulty: "medium",
+      });
+      const deadline = room.state.autoStartDeadline;
+      expect(deadline).toBeGreaterThan(0);
+      await new Promise((r) => setTimeout(r, 5)); // ensure Date.now() advances
+
+      // A broadcast id is not a UUID, so this is rejected outright.
+      const attacker = makeConn();
+      await room.handleHello(attacker, {
+        type: "hello", playerId: room.state.players[0].id, handle: "Nudge",
+        deviceId: "attacker-device", difficulty: "medium",
+      });
+
+      expect(attacker.sent.find((m) => m.type === "error")?.code).toBe("INVALID_INPUT");
+      expect(room.state.players.length).toBe(1);
+      expect(room.state.autoStartDeadline).toBe(deadline);
+    });
+  });
 });
