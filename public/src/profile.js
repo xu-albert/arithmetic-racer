@@ -38,10 +38,18 @@ function fmtPpm(ppm) {
   return ppm.toFixed(1);
 }
 
-/** Format a race score. Points are stored unrounded; rounding is display-only. */
+/**
+ * Format a race score. Points are stored unrounded; rounding is display-only.
+ * One decimal, because a single race lands around 0.4–5 points and whole
+ * numbers would both collapse the column and stop the rows adding up to the
+ * tier total. Grouping separators keep large tier totals readable.
+ */
 function fmtPoints(points) {
   if (points == null || !Number.isFinite(points)) return "—";
-  return Math.round(points).toLocaleString();
+  return points.toLocaleString(undefined, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  });
 }
 
 /** Format a 0..100 percentage with no decimals. */

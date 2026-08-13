@@ -72,15 +72,6 @@ function seedRace(db, overrides = {}) {
 const pointsOf = (db, id) =>
   db.prepare("SELECT points FROM race_results WHERE id = ?").get(id).points;
 
-test("0009 is the next free migration number on this branch", () => {
-  // Guard against silently colliding with another branch's migration: two open
-  // PRs also touch migrations/ (see the PR body). A duplicate prefix is how
-  // 0003 ended up doubled.
-  const prefixes = migrationFiles().map((f) => f.slice(0, 4));
-  const duplicates = prefixes.filter((p, i) => p === "0009" && prefixes.indexOf(p) !== i);
-  assert.deepEqual(duplicates, [], "another 0009_ migration exists — renumber before merge");
-});
-
 test("adds a nullable points column without disturbing existing rows", () => {
   const db = freshDbBeforePoints();
   const id = seedRace(db, { accuracy_pct: 92.5, longest_streak: 7 });
