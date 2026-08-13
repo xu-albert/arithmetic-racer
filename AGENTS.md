@@ -4,6 +4,38 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 
 - Add durable project-specific notes here as they are discovered through real work.
 
+## Room identity: two ids, only one of them public
+
+A room player carries two identifiers, and conflating them is a takeover bug:
+
+- `player.racerId` — the client's `localStorage` racerId, sent only in `hello`. It is
+  the **reconnect credential**: presenting it is the sole proof that a socket owns an
+  existing seat. Server-side only; `publicPlayer()` strips it, alongside `deviceId`/`userId`.
+- `player.id` — an ephemeral `p-<n>` id minted per room (`nextBroadcastId`). This is the
+  wire identity: `youAre`, every `playerId` field, `disconnectDeadlines` keys, and the
+  client's lane keying all use it. Non-UUID on purpose, so `handleHello`'s UUID gate makes
+  a broadcast id unusable as a credential.
+
+A seat also records `player.connId`, the socket that most recently claimed it. The
+racerId says *which* seat a socket may act on; `connId` says which socket's close is
+that seat's departure. Without it, two sockets holding the same racerId (second tab,
+auto-reconnect beating the old close) both resolve, and the stale one's `onClose`
+schedules an eviction against a live player. `ownsSeat()` gates only the eviction path
+— never seat resolution — and demands a real owner *and* a real `connection.id`, so two
+unknowns never match. Any new server-only seat field must be added to `publicPlayer()`'s
+destructured strip list; it rides `...rest` onto the wire otherwise.
+
+A broadcast id is only unique within one incarnation of `state`: its counter (`nextPid`)
+is reset by `freshState()` on idle cleanup, so `p-1` is handed out again to a later
+arrival while a long-lived socket may still hold it. Connection state therefore carries
+*both* halves, and `playerFor()` — the chokepoint every handler and `onClose` go through —
+requires both to match. Never resolve a socket to a seat by broadcast id alone.
+
+Anything a room broadcasts reaches sockets that have not said `hello` yet (`onConnect`
+pushes `publicState`), so every new broadcast must go through `publicPlayer()`.
+`server/room-identity.test.js` and the hygiene tests in `server/public-room.test.js` fail
+if a secret reaches the wire.
+
 ## Dependencies and the lockfile
 
 The Cloudflare Workers build runs `npm ci`, which hard-fails unless `package-lock.json`

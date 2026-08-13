@@ -17,10 +17,16 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
     room: roomId,
   });
   const listeners = new Set();
+  // The server's ephemeral, per-room id for this player, learned from
+  // hello-ack. Every `playerId` the server puts on the wire is one of these —
+  // the racerId we send in `hello` is a secret and never comes back out.
+  let myPlayerId = null;
 
   ws.addEventListener('open', () => {
     const helloMsg = {
       type: 'hello',
+      // The racerId doubles as the reconnect credential: presenting it is what
+      // proves this browser owns its seat in the room. Client → server only.
       playerId: getOrCreateRacerId(),
       handle: getStoredHandle(),
       // deviceId is stamped onto every hello so DOs (private + public) can
@@ -35,10 +41,12 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
   ws.addEventListener('message', (e) => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
-    if (msg.type === 'hello-ack' && msg.handle) setStoredHandle(msg.handle);
+    if (msg.type === 'hello-ack') {
+      if (typeof msg.playerId === 'string') myPlayerId = msg.playerId;
+      if (msg.handle) setStoredHandle(msg.handle);
+    }
     if (msg.type === 'handle-changed') {
-      const myId = getOrCreateRacerId();
-      if (msg.playerId === myId) setStoredHandle(msg.handle);
+      if (myPlayerId != null && msg.playerId === myPlayerId) setStoredHandle(msg.handle);
     }
     for (const l of listeners) l(msg);
   });

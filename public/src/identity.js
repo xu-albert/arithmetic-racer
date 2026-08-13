@@ -1,3 +1,6 @@
+// racerId is a secret, not a public handle: the room DO accepts it in `hello`
+// as proof that this browser owns its seat (see server/room.js handleHello),
+// so it must never be rendered, logged, or sent anywhere but that message.
 const KEY_ID = 'racerId';
 const KEY_HANDLE = 'racerHandle';
 const KEY_DEVICE = 'deviceId';

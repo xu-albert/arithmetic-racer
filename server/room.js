@@ -37,8 +37,46 @@ export function freshState(id) {
     countdownN: null,
     countdownAt: null,
     idleCleanupAt: null,
-    disconnectDeadlines: {}, // playerId -> deadline ms (Task 9 reconnection grace)
+    // Counter behind the ephemeral broadcast ids handed out by nextBroadcastId.
+    nextPid: 1,
+    disconnectDeadlines: {}, // broadcast id -> deadline ms (Task 9 reconnection grace)
   };
+}
+
+/**
+ * Mint the next ephemeral, per-room broadcast id.
+ *
+ * This — not the client's racerId — is what every other client sees and keys
+ * off. It is deliberately not a UUID: UUID_V4_RE gates `hello`, so a broadcast
+ * id can never be replayed back as a reconnect secret. Monotone, so an id is
+ * never reused by a later player in the same room.
+ */
+export function nextBroadcastId(state) {
+  const n = state.nextPid ?? 1;
+  state.nextPid = n + 1;
+  return `p-${n}`;
+}
+
+/**
+ * Re-key players persisted before the broadcast-id split, where player.id WAS
+ * the racerId and therefore rode along in every state push. Returns true if
+ * anything changed (the caller then persists).
+ */
+export function adoptBroadcastIds(state) {
+  let changed = false;
+  for (const p of state.players ?? []) {
+    if (p.isBot || p.racerId) continue;
+    const oldId = p.id;
+    p.racerId = oldId;
+    p.id = nextBroadcastId(state);
+    const deadline = state.disconnectDeadlines?.[oldId];
+    if (deadline != null) {
+      state.disconnectDeadlines[p.id] = deadline;
+      delete state.disconnectDeadlines[oldId];
+    }
+    changed = true;
+  }
+  return changed;
 }
 
 export function resetForRace(state) {
@@ -78,8 +116,27 @@ export function publicPlayer(p) {
   // Strip server-only bookkeeping (attempts/streak counters, identity)
   // before broadcasting to WS clients. Expose only a boolean guest flag —
   // bots carry no userId, so they read as guests and blend in.
-  const { attempts, longestStreak, currentStreak, deviceId, userId, ...rest } = p;
+  //
+  // racerId is the reconnect secret: whoever presents it in `hello` takes over
+  // the seat, so it must never reach another client. connId names the socket
+  // currently holding the seat — server-only bookkeeping for the eviction
+  // path. What survives here is `id`, the ephemeral per-room broadcast id
+  // (see nextBroadcastId).
+  const { attempts, longestStreak, currentStreak, deviceId, userId, racerId, connId, ...rest } = p;
   return { ...rest, isGuest: !userId };
+}
+
+/**
+ * True when `connection` is the socket that most recently claimed this seat.
+ *
+ * A seat has exactly one current owner, re-stamped by every accepted `hello`.
+ * Requires a real recorded owner AND a real connection id, so two unknowns
+ * never read as a match.
+ */
+export function ownsSeat(player, connection) {
+  const owner = player?.connId;
+  if (typeof owner !== 'string' || owner.length === 0) return false;
+  return owner === connection?.id;
 }
 
 // Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
@@ -111,7 +168,13 @@ export class RaceRoom extends Server {
   async onStart() {
     const stored = await this.ctx.storage.get('state');
     this.state = stored ?? this.freshState(this.name);
-    if (!stored) await this.persist();
+    // A room persisted by an older build still carries racerIds in player.id.
+    // Re-key on load so no live room keeps broadcasting them. A socket that
+    // hibernated across that deploy holds the pre-migration id in its
+    // connection state and has to `hello` again to act; accepted, since the
+    // alternative is leaving the secret on the wire for the room's lifetime.
+    const migrated = stored ? adoptBroadcastIds(this.state) : false;
+    if (!stored || migrated) await this.persist();
   }
 
   async onConnect(connection, ctx) {
@@ -161,15 +224,22 @@ export class RaceRoom extends Server {
     // socket it has ever seen.
     this.socketLimiter.forget(connection.id);
 
-    const playerId = connection.state?.playerId;
-    if (!playerId) return;
-    const player = this.state.players.find((p) => p.id === playerId);
+    // Resolved through playerFor, not by broadcast id alone: a socket whose
+    // seat is gone must not open a grace window against whoever occupies that
+    // id now — that would evict a live player 30s later.
+    const player = this.playerFor(connection);
     if (!player) return;
 
-    // Schedule a 30s reconnection grace (Task 9). If a fresh hello with the same
-    // playerId arrives within the window, the disconnect is cancelled.
+    // The secret alone does not make this close the seat's departure: a later
+    // socket presenting the same racerId (second tab, or an auto-reconnect that
+    // beat this close) took the seat over and is still live. Grace it and
+    // onAlarm would evict a connected player 30s later.
+    if (!ownsSeat(player, connection)) return;
+
+    // Schedule a 30s reconnection grace (Task 9). If a fresh hello presenting
+    // this seat's racerId arrives within the window, the disconnect is cancelled.
     const deadline = Date.now() + RECONNECT_GRACE_MS;
-    this.state.disconnectDeadlines[playerId] = deadline;
+    this.state.disconnectDeadlines[player.id] = deadline;
     await this.persist();
     await this.scheduleNextAlarm();
   }
@@ -235,17 +305,26 @@ export class RaceRoom extends Server {
   // ---------- handlers ----------
 
   async handleHello(connection, msg) {
+    // msg.playerId is the client's racerId — a long-lived secret that lives in
+    // the sender's localStorage and nowhere else on the wire. It is the ONLY
+    // thing that reattaches a socket to an existing seat, so the reconnect
+    // branch below is an ownership proof, not a lookup by public identifier:
+    // other clients only ever learn `player.id`, which is ephemeral, non-UUID,
+    // and therefore unusable here.
     if (typeof msg.playerId !== 'string' || !UUID_V4_RE.test(msg.playerId)) {
       return this.sendError(connection, 'INVALID_INPUT', 'Bad playerId');
     }
-    const playerId = msg.playerId;
-    const existing = this.state.players.find((p) => p.id === playerId);
+    const racerId = msg.playerId;
+    const existing = this.state.players.find((p) => !p.isBot && p.racerId === racerId);
 
     if (existing) {
       // Reconnect — preserve all per-race fields.
-      delete this.state.disconnectDeadlines[playerId];
+      delete this.state.disconnectDeadlines[existing.id];
       const currentConnState = connection.state ?? {};
-      connection.setState({ ...currentConnState, playerId });
+      connection.setState({ ...currentConnState, playerId: existing.id, racerId });
+      // This socket is now the seat's owner; the one it displaced must no
+      // longer be able to open an eviction window against it.
+      existing.connId = connection.id;
       // Refresh identity from this connection (cookie may have changed).
       if (isValidDeviceId(msg.deviceId)) existing.deviceId = msg.deviceId;
       existing.userId = currentConnState.userId ?? null;
@@ -254,7 +333,7 @@ export class RaceRoom extends Server {
         existing.handle = msg.handle.trim();
       }
       connection.send(JSON.stringify({
-        type: 'hello-ack', playerId, handle: existing.handle,
+        type: 'hello-ack', playerId: existing.id, handle: existing.handle,
       }));
       await this.persist();
       this.broadcastState();
@@ -278,7 +357,13 @@ export class RaceRoom extends Server {
     const isCreator = this.state.players.length === 0;
     const currentConnState = connection.state ?? {};
     const player = {
-      id: playerId,
+      // Wire identity: ephemeral, per-room, safe to broadcast.
+      id: nextBroadcastId(this.state),
+      // Reconnect secret: server-side only, stripped by publicPlayer.
+      racerId,
+      // Socket currently holding the seat; server-side only, and the only
+      // socket whose close opens the reconnect grace.
+      connId: connection.id,
       handle,
       isCreator,
       joinedAt: Date.now(),
@@ -295,8 +380,8 @@ export class RaceRoom extends Server {
     this.state.players.push(player);
     this.state.idleCleanupAt = null;
 
-    connection.setState({ ...currentConnState, playerId });
-    connection.send(JSON.stringify({ type: 'hello-ack', playerId, handle }));
+    connection.setState({ ...currentConnState, playerId: player.id, racerId });
+    connection.send(JSON.stringify({ type: 'hello-ack', playerId: player.id, handle }));
     this.broadcast(JSON.stringify({ type: 'player-joined', player: publicPlayer(player) }));
     await this.persist();
     this.broadcastState();
@@ -527,9 +612,19 @@ export class RaceRoom extends Server {
   }
 
   playerFor(connection) {
+    // Both halves of the seat are stamped by handleHello, and only after the
+    // racerId proved ownership: playerId is the broadcast id, racerId the
+    // secret behind it. The broadcast id alone is NOT sufficient proof — it is
+    // drawn from a counter that lives in `state`, so an idle-cleanup reset (or
+    // the legacy re-key in adoptBroadcastIds) can hand `p-<n>` to a later
+    // player while some long-lived socket still carries it. Matching the
+    // secret too means such a socket resolves to nobody, which is what every
+    // handler and onClose need it to do.
     const pid = connection.state?.playerId;
-    if (!pid) return null;
-    return this.state.players.find((p) => p.id === pid) ?? null;
+    const racerId = connection.state?.racerId;
+    if (!pid || !racerId) return null;
+    // Bots hold neither a connection nor a secret; never resolvable here.
+    return this.state.players.find((p) => !p.isBot && p.id === pid && p.racerId === racerId) ?? null;
   }
 
   /**
@@ -548,7 +643,7 @@ export class RaceRoom extends Server {
   broadcastState() {
     // Each connection gets its own youAre, so we can't use this.broadcast.
     for (const c of this.getConnections()) {
-      const youAre = c.state?.playerId ?? null;
+      const youAre = this.playerFor(c)?.id ?? null;
       c.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre }));
     }
   }

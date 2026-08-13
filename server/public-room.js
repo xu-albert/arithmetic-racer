@@ -48,9 +48,12 @@ export class PublicRaceRoom extends RaceRoom {
     // player if state.state is still 'lobby'. The 6-player release fires on
     // strict-equality at 6, so a concurrent 7th hello inside the same alarm
     // tick can otherwise slip past releaseLobby().
-    // Track whether this is a reconnect (existing playerId) — reconnects
-    // must not reset the auto-start timer (see bug_002).
-    const isReconnect = !!this.state.players.find((p) => p.id === msg?.playerId);
+    // Track whether this is a reconnect — reconnects must not reset the
+    // auto-start timer (see bug_002). Matched on the racerId reconnect secret,
+    // the same proof the base handler requires; msg.playerId is never a
+    // broadcast id, so a stranger who read one off the wire lands here as a
+    // new joiner and is subject to the ROOM_FULL gate below.
+    const isReconnect = !!this.state.players.find((p) => !p.isBot && p.racerId === msg?.playerId);
     if (!isReconnect && this.state.state === 'lobby') {
       const humans = this.state.players.filter((p) => !p.isBot).length;
       if (humans >= MAX_PLAYERS) {
@@ -68,10 +71,14 @@ export class PublicRaceRoom extends RaceRoom {
     // base handler already sets a validated deviceId from the message and
     // userId from connection state (cookie-derived, unspoofable). Reading
     // msg.userId would let any client attribute results to another account.
-    const player = this.state.players.find((p) => p.id === msg.playerId);
-    if (player) {
-      player.isCreator = false;
-    }
+    const player = this.state.players.find((p) => !p.isBot && p.racerId === msg.playerId);
+    // Every path `super` accepts leaves a seat carrying this racerId — a new
+    // join pushes one, a reconnect resolves one — so no seat here means the
+    // hello was rejected. Stop before the bookkeeping below: otherwise a
+    // rejected hello still resets the auto-start deadline, and a client
+    // repeating one holds a lone player in the lobby forever (bug_002).
+    if (!player) return;
+    player.isCreator = false;
 
     if (this.state.state !== 'lobby') return;
 
@@ -205,8 +212,9 @@ export class PublicRaceRoom extends RaceRoom {
     this.state.state = 'finished';
     this.state.graceDeadline = null;
     const rankings = rankPlayers(this.state.players);
-    // Mirror the base RaceRoom: strip identity (deviceId/userId) and server-only
-    // counters before the rankings reach the other players in the room.
+    // Mirror the base RaceRoom: strip identity (deviceId/userId, and the
+    // racerId reconnect secret) plus server-only counters before the rankings
+    // reach the other players in the room.
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
     // Fire-and-forget — DB error must not block the WS broadcast.
