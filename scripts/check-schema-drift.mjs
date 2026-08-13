@@ -39,6 +39,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { checkConstraints } from "./sql-constraints.mjs";
 
@@ -132,7 +133,7 @@ function actualSchema(binding) {
  * exactly the same logic. Two round trips: one to learn the names, one to
  * describe everything they name.
  */
-function readSchema(query) {
+export function readSchema(query) {
   const [tableRows, indexRows] = query([
     "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     "SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' ORDER BY name",
@@ -197,14 +198,15 @@ function readSchema(query) {
   return { columns, foreignKeys, checks, uniques, indexes };
 }
 
-function diff(problems, table, kind, want, have) {
+export function diff(problems, table, kind, want, have) {
   const present = new Set(have);
   for (const item of want) if (!present.has(item)) problems.push(`${table}: missing or altered ${kind} -> ${item}`);
   const wanted = new Set(want);
   for (const item of have) if (!wanted.has(item)) problems.push(`${table}: unexpected ${kind} -> ${item}`);
 }
 
-function compare(label, expected, actual) {
+/** Every way `actual` departs from `expected`, as human-readable lines. */
+export function compare(expected, actual) {
   const problems = [];
 
   for (const table of Object.keys(expected.columns)) {
@@ -228,6 +230,10 @@ function compare(label, expected, actual) {
     if (!(name in expected.indexes)) problems.push(`unexpected index: ${name}`);
   }
 
+  return problems;
+}
+
+function report(label, problems) {
   if (problems.length === 0) {
     console.log(`✅ ${label}: matches migrations/`);
     return true;
@@ -241,16 +247,23 @@ function compare(label, expected, actual) {
   return false;
 }
 
-const only = process.argv.includes("--db") ? process.argv[process.argv.indexOf("--db") + 1] : null;
-const targets = only ? { [only]: DATABASES[only] } : DATABASES;
-if (only && !DATABASES[only]) {
-  console.error(`Unknown database "${only}". Expected one of: ${Object.keys(DATABASES).join(", ")}`);
-  process.exit(2);
+function main() {
+  const only = process.argv.includes("--db") ? process.argv[process.argv.indexOf("--db") + 1] : null;
+  if (only && !DATABASES[only]) {
+    console.error(`Unknown database "${only}". Expected one of: ${Object.keys(DATABASES).join(", ")}`);
+    process.exit(2);
+  }
+  const targets = only ? { [only]: DATABASES[only] } : DATABASES;
+
+  const expected = expectedSchema();
+  let ok = true;
+  for (const [label, binding] of Object.entries(targets)) {
+    ok = report(label, compare(expected, actualSchema(binding))) && ok;
+  }
+  process.exit(ok ? 0 : 1);
 }
 
-const expected = expectedSchema();
-let ok = true;
-for (const [label, binding] of Object.entries(targets)) {
-  ok = compare(label, expected, actualSchema(binding)) && ok;
-}
-process.exit(ok ? 0 : 1);
+// Importing this module must never touch a database — the comparison logic
+// above is under test in check-schema-drift.test.mjs, and the live reads only
+// belong to the CLI.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

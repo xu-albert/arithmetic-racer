@@ -2,6 +2,13 @@ name: Schema drift
 
 # Compares migrations/ against the live D1 databases.
 #
+# Only `workflow_dispatch` is live. The push-to-main and daily `schedule`
+# triggers below stay commented out until the CLOUDFLARE_API_TOKEN and
+# CLOUDFLARE_ACCOUNT_ID repository secrets exist — without them the "Require
+# Cloudflare credentials" step fails by design, which would turn `main` red on
+# the merge commit and again every morning. Re-enable both by uncommenting them
+# once the secrets are created; see migrations/README.md.
+#
 # Deliberately not run on `pull_request`: a PR that adds a migration has not had
 # it applied to prod or preview yet, so a PR trigger would fail every migration
 # that is doing the right thing. Push-to-main is the trigger that reproduces the
@@ -9,17 +16,17 @@ name: Schema drift
 # catches a database that drifts without a commit to notice it.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "migrations/**"
-      # The whole directory, not just check-schema-drift.mjs: the checker
-      # already imports sql-constraints.mjs, and naming files one by one means
-      # the next split silently stops re-running the check.
-      - "scripts/**"
-      - ".github/workflows/schema-drift.yml"
-  schedule:
-    - cron: "17 9 * * *"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "migrations/**"
+  #     # The whole directory, not just check-schema-drift.mjs: the checker
+  #     # already imports sql-constraints.mjs, and naming files one by one means
+  #     # the next split silently stops re-running the check.
+  #     - "scripts/**"
+  #     - ".github/workflows/schema-drift.yml"
+  # schedule:
+  #   - cron: "17 9 * * *"
   workflow_dispatch:
 
 permissions:
@@ -33,7 +40,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: ".nvmrc"
           cache: npm
 
       # check-schema-drift.mjs shells out to sqlite3 to replay migrations/ into
