@@ -123,8 +123,9 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
         hostBadge.textContent = '(host)';
         li.append(hostBadge);
       }
-      // Server broadcasts isGuest (no userId). Bots read as guests too, so
-      // they blend in with the anonymous crowd.
+      // Server broadcasts isGuest (no userId). The badge only encodes account
+      // status, so bots carry it too — bot backfill is disclosed in the lobby
+      // copy, not hidden on the wire (isBot/tier stay in the payload).
       if (p.isGuest) {
         const guestBadge = document.createElement('span');
         guestBadge.className = 'badge badge-guest';
@@ -191,7 +192,7 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
     // Hint
     if (currentState.state === 'lobby') {
       if (isPublic) {
-        hint.textContent = '';
+        hint.textContent = 'Any lane no human takes gets a practice bot.';
       } else if (!enoughPlayers) {
         hint.textContent = 'Waiting for at least 2 players to start…';
       } else if (!isCreator) {

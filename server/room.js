@@ -114,8 +114,9 @@ export function isValidHandle(s) {
 
 export function publicPlayer(p) {
   // Strip server-only bookkeeping (attempts/streak counters, identity)
-  // before broadcasting to WS clients. Expose only a boolean guest flag —
-  // bots carry no userId, so they read as guests and blend in.
+  // before broadcasting to WS clients. Expose only a boolean guest flag.
+  // `isBot` and `tier` stay in the payload by decision — bot backfill is
+  // disclosed in the UI copy, not hidden on the wire.
   //
   // racerId is the reconnect secret: whoever presents it in `hello` takes over
   // the seat, so it must never reach another client. connId names the socket

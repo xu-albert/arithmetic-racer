@@ -805,3 +805,50 @@ describe("PublicRaceRoom.handleHello — seat ownership", () => {
     });
   });
 });
+
+import { BOT_TIER_NAMES } from "../public/src/bot.js";
+
+describe("Quick Match state broadcast — bot markers stay on the wire", () => {
+  // Bot backfill is disclosed in the UI copy, not hidden from the client, so
+  // the real `state` message a Quick Match player receives must still carry
+  // isBot/tier for every backfilled lane (while identity stays stripped).
+  it("sends isBot/tier for backfilled bots and no identity fields", async () => {
+    const stub = env.PublicRaceRoom.get(env.PublicRaceRoom.idFromName("m-test-wire-" + crypto.randomUUID()));
+    const players = await runInDurableObject(stub, async (room) => {
+      if (!room.state) await room.onStart();
+      room.releaseLobby = async () => {};
+
+      // Real broadcastState/publicState run here — only the socket is faked.
+      const conn = makeConn();
+      room.getConnections = () => [conn];
+
+      const playerId = crypto.randomUUID();
+      await room.handleHello(conn, {
+        type: "hello",
+        playerId,
+        handle: "Alice",
+        difficulty: "medium",
+        deviceId: "dev-alice",
+      });
+
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+
+      const state = conn.sent.filter((m) => m.type === "state").at(-1);
+      const bots = state.state.players.filter((p) => p.isBot);
+      const humans = state.state.players.filter((p) => !p.isBot);
+      expect(humans.map((p) => p.handle)).toEqual(["Alice"]);
+      expect(bots.length).toBe(5);
+      for (const b of bots) {
+        expect(b.isBot).toBe(true);
+        expect(BOT_TIER_NAMES).toContain(b.tier);
+        expect(b.deviceId).toBeUndefined();
+        expect(b.userId).toBeUndefined();
+      }
+      return state.state.players;
+    });
+
+    // Printed so the wire payload itself is reviewable evidence.
+    console.log("[wire] state.players =", JSON.stringify(players, null, 2));
+  });
+});

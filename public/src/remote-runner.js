@@ -15,8 +15,9 @@ function aliasId(id, youAre) {
 }
 
 // Append the guest marker inline so it shows up on race lanes + podium without
-// modifying ui.js. The server broadcasts isGuest (no account); bots read as
-// guests too, so the badge never distinguishes them from anonymous humans.
+// modifying ui.js. The server broadcasts isGuest (no account); the badge only
+// encodes account status, so bots carry it too — bot backfill is disclosed in
+// the lobby copy, not hidden on the wire (isBot/tier stay in the payload).
 function displayHandle(rawHandle, isGuest) {
   return isGuest ? `${rawHandle} (Guest)` : rawHandle;
 }

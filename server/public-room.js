@@ -148,8 +148,9 @@ export class PublicRaceRoom extends RaceRoom {
     this.state.botSeed = (Math.random() * 0xFFFFFFFF) >>> 0;
     this.state.botTiers = pickBotTiers(this.state.difficulty, botCount, seededRng(this.state.botSeed));
 
-    // Bots must be indistinguishable from humans in the roster, so they draw
-    // from the same handle pool as guests (different seed stream than tiers).
+    // Bots draw handles from the same pool as guests so the roster reads
+    // naturally (different seed stream than tiers). Cosmetic, not concealment:
+    // `isBot`/`tier` stay in the broadcast and the UI copy discloses backfill.
     const nameRng = seededRng((this.state.botSeed ^ 0x9e3779b9) >>> 0);
     const taken = new Set(this.state.players.map((p) => p.handle));
     for (let i = 0; i < botCount; i++) {

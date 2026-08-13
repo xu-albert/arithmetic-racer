@@ -4,7 +4,7 @@ A real-time multiplayer arithmetic race. Players join a lobby, agree on difficul
 
 ## Status
 
-Solo-vs-bots, accounts and stats, and private multiplayer rooms are all on `main`.
+Solo-vs-bots, accounts and stats, private multiplayer rooms, and public Quick Match are all on `main`.
 
 Live: https://arithmetic-racer.albertwxu.workers.dev
 
