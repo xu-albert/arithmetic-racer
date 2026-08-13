@@ -15,12 +15,12 @@ The preview deploy that Cloudflare Workers Builds runs on every PR
 
 ## Adding a migration
 
-1. Add the new numbered file, e.g. `0009_add_thing.sql`.
+1. Add the new numbered file, e.g. `0010_add_thing.sql`.
 2. Apply it to **both** databases:
 
    ```sh
-   npm run migrate:prod    -- --file=migrations/0009_add_thing.sql
-   npm run migrate:preview -- --file=migrations/0009_add_thing.sql
+   npm run migrate:prod    -- --file=migrations/0010_add_thing.sql
+   npm run migrate:preview -- --file=migrations/0010_add_thing.sql
    ```
 
 3. Confirm both databases match this directory:
@@ -46,8 +46,9 @@ be discovered by a broken INSERT.
 > reality after `0002` (see *Never run `wrangler d1 migrations apply`* below).
 > Only apply a file that hasn't been applied to that database yet. Every
 > file *except* `0004` fails on a second apply: `0001`, `0002` and `0006` are
-> bare `CREATE TABLE`, `0005` is a bare `CREATE INDEX`, `0003` and `0007` are
-> `ALTER TABLE ADD COLUMN`, and `0008` rebuilds a table it expects to exist.
+> bare `CREATE TABLE`, `0005` is a bare `CREATE INDEX`, `0003`, `0007` and
+> `0009` are `ALTER TABLE ADD COLUMN`, and `0008` rebuilds a table it expects
+> to exist.
 > Only `0004` is safe to re-run, because it is a `CREATE INDEX IF NOT EXISTS`.
 
 ### Checked automatically
@@ -140,6 +141,11 @@ It runs under `node --test` with better-sqlite3 rather than under
 vitest-pool-workers, because D1's `exec()` runs one statement per line and so
 cannot execute a multi-line `CREATE TABLE` — the real `.sql` files have to be
 fed to something that parses multi-statement SQL.
+
+`npm test` runs every `migrations/*.test.js`, so a migration whose risk is the
+data it rewrites rather than the schema it leaves behind can get its own file —
+`points-backfill.test.js` seeds rows *before* the migration under test and then
+asserts what its backfill wrote.
 
 This matters most for a change SQLite cannot make in place. Widening a `CHECK`
 constraint or dropping a column means rebuilding the table (create new, copy,

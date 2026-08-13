@@ -10,7 +10,7 @@ npm test
 
 Runs the pure-logic suites under `node --test` and the Worker / Durable Object / route suites under `vitest` — the `test` script in `package.json` is the authoritative list of what runs.
 
-Worker tests get an ephemeral D1 whose schema is applied from `migrations/` (`worker/test-setup.js`), so a schema change belongs in a migration file, never inline in a test. The migration files themselves are applied to an in-memory SQLite database and asserted on by `migrations/migrations.test.js` under `node --test` — see [`migrations/README.md`](../migrations/README.md).
+Worker tests get an ephemeral D1 whose schema is applied from `migrations/` (`worker/test-setup.js`), so a schema change belongs in a migration file, never inline in a test. The migration files themselves are applied to an in-memory SQLite database and asserted on by `migrations/*.test.js` under `node --test` — `migrations.test.js` for the schema they leave behind, `points-backfill.test.js` for the data a backfill rewrites — see [`migrations/README.md`](../migrations/README.md).
 
 The browser flows and WebSocket probes below are not automated; run them by hand.
 

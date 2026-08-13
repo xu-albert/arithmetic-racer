@@ -95,11 +95,9 @@ Two sharp edges it documents, worth knowing before you read it:
 Changing a `CHECK` constraint or dropping a column requires a full table rebuild
 in SQLite, which silently discards the table's indexes and foreign keys unless
 they are recreated; `migrations/migrations.test.js` exists to catch exactly that.
-A migration whose risk is the *data* it rewrites rather than the schema it leaves
-behind gets its own file alongside it — `migrations/points-backfill.test.js` seeds
-rows before the migration under test and asserts what its backfill wrote. Copy
-that pattern for anything with a backfill: a wrong one-shot rewrite of history can
-only be undone by another migration.
+A migration that *rewrites data* carries the other kind of risk, and gets its own
+test file — `migrations/points-backfill.test.js` is the pattern. A wrong one-shot
+backfill can only be undone by another migration.
 
 Worker tests build their D1 from `migrations/` via `applyD1Migrations`
 (`worker/test-setup.js`, wired in `vitest.config.js`), so filename order is
