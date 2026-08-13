@@ -56,7 +56,7 @@
     <a class="back" href="/">&larr; Back to Arithmetic Racer</a>
 
     <h1>Privacy</h1>
-    <p class="updated">Last updated 27 July 2026</p>
+    <p class="updated">Last updated 11 August 2026</p>
 
     <p>
       Arithmetic Racer is a small math racing game. This page describes exactly what it
@@ -113,8 +113,54 @@
             <td>While a multiplayer room is active. Rooms are discarded after 24 hours.</td>
           </tr>
           <tr>
-            <td>Anything you send through the contact form — your message, and the email address you give if you give one</td>
-            <td>Only when you submit the form. Kept until the request is dealt with.</td>
+            <td>
+              Anything you send through the contact form — your message, the email
+              address you give if you give one,
+              <span data-collects="device_id">the device ID from your browser</span>,
+              and <span data-collects="user_id">your account id if you are signed
+              in</span>
+            </td>
+            <td>
+              Only when you submit the form. The device ID always goes with a contact
+              message, so a request can be matched to the races saved against this
+              browser — which is what makes it possible to act on one from someone
+              without an account. Sending the form also means
+              <span data-collects="session_cookie">your sign-in cookie travels with
+              the request</span>, which is how the account id is known, and
+              <span data-collects="rate_limit_ip">your IP address is counted for an
+              hour</span> so the form cannot be flooded — the address and a number,
+              nothing else, expiring on its own. Kept until the request is dealt with.
+            </td>
+          </tr>
+          <tr>
+            <td>
+              A bug report — what you wrote, plus a technical snapshot taken as you
+              send it: <span data-collects="browser">your browser</span> and
+              <span data-collects="os">operating system</span>,
+              <span data-collects="ua">the identification string your browser sends
+              with every request</span>,
+              <span data-collects="screen">your screen size</span>,
+              <span data-collects="viewport">the size of the window</span> and
+              <span data-collects="dpr">its pixel ratio</span>,
+              <span data-collects="page">the page on this site you came to the form
+              from</span> (the path only, never the query string),
+              <span data-collects="app_version">the app version</span>,
+              <span data-collects="signed_in">whether you were signed in</span> and
+              <span data-collects="user_id">your account id if you were</span>, and
+              <span data-collects="device_id">the device ID from your browser</span>
+            </td>
+            <td>
+              Only when you submit the <a href="/bug-report">bug report form</a>. All
+              of it goes automatically — there is nothing to tick and nothing to turn
+              off, which is why this page rather than that form is the full account of
+              what a report carries. Sending one also means
+              <span data-collects="session_cookie">your sign-in cookie travels with the
+              request</span>, which is how the account id is known, and
+              <span data-collects="rate_limit_ip">your IP address is counted for an
+              hour</span> so the form cannot be flooded — that record holds the address
+              and a number, nothing else, and expires on its own. Kept until the bug is
+              dealt with.
+            </td>
           </tr>
         </tbody>
       </table>

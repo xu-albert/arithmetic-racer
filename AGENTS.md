@@ -25,6 +25,40 @@ When changing dependencies:
 - Sanity check before committing: the lockfile should contain ~82 of those platform
   entries, and `npm ci` should pass on the newest Node you have, not only on `.nvmrc`'s.
 
+## Tests run under two runners
+
+`npm test` runs `node --test` (pure logic in `public/src/`, plus the migration
+tests) and then `vitest run` (Worker routes and Durable Objects, against real
+bindings via `@cloudflare/vitest-pool-workers`). A test file's directory decides
+which runner claims it — see `vitest.config.js` `include`/`exclude` and
+`docs/testing.md`. Worker tests recreate the schema they need inline, because
+each file gets its own ephemeral D1.
+
+## `public/` has no build step
+
+Static assets are served byte-for-byte by wrangler's ASSETS binding, so there is
+nowhere to substitute a build-time constant into client code. The Worker *is*
+bundled by esbuild, so build-time values are read there and sent to the client
+(or stamped server-side) rather than injected into the page — `worker/version.js`
+is the worked example.
+
+## Migrations
+
+`migrations/README.md` is authoritative: no tracking table (so nothing is
+idempotent), and every file must be applied to **both** the production and
+preview D1 databases or preview drifts. Changing a `CHECK` constraint or
+dropping a column requires a full table rebuild in SQLite, which silently
+discards the table's indexes and foreign keys unless they are recreated;
+`migrations/migrations.test.js` exists to catch exactly that.
+
+## The admin dashboard is the real delivery path for contact messages
+
+`/admin/?token=…` is where contact messages and bug reports are actually read.
+The notification email in `worker/routes/contact.js` has never fired in
+production — neither `LOOPS_TEMPLATE_CONTACT` nor `CONTACT_EMAIL` is configured
+on the Worker — so treat that path as decoration and the D1 row plus the
+dashboard as the delivery guarantee.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

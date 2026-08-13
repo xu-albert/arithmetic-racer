@@ -75,7 +75,7 @@ Three send paths, all funnelling through `worker/email.js`:
 |---|---|---|---|
 | Welcome | `worker/auth.js:172` | `LOOPS_TEMPLATE_WELCOME` | signup, no variables |
 | Password reset | `worker/auth.js:93` | `LOOPS_TEMPLATE_RESET` | better-auth callback, passes `resetUrl` |
-| Contact notification | `worker/routes/contact.js:99-105` | `LOOPS_TEMPLATE_CONTACT` | to `CONTACT_EMAIL`, body deliberately excluded |
+| Contact notification | `worker/routes/contact.js:255-261` | `LOOPS_TEMPLATE_CONTACT` | to `CONTACT_EMAIL`, body deliberately excluded |
 
 Files in scope:
 
@@ -83,8 +83,8 @@ Files in scope:
   `sendResetEmail` + the `sendEmail` back-compat alias.
 - `worker/email.test.js` — 9 tests, all built on mocking `globalThis.fetch`.
 - `worker/auth.js:64` — imports `sendResetEmail`, `sendWelcomeEmail`.
-- `worker/routes/contact.js:42` — DI seam: `const sendMail = deps.sendMail ?? sendTransactional`.
-- `worker/routes/contact.test.js:47,145` — asserts on `LOOPS_TEMPLATE_CONTACT`.
+- `worker/routes/contact.js:167` — DI seam: `const sendMail = deps.sendMail ?? sendTransactional`.
+- `worker/routes/contact.test.js:97,195` — asserts on `LOOPS_TEMPLATE_CONTACT`.
 
 Env vars to retire: `LOOPS_API_KEY`, `LOOPS_TEMPLATE_WELCOME`, `LOOPS_TEMPLATE_RESET`,
 `LOOPS_TEMPLATE_CONTACT`. **`CONTACT_EMAIL` stays.**
@@ -183,14 +183,14 @@ bite here. New accounts start on a conservative daily quota that scales with rep
 
 ## Verify
 
-1. `npm test` — `node --test` on `public/src/*.test.js` + `server/room-stats.test.js`, then
-   `vitest run`. The email and contact suites must pass rewritten, not skipped.
+1. `npm test` — both suites, back to back (what each covers is in [`testing.md`](./testing.md)).
+   The email and contact suites must pass rewritten, not skipped.
 2. `npx wrangler email sending dns get arithmeticracer.com` — SPF + DKIM present.
 3. Local: `npm run dev` with `"remote": true`, then sign up with a real address you control.
    Confirm the welcome email lands **in the inbox, not spam**.
 4. Trigger a password reset; confirm `resetUrl` renders as a working link.
 5. Submit the contact form; confirm the notification reaches `CONTACT_EMAIL` and that the message
-   body is still excluded (`contact.js:96-97` — it's intentional, keep it that way).
+   body is still excluded (`contact.js:252-253` — it's intentional, keep it that way).
 6. Deploy, repeat 3–5 against production.
 7. Check `emailSendingAdaptiveGroups` in the Cloudflare dashboard for delivery status. Watch that
    `spamScore` stays well under `spamThreshold` on the first real sends.

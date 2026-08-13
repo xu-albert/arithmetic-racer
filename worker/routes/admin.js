@@ -1,6 +1,9 @@
 // Admin dashboard route. Token-gated `/admin/` and `/admin/users/:id`.
 // One file by design — split when v2 (live rooms) lands.
 
+import { isMissingColumnError } from "../db.js";
+import { logWarn, KINDS } from "../logger.js";
+
 /**
  * Constant-time string equality. Returns false on empty or length mismatch.
  * Uses TextEncoder + a manual XOR-reduce so we don't depend on
@@ -37,22 +40,42 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-function html(strings, ...values) {
+export function html(strings, ...values) {
   let out = "";
   for (let i = 0; i < strings.length; i++) {
     out += strings[i];
     if (i < values.length) {
       const v = values[i];
       if (Array.isArray(v)) out += v.join("");
-      else if (v && typeof v === "object" && v.__html) out += v.__html;
+      // Tested on the property, not its truthiness: raw("") is a legitimate
+      // "render nothing", and an emptiness check here would send the wrapper
+      // object down the escaping path and print [object Object].
+      else if (v && typeof v === "object" && typeof v.__html === "string") out += v.__html;
       else out += escapeHtml(v ?? "");
     }
   }
   return out;
 }
 
-function raw(s) {
+export function raw(s) {
   return { __html: s };
+}
+
+/**
+ * Build an admin URL, dropping params that are unset. The dashboard keeps the
+ * state of both of its lists in one query string, so every link has to carry
+ * the params it does not own as well as the ones it does.
+ */
+function adminHref(path, params) {
+  const query = Object.entries(params)
+    .filter(([, value]) => value != null && value !== "")
+    .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+    .join("&");
+  return query ? `${path}?${query}` : path;
+}
+
+function hasCursor(cursor) {
+  return Boolean(cursor.before || cursor.beforeId);
 }
 
 function utcMidnightMs(now) {
@@ -172,9 +195,16 @@ function whoCell(row, token) {
   return raw(escapeHtml(`(dev:${(row.device_id ?? "").slice(0, 9)}…)`));
 }
 
-function renderRacesTable(rows, now, token, cursorBase) {
+function renderRacesTable(rows, now, token, cursorHref, paged = false) {
+  // Without this, a paged view is a one-way trip: every other link on the page
+  // preserves the cursor, so there is nothing left that walks it back.
+  const newestLink = paged
+    ? `<a href="${escapeHtml(cursorHref(null, null))}">← Newest</a>`
+    : "";
+
   if (rows.length === 0) {
-    return raw(`<p class="empty">No races yet.</p>`);
+    const emptyState = `<p class="empty">No races yet.</p>`;
+    return raw(newestLink ? `${emptyState}<p class="pagination">${newestLink}</p>` : emptyState);
   }
   const body = rows.map((r) => {
     const cls = r.finished ? "race-row" : "race-row dnf";
@@ -190,7 +220,7 @@ function renderRacesTable(rows, now, token, cursorBase) {
 
   const last = rows[rows.length - 1];
   const olderLink = rows.length === RECENT_LIMIT
-    ? `<a href="${escapeHtml(cursorBase + "&before=" + last.played_at + "&beforeId=" + encodeURIComponent(last.id))}">Older →</a>`
+    ? `<a href="${escapeHtml(cursorHref(last.played_at, last.id))}">Older →</a>`
     : "";
 
   return raw(`
@@ -200,7 +230,7 @@ function renderRacesTable(rows, now, token, cursorBase) {
       </thead>
       <tbody>${body}</tbody>
     </table>
-    <p class="pagination">${olderLink}</p>
+    <p class="pagination">${[newestLink, olderLink].filter(Boolean).join(" · ")}</p>
   `);
 }
 
@@ -251,11 +281,19 @@ export async function handleAdminUser(request, env) {
   if (!user) return new Response("Not found", { status: 404 });
 
   const now = Date.now();
-  const before = Number(url.searchParams.get("before")) || now;
-  const beforeId = url.searchParams.get("beforeId");
+  const cursor = {
+    before: url.searchParams.get("before"),
+    beforeId: url.searchParams.get("beforeId"),
+  };
+  const before = Number(cursor.before) || now;
   const token = url.searchParams.get("token") ?? "";
-  const cursorBase = `/admin/users/${encodeURIComponent(userId)}?token=${encodeURIComponent(token)}`;
-  const rows = await loadRecentRaces(env, { before, beforeId, userId });
+  const cursorHref = (cursorBefore, cursorBeforeId) =>
+    adminHref(`/admin/users/${encodeURIComponent(userId)}`, {
+      token,
+      before: cursorBefore,
+      beforeId: cursorBeforeId,
+    });
+  const rows = await loadRecentRaces(env, { before, beforeId: cursor.beforeId, userId });
 
   const handle = user.username ?? user.name ?? user.id;
   const signupIso = user.createdAt ? new Date(user.createdAt).toISOString() : "—";
@@ -282,31 +320,146 @@ export async function handleAdminUser(request, env) {
           <p><strong>id</strong> <code>${user.id}</code></p>
         </div>
         <h2>Recent races</h2>
-        ${renderRacesTable(rows, now, token, cursorBase)}
+        ${renderRacesTable(rows, now, token, cursorHref, hasCursor(cursor))}
       </body>
     </html>
   `;
   return new Response(body, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
+// Kinds the contact table can be filtered to, and their dashboard labels.
+// Matches the CHECK constraint in migrations/0007_contact_bug_reports.sql; an
+// unknown ?kind= falls back to showing everything rather than an empty table.
+const CONTACT_KINDS = [
+  ["bug", "Bug reports"],
+  ["general", "General"],
+  ["deletion", "Deletion"],
+];
+
+// Everything 0005 already had. `context` is selected on top of these, and
+// dropped from the list when the database has not reached 0007 yet.
+const CONTACT_COLUMNS = "id, email, message, kind, user_id, device_id, handled, created_at";
+
 /**
  * Newest contact submissions. Capped rather than paginated — if the backlog
  * ever exceeds this, the answer is to deal with it, not to scroll.
+ *
+ * @param {string|null} kind Restrict to one kind, or null for all.
  */
-async function loadContactMessages(env, limit = 50) {
-  try {
-    const { results } = await env.DB.prepare(
-      `SELECT id, email, message, kind, user_id, handled, created_at
+async function loadContactMessages(env, kind = null, limit = 50) {
+  const where = kind ? "WHERE kind = ?" : "";
+  const binds = kind ? [kind, limit] : [limit];
+  const select = (columns) =>
+    env.DB.prepare(
+      `SELECT ${columns}
          FROM contact_messages
+         ${where}
         ORDER BY created_at DESC, id DESC
         LIMIT ?`
-    ).bind(limit).all();
-    return results ?? [];
-  } catch {
-    // The table arrives in migration 0005. An un-migrated database should
-    // degrade to an empty section rather than take down the whole dashboard.
+    ).bind(...binds).all();
+
+  try {
+    try {
+      const { results } = await select(`${CONTACT_COLUMNS}, context`);
+      return results ?? [];
+    } catch (err) {
+      // `context` arrives in migration 0007, which is applied by hand while
+      // the Worker deploys from a push. A database one migration behind must
+      // still list its messages — there is simply no context to show for them.
+      if (!isMissingColumnError(err)) throw err;
+      const { results } = await select(CONTACT_COLUMNS);
+      return results ?? [];
+    }
+  } catch (err) {
+    // The table itself arrives in migration 0005. An un-migrated database
+    // should degrade to an empty section rather than take down the dashboard.
+    logWarn(KINDS.CONTACT_DB, err, { phase: "list" });
     return [];
   }
+}
+
+// Order the captured fields are shown in — most identifying of the bug first,
+// rather than the arbitrary order JSON.stringify happened to produce.
+const CONTEXT_FIELD_ORDER = [
+  ["browser", "browser"],
+  ["os", "OS"],
+  // Derived from the referrer, so it is the page they navigated to the form
+  // from — not necessarily where the bug happened. The form asks that
+  // separately and it is composed into the message.
+  ["page", "came from"],
+  ["app_version", "version"],
+  ["signed_in", "signed in"],
+  ["viewport", "viewport"],
+  ["screen", "screen"],
+  ["dpr", "pixel ratio"],
+  ["ua", "user agent"],
+];
+
+/**
+ * Render a submission's captured context, collapsed. It is reference material
+ * for a report already being read, so it should not push the message text of
+ * every other row off the screen.
+ *
+ * `deviceId` lives in its own column rather than the blob, but it belongs in
+ * the same block: it is the handle for looking up this browser's races, and
+ * without it here that lookup means a hand-written D1 query.
+ */
+function renderContext(contextJson, deviceId = null) {
+  const deviceRow = deviceId
+    ? `<dt>device</dt><dd>${escapeHtml(deviceId)}</dd>`
+    : "";
+
+  let context = null;
+  if (contextJson) {
+    try {
+      context = JSON.parse(contextJson);
+    } catch {
+      // Stored by an older or broken writer. Showing the raw text beats hiding
+      // that something is there.
+      return `<details class="ctx"><summary>context (unparseable)</summary><pre>${escapeHtml(contextJson)}</pre></details>`;
+    }
+  }
+  if (!context || typeof context !== "object") {
+    return deviceRow ? `<details class="ctx"><summary>context</summary><dl>${deviceRow}</dl></details>` : "";
+  }
+
+  const known = new Set(CONTEXT_FIELD_ORDER.map(([key]) => key));
+  const entries = [
+    ...CONTEXT_FIELD_ORDER.filter(([key]) => context[key] !== undefined && context[key] !== null),
+    // Anything a newer writer added that this dashboard doesn't know a label
+    // for still gets shown, under its raw key.
+    ...Object.keys(context).filter((key) => !known.has(key)).map((key) => [key, key]),
+  ];
+  if (!entries.length && !deviceRow) return "";
+
+  const rows = entries
+    .map(([key, label]) => {
+      const value = typeof context[key] === "boolean" ? (context[key] ? "yes" : "no") : context[key];
+      return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`;
+    })
+    .join("");
+  return `<details class="ctx"><summary>context</summary><dl>${rows}${deviceRow}</dl></details>`;
+}
+
+function contactHref(token, kind, cursor = {}) {
+  return adminHref("/admin/", {
+    token,
+    kind,
+    before: cursor.before,
+    beforeId: cursor.beforeId,
+  });
+}
+
+function renderContactFilters(activeKind, token, counts, cursor) {
+  const link = (kind, label) => {
+    const total = counts[kind ?? "all"]?.total ?? 0;
+    const text = `${label}${total ? ` (${total})` : ""}`;
+    return kind === activeKind
+      ? `<strong>${escapeHtml(text)}</strong>`
+      : `<a href="${escapeHtml(contactHref(token, kind, cursor))}">${escapeHtml(text)}</a>`;
+  };
+  const links = [link(null, "All"), ...CONTACT_KINDS.map(([kind, label]) => link(kind, label))];
+  return raw(`<p class="contact-filters">${links.join(" · ")}</p>`);
 }
 
 function renderContactTable(messages, now) {
@@ -316,13 +469,14 @@ function renderContactTable(messages, now) {
       const whenIso = new Date(m.created_at).toISOString();
       // escapeHtml on the message body is load-bearing, not cosmetic: this is
       // arbitrary text a stranger typed into a public form, rendered into the
-      // operator's own authenticated page.
+      // operator's own authenticated page. The same goes for every context
+      // value below — those are attacker-controlled too.
       return `<tr class="${m.handled ? "contact-row handled" : "contact-row"}">
       <td><span title="${escapeHtml(whenIso)}">${escapeHtml(relativeTime(now, m.created_at))}</span></td>
-      <td>${escapeHtml(m.kind)}</td>
+      <td class="kind kind-${escapeHtml(m.kind)}">${escapeHtml(m.kind)}</td>
       <td>${escapeHtml(m.email ?? "—")}</td>
       <td>${m.user_id ? "signed in" : "anonymous"}</td>
-      <td class="msg">${escapeHtml(m.message)}</td>
+      <td class="msg">${escapeHtml(m.message)}${renderContext(m.context, m.device_id)}</td>
       <td>${m.handled ? "handled" : "open"}</td>
     </tr>`;
     })
@@ -335,6 +489,29 @@ function renderContactTable(messages, now) {
   </table>`);
 }
 
+/**
+ * Per-kind totals for the filter links, so a filter shows what it will find.
+ *
+ * @returns {Record<string, {total: number}>} Keyed by kind, plus an `all`
+ *   bucket. Kinds with no rows are simply absent.
+ */
+async function loadContactCounts(env) {
+  const counts = { all: { total: 0 } };
+  try {
+    const { results } = await env.DB
+      .prepare(`SELECT kind, COUNT(*) AS total FROM contact_messages GROUP BY kind`)
+      .all();
+    for (const row of results ?? []) {
+      counts[row.kind] = { total: Number(row.total) };
+      counts.all.total += Number(row.total);
+    }
+  } catch (err) {
+    // Same degradation as loadContactMessages: no table, no counts, no crash.
+    logWarn(KINDS.CONTACT_DB, err, { phase: "counts" });
+  }
+  return counts;
+}
+
 export async function handleAdminIndex(request, env) {
   const url = new URL(request.url);
   const gateResponse = checkAdminToken(url, env);
@@ -343,12 +520,27 @@ export async function handleAdminIndex(request, env) {
   const now = Date.now();
   const summary = await loadSummary(env, now);
   const buckets = await load30DayBuckets(env, now);
-  const before = Number(url.searchParams.get("before")) || Date.now();
-  const beforeId = url.searchParams.get("beforeId");
+  const cursor = {
+    before: url.searchParams.get("before"),
+    beforeId: url.searchParams.get("beforeId"),
+  };
+  // Read at the point of use, not from `now`: workerd's clock only advances on
+  // I/O, so `now` is still the timestamp of whatever wrote the newest race, and
+  // the strict `played_at < before` below would then hide that race.
+  const before = Number(cursor.before) || Date.now();
   const token = url.searchParams.get("token") ?? "";
-  const cursorBase = `/admin/?token=${encodeURIComponent(token)}`;
-  const rows = await loadRecentRaces(env, { before, beforeId });
-  const messages = await loadContactMessages(env);
+
+  const requestedKind = url.searchParams.get("kind");
+  const contactKind = CONTACT_KINDS.some(([k]) => k === requestedKind) ? requestedKind : null;
+
+  const cursorHref = (cursorBefore, cursorBeforeId) =>
+    adminHref("/admin/", { token, kind: contactKind, before: cursorBefore, beforeId: cursorBeforeId });
+  const rows = await loadRecentRaces(env, { before, beforeId: cursor.beforeId });
+
+  const [messages, contactCounts] = await Promise.all([
+    loadContactMessages(env, contactKind),
+    loadContactCounts(env),
+  ]);
 
   const body = html`
     <!doctype html>
@@ -368,6 +560,14 @@ export async function handleAdminIndex(request, env) {
           table.contact th, table.contact td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #eee; vertical-align: top; }
           table.contact .msg { white-space: pre-wrap; word-break: break-word; max-width: 32rem; }
           table.contact tr.handled { color: #999; }
+          table.contact .kind-bug { font-weight: 600; color: #a3231a; }
+          .contact-filters { margin: 0.5rem 0; color: #888; }
+          .contact-filters a { color: #444; }
+          details.ctx { margin-top: 0.5rem; font-size: 0.9em; }
+          details.ctx summary { cursor: pointer; color: #888; }
+          details.ctx dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.1rem 0.6rem; margin: 0.4rem 0 0; }
+          details.ctx dt { color: #888; }
+          details.ctx dd { margin: 0; word-break: break-word; }
         </style>
       </head>
       <body>
@@ -390,8 +590,9 @@ export async function handleAdminIndex(request, env) {
         </p>
         <p>Races per day (last 30) ${renderSparkline(buckets)}</p>
         <h2>Recent races</h2>
-        ${renderRacesTable(rows, now, token, cursorBase)}
+        ${renderRacesTable(rows, now, token, cursorHref, hasCursor(cursor))}
         <h2>Contact messages${messages.length ? ` (${messages.filter((m) => !m.handled).length} unhandled)` : ""}</h2>
+        ${renderContactFilters(contactKind, token, contactCounts, cursor)}
         ${renderContactTable(messages, now)}
       </body>
     </html>

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Contact — Arithmetic Racer</title>
-  <meta name="description" content="Get in touch about Arithmetic Racer, or request deletion of your data." />
+  <title>Report a bug — Arithmetic Racer</title>
+  <meta name="description" content="Report a bug in Arithmetic Racer." />
   <meta name="robots" content="noindex,nofollow" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏎️</text></svg>" />
   <link rel="stylesheet" href="style-a.css" />
@@ -25,7 +25,7 @@
     .doc label { display: block; margin: 1.1rem 0 0.3rem; color: var(--navy); font-weight: 600; font-size: 0.95rem; }
     .doc .hint { font-weight: 400; color: var(--navy-mute); font-size: 0.85rem; }
     .doc input[type="email"],
-    .doc select,
+    .doc input[type="text"],
     .doc textarea {
       width: 100%;
       padding: 0.6rem 0.7rem;
@@ -36,7 +36,7 @@
       color: var(--navy-soft);
       background: #fff;
     }
-    .doc textarea { min-height: 8rem; resize: vertical; }
+    .doc textarea { min-height: 5.5rem; resize: vertical; }
     .doc button {
       margin-top: 1.2rem;
       width: 100%;
@@ -61,76 +61,74 @@
     }
     .form-note.error { display: block; background: #fdecea; color: #a3231a; }
     .form-note.ok { display: block; background: #eaf7ea; color: #2f6d2f; }
-    .deletion-note {
-      margin: 0.6rem 0 0;
-      font-size: 0.85rem;
-      color: var(--navy-mute);
-      display: none;
-    }
-    .deletion-note.shown { display: block; }
   </style>
 </head>
 <body>
   <main class="doc">
     <a class="back" href="/">&larr; Back to Arithmetic Racer</a>
-    <h1>Contact</h1>
+    <h1>Report a bug</h1>
     <p>
-      Questions, feedback, or a request to delete your data. See the
-      <a href="/privacy">privacy page</a> for what is stored.
-    </p>
-    <p class="bug-pointer">
-      Found a bug? <a href="/bug-report">Report it here</a> instead — that form
-      asks the questions that make a bug fixable, and records your browser and
-      screen details for you.
+      Something broken, wrong, or stuck? Tell us what happened. For anything
+      else — a question, feedback, or deleting your data — use the
+      <a href="/contact">contact form</a>. The
+      <a href="/privacy">privacy page</a> is the full account of what a report
+      carries.
     </p>
 
-    <form id="contact-form" novalidate>
-      <label for="kind">What is this about?</label>
-      <select id="kind" name="kind">
-        <option value="general">General — a question or feedback</option>
-        <option value="deletion">Deleting my data</option>
-      </select>
+    <form id="bug-form" novalidate>
+      <label for="what-happened">What went wrong?</label>
+      <textarea id="what-happened" name="what_happened" maxlength="1500" required
+        placeholder="The race froze on the third problem and my car stopped moving."></textarea>
 
-      <p class="deletion-note" id="deletion-note">
-        Because a form submission cannot prove who sent it, we will contact you to
-        confirm you control the account before deleting anything. Please use the
-        email address on the account.
-      </p>
+      <label for="expected">What did you expect to happen?</label>
+      <textarea id="expected" name="expected" maxlength="1500" required
+        placeholder="The next problem should have appeared after I pressed Enter."></textarea>
+
+      <label for="where">
+        Where in the app did this happen?
+        <span class="hint">— optional, and worth more than any detail we can detect</span>
+      </label>
+      <input type="text" id="where" name="where" maxlength="200"
+        placeholder="A Quickplay race on hard" />
+
+      <label for="steps">
+        Steps to reproduce
+        <span class="hint">— optional, but it makes a bug far easier to fix</span>
+      </label>
+      <textarea id="steps" name="steps" maxlength="1500"
+        placeholder="1. Start a Quickplay race on hard&#10;2. Answer two problems&#10;3. …"></textarea>
 
       <label for="email">
         Your email
-        <span class="hint">— optional, but we cannot reply without it</span>
+        <span class="hint">— optional, only if you want a reply</span>
       </label>
       <input type="email" id="email" name="email" autocomplete="email" placeholder="you@example.com" />
 
-      <label for="message">Message</label>
-      <textarea id="message" name="message" maxlength="5000" required></textarea>
-
-      <button type="submit" id="submit-btn">Send</button>
+      <button type="submit" id="submit-btn">Send bug report</button>
       <p class="form-note" id="form-note" role="status" aria-live="polite"></p>
     </form>
   </main>
 
   <script type="module">
-    const form = document.getElementById("contact-form");
+    import { collectBugPayload } from "/src/bug-report-context.js";
+
+    const form = document.getElementById("bug-form");
     const note = document.getElementById("form-note");
     const btn = document.getElementById("submit-btn");
-    const kind = document.getElementById("kind");
-    const deletionNote = document.getElementById("deletion-note");
-
-    kind.addEventListener("change", () => {
-      deletionNote.classList.toggle("shown", kind.value === "deletion");
-    });
 
     function show(kindClass, text) {
       note.className = `form-note ${kindClass}`;
       note.textContent = text;
     }
 
+    const value = (id) => document.getElementById(id).value.trim();
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const message = document.getElementById("message").value.trim();
-      if (!message) return show("error", "Please write a message first.");
+      const whatHappened = value("what-happened");
+      const expected = value("expected");
+      if (!whatHappened) return show("error", "Please describe what went wrong.");
+      if (!expected) return show("error", "Please say what you expected to happen instead.");
 
       btn.disabled = true;
       show("", "");
@@ -139,29 +137,33 @@
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            message,
-            kind: kind.value,
-            email: document.getElementById("email").value.trim() || undefined,
-            device_id: localStorage.getItem("deviceId") || undefined,
+            kind: "bug",
+            what_happened: whatHappened,
+            expected,
+            where: value("where") || undefined,
+            steps: value("steps") || undefined,
+            email: value("email") || undefined,
+            ...collectBugPayload(window),
           }),
         });
         if (res.status === 429) {
-          show("error", "That's a few messages in a short time — please try again later.");
+          show("error", "That's a few reports in a short time — please try again later.");
           return;
         }
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           const reason = {
-            empty_message: "Please write a message first.",
-            message_too_long: "That message is too long — please shorten it.",
+            empty_what_happened: "Please describe what went wrong.",
+            empty_expected: "Please say what you expected to happen instead.",
+            field_too_long: "That's a bit long — please shorten it.",
+            message_too_long: "That's a bit long — please shorten it.",
             invalid_email: "That email address doesn't look right.",
           }[body.error];
           show("error", reason ?? "Something went wrong sending that. Please try again.");
           return;
         }
         form.reset();
-        deletionNote.classList.remove("shown");
-        show("ok", "Thanks — your message was received.");
+        show("ok", "Thanks — your bug report was received.");
       } catch {
         show("error", "Couldn't reach the server. Please check your connection and try again.");
       } finally {
