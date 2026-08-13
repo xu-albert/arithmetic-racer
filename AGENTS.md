@@ -86,7 +86,7 @@ Two sharp edges it documents, worth knowing before you read it:
 - **Never run `wrangler d1 migrations apply`.** Migrations go on with
   `npm run migrate:prod` / `migrate:preview` (`wrangler d1 execute --file`).
   The `d1_migrations` ledger in prod is a fossil listing only `0001`/`0002`;
-  preview has no ledger at all. `apply` would replay non-idempotent DDL over
+  preview's is empty. `apply` would replay non-idempotent DDL over
   databases already at head.
 - **`npm run check:schema` is the authority on what is applied**, not the
   ledger. It replays `migrations/` into scratch SQLite and diffs against both

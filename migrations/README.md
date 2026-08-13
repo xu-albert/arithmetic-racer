@@ -85,12 +85,12 @@ both secrets under *Settings → Secrets and variables → Actions*.
 Use only the `migrate:prod` / `migrate:preview` scripts above, which are
 `wrangler d1 execute --file`. Production *does* carry a `d1_migrations` table —
 wrangler's own ledger — but it is a fossil, not a record of reality. Verified
-2026-08-08:
+read-only 2026-08-13:
 
 | Database | `d1_migrations` contents |
 | --- | --- |
 | `arithmetic-racer` (prod) | `0001_better_auth.sql`, `0002_race_results.sql`, both stamped 2026-05-07 |
-| `arithmetic-racer-preview` | table does not exist |
+| `arithmetic-racer-preview` | table exists, but is empty — zero rows |
 
 Only the first two migrations ever went through `wrangler d1 migrations apply`;
 everything since was applied with `--file=`, which never writes to that ledger.
@@ -167,7 +167,7 @@ re-applying — but note that a number now means a different file than it did in
 older session logs and PR descriptions.
 
 The renumber is safe against wrangler's `d1_migrations` ledger, re-verified
-2026-08-08: every renamed file is one that ledger has never recorded under
-*either* name (prod lists only `0001`/`0002`; preview has no ledger at all), so
+2026-08-13: every renamed file is one that ledger has never recorded under
+*either* name (prod lists only `0001`/`0002`; preview's ledger is empty), so
 the rename cannot desynchronize it. The record of what has actually been applied
 is `npm run check:schema` — this note and the deploy history are secondary.
