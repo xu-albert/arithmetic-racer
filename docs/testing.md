@@ -64,7 +64,7 @@ For browser tests open `http://localhost:8787` in two different browsers (or one
 
 - **Animation jank.** Cars should glide; the problem queue should slide. If you see stutter, suspect: a new CSS transition on a layout-triggering property (`left`, `width`, `font-size`), or a new high-frequency state broadcast on the server.
 - **Optimistic update divergence.** Local car moves before the server confirms. If your car gets *ahead* of the server's view (e.g. local says 5, server says 3), the server's later state will yank you back. Should not happen in practice — both validate against the same `problemSequence`. If it does, look at any change in `submitAnswer` or `validateAnswer`.
-- **(Guest) badge dropping off.** Should appear on: lobby rows (as a badge), race lanes (inline), podium (inline). Quickplay's local player too. Bots no.
+- **(Guest) badge dropping off.** Should appear on: lobby rows (as a badge), race lanes (inline), podium (inline). Quickplay's local player too. Quickplay's local bots have no badge; Quick Match's server-side bots do carry it — the badge only encodes "no account", and bots have none. Bot backfill is disclosed in the Quick Match copy, so it is not a leak.
 - **Solo Quickplay regression.** `?room=` routing in `main.js` is gated; the no-param path should still hit the bot race exactly as before.
 
 ## Deploy
