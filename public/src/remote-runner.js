@@ -1,5 +1,9 @@
 // Mirrors public/src/runner.js so attachRaceUI works unchanged.
 // The local player's id is aliased to 'player' so ui.js's `.id === 'player'` checks Just Work.
+// Name collision worth knowing: the `racerId` carried by these events (and written to
+// `lane.dataset.racerId` in ui.js) is that lane key — the server's ephemeral broadcast id,
+// or the 'player' alias — never the localStorage racerId, which is the reconnect secret and
+// leaves this browser only inside `hello` (see identity.js).
 
 import { validateAnswer } from './game.js';
 import { scoreBotAt } from './bot-timeline.js';

@@ -2,6 +2,15 @@
 
 **For another agent to implement.** Self-contained.
 
+> **Superseded on identity (2026-08-13).** The whole plan below predates the split of the
+> two `playerId` senses: client → server it is the racerId **reconnect secret**, while
+> every server → client `playerId`/`player.id`/`youAre` is an ephemeral per-room broadcast
+> id. Frame shapes and everything else here still hold, but wherever the plan makes
+> `player.id` the client's `localStorage` racerId, or treats "a known `playerId`" as a
+> reconnect (the identity/reconnection decision rows, the `Player` shape, Task 9), read
+> "a matching racerId" — that proof is what stops a stranger who read an id off the wire
+> from claiming the seat. See "Room identity" in `AGENTS.md`.
+
 ---
 
 ## Onboarding (read first, in order)
@@ -125,14 +134,8 @@ Persist `RoomState` via `ctx.storage.put('state', state)` after every mutation. 
 
 ## WebSocket protocol
 
-JSON messages, one event per frame.
-
-> **Superseded on identity (2026-08-13).** The frame shapes below still hold, but the
-> two `playerId` senses have since been split: client → server it is the racerId
-> **reconnect secret**, while every server → client `playerId`/`player.id`/`youAre` is an
-> ephemeral per-room broadcast id. See "Room identity" in `AGENTS.md`; the plan's
-> "a known `playerId` is a reconnect" rule now means "a matching racerId", which is what
-> stops a stranger who read an id off the wire from claiming the seat.
+JSON messages, one event per frame. The two `playerId` senses have since been split —
+see the superseded-on-identity note at the top of this file.
 
 ### Client → Server
 
