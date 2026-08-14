@@ -25,8 +25,8 @@
   // Cloudflare mints a new Worker Version id on every deploy, which is the only
   // "which build is this?" answer that needs no human diligence — package.json's
   // version is bumped by hand and never has been. worker/version.js reads it and
-  // bug reports record it. Repeated under env.preview for the same reason as
-  // observability below: named envs inherit nothing from the top level.
+  // bug reports record it. Repeated under env.preview because a named env does
+  // not inherit bindings from the top level.
   "version_metadata": {
     "binding": "CF_VERSION_METADATA"
   },

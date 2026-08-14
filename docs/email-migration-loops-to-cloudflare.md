@@ -133,9 +133,9 @@ No API key, no `authorization` header, no `transactionalId`.
 
 ## Gotchas
 
-**Named envs don't inherit top-level config.** `wrangler.jsonc` already carries a comment about
-this for `observability` — the same applies to `send_email`. Add the binding to *both* the top
-level and the `preview` env, or preview deploys silently lose email.
+**Named envs don't inherit bindings.** See "`wrangler.jsonc` bindings never reach `env.preview`"
+in `AGENTS.md`. `send_email` is a binding, so add it to *both* the top level and the `preview`
+env, or preview deploys silently lose email.
 
 **Templates move into code.** This is a real change in kind, not just a refactor. Loops is
 template-first: the HTML lives in the dashboard, so copy edits are a dashboard change. On
