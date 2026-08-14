@@ -63,8 +63,8 @@ When changing dependencies:
 tests) and then `vitest run` (Worker routes and Durable Objects, against real
 bindings via `@cloudflare/vitest-pool-workers`). A test file's directory decides
 which runner claims it — see `vitest.config.js` `include`/`exclude` and
-`docs/testing.md`. Worker tests recreate the schema they need inline, because
-each file gets its own ephemeral D1.
+`docs/testing.md`. Each Worker test file gets its own ephemeral D1, built from
+`migrations/` — see below.
 
 ## `public/` has no build step
 
@@ -74,14 +74,35 @@ bundled by esbuild, so build-time values are read there and sent to the client
 (or stamped server-side) rather than injected into the page — `worker/version.js`
 is the worked example.
 
-## Migrations
+## Database schema
 
-`migrations/README.md` is authoritative: no tracking table (so nothing is
-idempotent), and every file must be applied to **both** the production and
-preview D1 databases or preview drifts. Changing a `CHECK` constraint or
-dropping a column requires a full table rebuild in SQLite, which silently
-discards the table's indexes and foreign keys unless they are recreated;
-`migrations/migrations.test.js` exists to catch exactly that.
+Two D1 databases must stay in lockstep: `arithmetic-racer` (prod) and
+`arithmetic-racer-preview` (every PR preview build). Read `migrations/README.md`
+before touching anything schema-shaped — it has the apply procedure and the
+renumbering history.
+
+Two sharp edges it documents, worth knowing before you read it:
+
+- **Never run `wrangler d1 migrations apply`.** Migrations go on with
+  `npm run migrate:prod` / `migrate:preview` (`wrangler d1 execute --file`).
+  The `d1_migrations` ledger in prod is a fossil listing only `0001`/`0002`;
+  preview's is empty. `apply` would replay non-idempotent DDL over
+  databases already at head.
+- **`npm run check:schema` is the authority on what is applied**, not the
+  ledger. It replays `migrations/` into scratch SQLite and diffs against both
+  live databases. Run it after any migration.
+
+Changing a `CHECK` constraint or dropping a column requires a full table rebuild
+in SQLite, which silently discards the table's indexes and foreign keys unless
+they are recreated; `migrations/migrations.test.js` exists to catch exactly that.
+
+Worker tests build their D1 from `migrations/` via `applyD1Migrations`
+(`worker/test-setup.js`, wired in `vitest.config.js`), so filename order is
+executable — a migration must sort after whatever it depends on. Do not
+reintroduce hand-written DDL in test files; that drift is what this replaced.
+The one legitimate exception is a deliberately *older* shape: `admin.test.js`
+and `contact.test.js` rebuild `contact_messages` as `0006` left it, to exercise
+the missing-column fallback a migration-lagging deploy hits.
 
 ## The admin dashboard is the real delivery path for contact messages
 

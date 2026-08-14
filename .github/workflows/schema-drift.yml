@@ -1,0 +1,76 @@
+name: Schema drift
+
+# Compares migrations/ against the live D1 databases.
+#
+# Only `workflow_dispatch` is live. The push-to-main and daily `schedule`
+# triggers below stay commented out until the CLOUDFLARE_API_TOKEN and
+# CLOUDFLARE_ACCOUNT_ID repository secrets exist — without them the "Require
+# Cloudflare credentials" step fails by design, which would turn `main` red on
+# the merge commit and again every morning. Re-enable both by uncommenting them
+# once the secrets are created; see migrations/README.md.
+#
+# Deliberately not run on `pull_request`: a PR that adds a migration has not had
+# it applied to prod or preview yet, so a PR trigger would fail every migration
+# that is doing the right thing. Push-to-main is the trigger that reproduces the
+# 2026-07-28 alarm — a migration merged but never applied — and the daily run
+# catches a database that drifts without a commit to notice it.
+
+on:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "migrations/**"
+  #     # The whole directory, not just check-schema-drift.mjs: the checker
+  #     # already imports sql-constraints.mjs, and naming files one by one means
+  #     # the next split silently stops re-running the check.
+  #     - "scripts/**"
+  #     - ".github/workflows/schema-drift.yml"
+  # schedule:
+  #   - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: npm
+
+      # check-schema-drift.mjs shells out to sqlite3 to replay migrations/ into
+      # a scratch database. ubuntu-latest ships it; fail here rather than
+      # halfway through the comparison if that ever stops being true.
+      - name: Verify sqlite3 is available
+        run: sqlite3 --version
+
+      - run: npm ci
+
+      # A checker that cannot reach the databases must say so. Never skip, never
+      # soft-pass: a false green is the exact failure this check exists to catch.
+      - name: Require Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=""
+          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Cannot check schema drift: missing repository secret(s):$missing." \
+                 "Create them under Settings > Secrets and variables > Actions." \
+                 "The API token needs D1 Write (D1 Edit) on the account owning" \
+                 "arithmetic-racer and arithmetic-racer-preview. See migrations/README.md."
+            exit 1
+          fi
+
+      - name: Check migrations/ against live prod and preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm run check:schema

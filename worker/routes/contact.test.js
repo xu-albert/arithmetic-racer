@@ -1,12 +1,10 @@
 // Tests for POST /api/contact.
 //
-// Mirrors migrations/0005_contact_messages.sql as amended by
-// migrations/0007_contact_bug_reports.sql, inline, matching the pattern in
-// race-result.test.js (vitest-pool-workers gives an ephemeral in-memory D1 per
-// test file). If those migrations change, update this block to match — and
-// note that D1's exec() runs one statement per line, which is why this is a
-// single-line paraphrase rather than the file itself. The migration files
-// proper are executed and asserted on in migrations/migrations.test.js.
+// vitest-pool-workers gives an ephemeral in-memory D1 per test file; the schema
+// is applied from migrations/ by worker/test-setup.js. The two DDL constants
+// below are not a mirror of that schema: they exist so the last describe can
+// put the table back into its pre-0008 shape and exercise the missing-column
+// fallback. D1's exec() runs one statement per line, hence the single lines.
 
 import { describe, it, expect, beforeAll, beforeEach, vi, afterEach, afterAll } from "vitest";
 import { env } from "cloudflare:test";
@@ -28,9 +26,9 @@ const CONTACT_MESSAGES_DDL =
   "context TEXT" +
   ")";
 
-// The same table as 0005 left it: no `context`, and a `kind` CHECK that
-// predates 'bug'. This is the shape a database is in until 0007 is applied.
-const CONTACT_MESSAGES_DDL_0005 =
+// The same table as 0006 left it: no `context`, and a `kind` CHECK that
+// predates 'bug'. This is the shape a database is in until 0008 is applied.
+const CONTACT_MESSAGES_DDL_0006 =
   "CREATE TABLE IF NOT EXISTS contact_messages (" +
   "id TEXT PRIMARY KEY, " +
   "email TEXT, " +
@@ -41,24 +39,6 @@ const CONTACT_MESSAGES_DDL_0005 =
   "handled INTEGER NOT NULL DEFAULT 0 CHECK (handled IN (0,1)), " +
   "created_at INTEGER NOT NULL" +
   ")";
-
-beforeAll(async () => {
-  // Mirror of migrations/0001_better_auth.sql (user table only). Present so the
-  // foreign key below is real and a signed-in submission can be exercised.
-  await env.DB.exec(
-    `CREATE TABLE IF NOT EXISTS "user" (` +
-      `"id" text not null primary key, ` +
-      `"name" text not null, ` +
-      `"email" text not null unique, ` +
-      `"emailVerified" integer not null, ` +
-      `"image" text, ` +
-      `"createdAt" date not null, ` +
-      `"updatedAt" date not null, ` +
-      `"username" text unique` +
-      `)`
-  );
-  await env.DB.exec(CONTACT_MESSAGES_DDL);
-});
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM contact_messages");
@@ -599,17 +579,17 @@ describe("POST /api/contact — rate limiting", () => {
   });
 });
 
-describe("POST /api/contact — database still on the pre-0007 schema", () => {
+describe("POST /api/contact — database still on the pre-0008 schema", () => {
   // Migrations are applied by hand while the Worker deploys from a push, so a
   // build that names `context` can go live against a database that has no such
   // column. Contact is the only channel for deletion requests, so that window
-  // must not cost a message. Runs against 0005's table shape verbatim.
+  // must not cost a message. Runs against 0006's table shape verbatim.
   const rebuild = async (ddl) => {
     await env.DB.exec("DROP TABLE IF EXISTS contact_messages");
     await env.DB.exec(ddl);
   };
 
-  beforeAll(() => rebuild(CONTACT_MESSAGES_DDL_0005));
+  beforeAll(() => rebuild(CONTACT_MESSAGES_DDL_0006));
   afterAll(() => rebuild(CONTACT_MESSAGES_DDL));
 
   it("still stores a general message", async () => {
@@ -661,7 +641,7 @@ describe("POST /api/contact — database still on the pre-0007 schema", () => {
       expect(res.status).toBe(500);
       expect((await res.json()).error).toBe("db_error");
     } finally {
-      await env.DB.exec(CONTACT_MESSAGES_DDL_0005);
+      await env.DB.exec(CONTACT_MESSAGES_DDL_0006);
     }
   });
 });

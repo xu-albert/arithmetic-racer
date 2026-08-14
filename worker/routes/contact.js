@@ -123,9 +123,9 @@ function buildContext(body, request, userId) {
 }
 
 /**
- * Store the row, tolerating a database still on the pre-0007 schema.
+ * Store the row, tolerating a database still on the pre-0008 schema.
  *
- * `context` arrives with migration 0007, which is applied by hand, while the
+ * `context` arrives with migration 0008, which is applied by hand, while the
  * Worker deploys from a push — so a build that names the column can meet a
  * database that does not have it yet. Rather than probe the schema on every
  * request, the write assumes the column and retries once without it, and only

@@ -4,12 +4,10 @@
 // `import { env } from "cloudflare:test"` and reset both `race_results` and
 // `user` between tests so each case starts from a clean slate.
 //
-// vitest-pool-workers ships an ephemeral in-memory D1 per test file, so we
-// create both tables once in `beforeAll` (mirroring migrations/0001 and
-// migrations/0002) and clear them between tests. Keeping schema inline keeps
-// this file self-contained without touching vitest.config.js (out of scope).
+// vitest-pool-workers ships an ephemeral in-memory D1 per test file; the schema
+// is applied from migrations/ by worker/test-setup.js.
 
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import {
   handleGetMe,
@@ -18,46 +16,7 @@ import {
 } from "./me.js";
 import { _setTestUserId } from "../session.js";
 
-// --- schema bootstrap & helpers --------------------------------------------
-
-beforeAll(async () => {
-  // Mirror of migrations/0001_better_auth.sql (user table only — we don't
-  // exercise account/session/verification here).
-  await env.DB.exec(
-    `CREATE TABLE IF NOT EXISTS "user" (` +
-      `"id" text not null primary key, ` +
-      `"name" text not null, ` +
-      `"email" text not null unique, ` +
-      `"emailVerified" integer not null, ` +
-      `"image" text, ` +
-      `"createdAt" date not null, ` +
-      `"updatedAt" date not null, ` +
-      `"username" text unique` +
-      `)`
-  );
-
-  // Mirror of migrations/0002_race_results.sql.
-  await env.DB.exec(
-    "CREATE TABLE IF NOT EXISTS race_results (" +
-      "id TEXT PRIMARY KEY, " +
-      `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
-      "device_id TEXT NOT NULL, " +
-      "difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','medium','hard')), " +
-      "finished INTEGER NOT NULL CHECK (finished IN (0,1)), " +
-      "finish_time_ms INTEGER, " +
-      "problems_total INTEGER NOT NULL DEFAULT 20, " +
-      "problems_correct INTEGER NOT NULL, " +
-      "problems_attempted INTEGER NOT NULL, " +
-      "avg_time_per_problem_ms INTEGER NOT NULL, " +
-      "accuracy_pct REAL NOT NULL, " +
-      "longest_streak INTEGER NOT NULL, " +
-      "played_at INTEGER NOT NULL, " +
-      "room_id TEXT, " +
-      "suspect INTEGER NOT NULL DEFAULT 0, " +
-      "suspect_reason TEXT" +
-      ")"
-  );
-});
+// --- helpers ---------------------------------------------------------------
 
 beforeEach(async () => {
   // Order matters: race_results.user_id has an FK to user.id, so clear the
