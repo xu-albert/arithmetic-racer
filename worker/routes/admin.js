@@ -388,6 +388,10 @@ const CONTEXT_FIELD_ORDER = [
   // separately and it is composed into the message.
   ["page", "came from"],
   ["app_version", "version"],
+  // The Worker Version id of the deploy that served the report — the field that
+  // actually distinguishes builds, since `version` above is bumped by hand.
+  // Absent on reports from a build that predates the version_metadata binding.
+  ["deploy_id", "deploy"],
   ["signed_in", "signed in"],
   ["viewport", "viewport"],
   ["screen", "screen"],

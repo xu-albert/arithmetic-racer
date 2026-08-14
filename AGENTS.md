@@ -72,7 +72,15 @@ Static assets are served byte-for-byte by wrangler's ASSETS binding, so there is
 nowhere to substitute a build-time constant into client code. The Worker *is*
 bundled by esbuild, so build-time values are read there and sent to the client
 (or stamped server-side) rather than injected into the page — `worker/version.js`
-is the worked example.
+is the worked example. Deploy identity comes from the `version_metadata` binding
+rather than `package.json`, whose version is hand-bumped and stale.
+
+## `wrangler.jsonc`'s `env.preview` inherits nothing
+
+A named env replaces top-level config wholesale rather than merging with it, so
+every binding, `observability` block and rate limiter must be repeated inside
+`env.preview` or preview silently deploys without it. Adding a binding is
+therefore always a two-place edit.
 
 ## Migrations
 

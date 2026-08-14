@@ -371,6 +371,26 @@ describe("POST /api/contact — captured context", () => {
     expect((await firstContext()).app_version).toBe(APP_VERSION);
   });
 
+  it("records the deploy's Worker Version id, which app_version cannot give", async () => {
+    // app_version is bumped by hand and never has been, so it is the same
+    // string on every report; deploy_id is what says which build served this
+    // one. Asserted against the binding rather than a literal because the id
+    // changes with every deploy — that is the property being bought.
+    await submitBug();
+    const context = await firstContext();
+    expect(context.deploy_id).toBe(env.CF_VERSION_METADATA.id);
+    expect(context.deploy_id).not.toBe(context.app_version);
+  });
+
+  it("omits the deploy id when the runtime has no version metadata", async () => {
+    // The shape a build deployed before the binding existed produces: an
+    // absent field, never a null or a stand-in that would read as a real id.
+    await submitBug({}, { envOverrides: testEnv({ CF_VERSION_METADATA: undefined }) });
+    const context = await firstContext();
+    expect("deploy_id" in context).toBe(false);
+    expect(context.app_version).toBe(APP_VERSION);
+  });
+
   it("records guest submissions as not signed in", async () => {
     await submitBug();
     expect((await firstContext()).signed_in).toBe(false);

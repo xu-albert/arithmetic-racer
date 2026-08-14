@@ -103,6 +103,16 @@ export const BUG_CONTEXT_FIELDS = [
     storedIn: "context",
   },
   {
+    // The Cloudflare Worker Version id of the deploy that served the report —
+    // the field that actually identifies a build, since app_version is bumped
+    // by hand. Omitted when the runtime cannot supply one; see
+    // worker/version.js.
+    key: "deploy_id",
+    source: "server",
+    type: "text",
+    storedIn: "context",
+  },
+  {
     key: "signed_in",
     source: "server",
     type: "boolean",

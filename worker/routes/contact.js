@@ -26,7 +26,7 @@ import { sendTransactional } from "../email.js";
 import { isMissingColumnError } from "../db.js";
 import { logError, logWarn, KINDS } from "../logger.js";
 import { describeUserAgent } from "../user-agent.js";
-import { APP_VERSION } from "../version.js";
+import { APP_VERSION, deployId } from "../version.js";
 import { CLIENT_CONTEXT_FIELDS, bugContextField } from "../../public/src/bug-report-context.js";
 
 const MAX_MESSAGE_LEN = 5000;
@@ -89,7 +89,7 @@ function composeBugMessage({ whatHappened, expected, where, steps }) {
  *
  * @returns {object} Always an object; caller decides whether to store it.
  */
-function buildContext(body, request, userId) {
+function buildContext(body, request, env, userId) {
   const sent =
     body.context && typeof body.context === "object" && !Array.isArray(body.context)
       ? body.context
@@ -117,6 +117,11 @@ function buildContext(body, request, userId) {
   if (os) context.os = os;
 
   context.app_version = APP_VERSION;
+  // Omitted rather than nulled when the runtime has no version_metadata
+  // binding, so an absent field means "this build could not say" and a present
+  // one is always a real deploy id.
+  const deploy = deployId(env);
+  if (deploy) context.deploy_id = deploy;
   context.signed_in = userId != null;
 
   return context;
@@ -230,7 +235,7 @@ export async function handleContact(request, env, deps = {}) {
   // Only bug reports capture context. General and deletion messages keep
   // exactly the shape they had before this column existed — there is no reason
   // to start recording a browser fingerprint against a deletion request.
-  const context = kind === "bug" ? JSON.stringify(buildContext(body, request, userId)) : null;
+  const context = kind === "bug" ? JSON.stringify(buildContext(body, request, env, userId)) : null;
 
   const id = crypto.randomUUID();
   try {
