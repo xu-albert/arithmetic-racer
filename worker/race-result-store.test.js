@@ -96,6 +96,60 @@ describe("insertRaceResult", () => {
     expect(results[0].room_id).toBe("brave-otter-eel");
   });
 
+  it("scores the race on insert — one writer, so solo and room races both get points", async () => {
+    // 10 correct in 30s = 20 ppm -> 10 x 20/60 = 3.333 points.
+    const { id, points } = await insertRaceResult(env, basePayload());
+    expect(points).toBeCloseTo(3.3333, 4);
+
+    const row = await env.DB.prepare("SELECT points FROM race_results WHERE id = ?")
+      .bind(id)
+      .first();
+    expect(row.points).toBeCloseTo(3.3333, 4);
+  });
+
+  it("stores the same points for the same race regardless of difficulty", async () => {
+    // Difficulty is a separate pool, not a weight on a shared scale.
+    const scores = [];
+    for (const difficulty of ["easy", "medium", "hard"]) {
+      const { points } = await insertRaceResult(env, basePayload({ difficulty }));
+      scores.push(points);
+    }
+    expect(scores[0]).toBe(scores[1]);
+    expect(scores[1]).toBe(scores[2]);
+  });
+
+  it("stores NULL points for a DNF row, and 0 for a finished race with nothing correct", async () => {
+    const dnf = await insertRaceResult(env, basePayload({
+      finished: false,
+      finish_time_ms: null,
+      problems_correct: 4,
+    }));
+    expect(dnf.points).toBeNull();
+
+    const blank = await insertRaceResult(env, basePayload({ problems_correct: 0 }));
+    expect(blank.points).toBe(0);
+
+    const rows = await env.DB.prepare(
+      "SELECT id, points FROM race_results WHERE id IN (?,?)"
+    ).bind(dnf.id, blank.id).all();
+    const byId = new Map(rows.results.map((r) => [r.id, r.points]));
+    expect(byId.get(dnf.id)).toBeNull();
+    expect(byId.get(blank.id)).toBe(0);
+  });
+
+  it("scores a suspect race — the flag is a read-time filter, not a veto", async () => {
+    const { id, suspect, points } = await insertRaceResult(env, basePayload({
+      finish_time_ms: 500, // under 10 problems x 200ms
+    }));
+    expect(suspect).toBe(1);
+    expect(points).toBeGreaterThan(0);
+
+    const row = await env.DB.prepare("SELECT points FROM race_results WHERE id = ?")
+      .bind(id)
+      .first();
+    expect(row.points).toBeGreaterThan(0);
+  });
+
   it("returns a unique id per call", async () => {
     const a = await insertRaceResult(env, basePayload());
     const b = await insertRaceResult(env, basePayload());

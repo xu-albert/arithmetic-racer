@@ -106,6 +106,9 @@ Two sharp edges it documents, worth knowing before you read it:
 Changing a `CHECK` constraint or dropping a column requires a full table rebuild
 in SQLite, which silently discards the table's indexes and foreign keys unless
 they are recreated; `migrations/migrations.test.js` exists to catch exactly that.
+A migration that *rewrites data* carries the other kind of risk, and gets its own
+test file — `migrations/points-backfill.test.js` is the pattern. A wrong one-shot
+backfill can only be undone by another migration.
 
 Worker tests build their D1 from `migrations/` via `applyD1Migrations`
 (`worker/test-setup.js`, wired in `vitest.config.js`), so filename order is
@@ -122,6 +125,13 @@ The notification email in `worker/routes/contact.js` has never fired in
 production — neither `LOOPS_TEMPLATE_CONTACT` nor `CONTACT_EMAIL` is configured
 on the Worker — so treat that path as decoration and the D1 row plus the
 dashboard as the delivery guarantee.
+
+## Scoring is siloed per difficulty
+
+`race_results.points` and the PPM derived from it are per-difficulty pools that are never
+weighted, summed, or ranked against each other — easy/medium/hard are three separate
+games. Anything aggregating them must `GROUP BY difficulty`. Rationale and formula:
+`worker/race-score.js` and `migrations/0009_race_results_points.sql`.
 
 ## Maintaining this file
 

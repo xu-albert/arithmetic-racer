@@ -22,7 +22,7 @@ Runs `wrangler dev`. Open http://localhost:8787.
 npm test
 ```
 
-Runs the pure-logic and migration-schema suites under `node --test`, then the Worker and Durable Object suite under `vitest` — see the `test` script in `package.json` for the files each one covers.
+Runs the pure-logic and migration suites under `node --test`, then the Worker and Durable Object suite under `vitest` — see the `test` script in `package.json` for the files each one covers.
 
 See [`docs/testing.md`](./docs/testing.md) for the full manual test plan — Quickplay smoke, the two-browser multiplayer matrix, regression things to watch for, and notes on deploys.
 

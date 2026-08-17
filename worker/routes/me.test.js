@@ -15,6 +15,7 @@ import {
   handleByDevice,
 } from "./me.js";
 import { _setTestUserId } from "../session.js";
+import { computePoints } from "../race-score.js";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -55,12 +56,22 @@ async function seedRace(env, overrides = {}) {
     played_at: Date.now(),
     ...overrides,
   };
+  // Seed `points` the way the real writer does (worker/race-result-store.js),
+  // so these rows behave like rows the app actually wrote. Pass an explicit
+  // `points` override to simulate a row the 0007 backfill left NULL.
+  if (!("points" in overrides)) {
+    r.points = computePoints({
+      finished: r.finished === 1,
+      finish_time_ms: r.finish_time_ms,
+      problems_correct: r.problems_correct,
+    });
+  }
   await env.DB.prepare(
     `INSERT INTO race_results (
        id, user_id, device_id, difficulty, finished, finish_time_ms,
        problems_total, problems_correct, problems_attempted,
-       avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at, points
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   )
     .bind(
       r.id,
@@ -75,7 +86,8 @@ async function seedRace(env, overrides = {}) {
       r.avg_time_per_problem_ms,
       r.accuracy_pct,
       r.longest_streak,
-      r.played_at
+      r.played_at,
+      r.points ?? null
     )
     .run();
   return r;
@@ -116,6 +128,10 @@ describe("GET /api/me", () => {
       expect(a.best_time_ms).toBeNull();
       expect(a.avg_accuracy).toBe(0);
       expect(a.avg_problem_time_ms).toBe(0);
+      expect(a.total_points).toBe(0);
+      // No finished race means no pace to report — null, not a slow 0.
+      expect(a.avg_ppm).toBeNull();
+      expect(a.best_ppm).toBeNull();
     }
 
     expect(body.recent).toEqual([]);
@@ -244,6 +260,137 @@ describe("GET /api/me", () => {
     expect(body.recent).toHaveLength(10);
     // First entry is the most recently played (seq 12).
     expect(body.recent[0].race_seq).toBe(12);
+  });
+});
+
+// --- points and PPM ---------------------------------------------------------
+
+describe("GET /api/me — points and PPM", () => {
+  beforeEach(async () => {
+    await seedUser(env, { id: "u1", email: "u1@example.com", username: "Alice" });
+    _setTestUserId("u1");
+  });
+
+  const aggFor = (body, difficulty) =>
+    body.aggregates.find((a) => a.difficulty === difficulty);
+
+  it("keeps points and PPM in separate per-difficulty pools", async () => {
+    // Identical races in each tier. Each tier reports its own totals, and
+    // nothing anywhere in the response adds them together.
+    for (const difficulty of ["easy", "medium", "hard"]) {
+      await seedRace(env, {
+        user_id: "u1",
+        difficulty,
+        finished: 1,
+        finish_time_ms: 60_000,
+        problems_correct: 20,
+      });
+    }
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    for (const difficulty of ["easy", "medium", "hard"]) {
+      const agg = aggFor(body, difficulty);
+      expect(agg.avg_ppm).toBeCloseTo(20, 6);
+      expect(agg.best_ppm).toBeCloseTo(20, 6);
+      expect(agg.total_points).toBeCloseTo(6.6667, 4); // 20 x 20/60
+    }
+    // No cross-difficulty total, rank, or weighted score is exposed.
+    const keys = Object.keys(body);
+    expect(keys).not.toContain("points");
+    expect(keys).not.toContain("total_points");
+    expect(keys).not.toContain("ppm");
+  });
+
+  it("sums points and averages PPM within a difficulty", async () => {
+    const t0 = 1_700_000_000_000;
+    // 20 correct in 60s -> 20 ppm, 6.667 points.
+    await seedRace(env, {
+      user_id: "u1", difficulty: "medium", finished: 1,
+      finish_time_ms: 60_000, problems_correct: 20, played_at: t0 + 1,
+    });
+    // 20 correct in 30s -> 40 ppm, 13.333 points.
+    await seedRace(env, {
+      user_id: "u1", difficulty: "medium", finished: 1,
+      finish_time_ms: 30_000, problems_correct: 20, played_at: t0 + 2,
+    });
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    const medium = aggFor(body, "medium");
+    expect(medium.total_points).toBeCloseTo(20, 4); // 6.667 + 13.333
+    expect(medium.avg_ppm).toBeCloseTo(30, 6); // (20 + 40) / 2
+    expect(medium.best_ppm).toBeCloseTo(40, 6);
+  });
+
+  it("excludes DNFs from the PPM average instead of scoring them 0", async () => {
+    const t0 = 1_700_000_000_000;
+    await seedRace(env, {
+      user_id: "u1", difficulty: "easy", finished: 1,
+      finish_time_ms: 60_000, problems_correct: 30, played_at: t0 + 1,
+    });
+    // Quit part-way: the 0007 backfill leaves points NULL for exactly this row.
+    await seedRace(env, {
+      user_id: "u1", difficulty: "easy", finished: 0, finish_time_ms: null,
+      problems_correct: 5, played_at: t0 + 2,
+    });
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    const easy = aggFor(body, "easy");
+    expect(easy.races_played).toBe(2);
+    expect(easy.races_finished).toBe(1);
+    // A DNF must not halve the average — 30, not 15.
+    expect(easy.avg_ppm).toBeCloseTo(30, 6);
+    expect(easy.best_ppm).toBeCloseTo(30, 6);
+    expect(easy.total_points).toBeCloseTo(15, 4); // 30 x 30/60, DNF adds nothing
+  });
+
+  it("reports total_points 0 for a difficulty whose only races are unscored", async () => {
+    // Pre-backfill history is impossible by construction (0007 backfills), but
+    // a DNF-only tier is not: SUM over all-NULL must surface as 0, not null.
+    await seedRace(env, {
+      user_id: "u1", difficulty: "hard", finished: 0,
+      finish_time_ms: null, problems_correct: 2,
+    });
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    const hard = aggFor(body, "hard");
+    expect(hard.total_points).toBe(0);
+    expect(hard.avg_ppm).toBeNull();
+    expect(hard.best_ppm).toBeNull();
+  });
+
+  it("returns per-race points and ppm on recent races, null for a DNF", async () => {
+    const t0 = 1_700_000_000_000;
+    await seedRace(env, {
+      user_id: "u1", difficulty: "medium", finished: 1,
+      finish_time_ms: 30_000, problems_correct: 20, played_at: t0 + 1,
+    });
+    await seedRace(env, {
+      user_id: "u1", difficulty: "medium", finished: 0, finish_time_ms: null,
+      problems_correct: 3, played_at: t0 + 2,
+    });
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    const [dnf, finished] = body.recent; // DESC by played_at
+    expect(dnf.points).toBeNull();
+    expect(dnf.ppm).toBeNull();
+    expect(finished.ppm).toBeCloseTo(40, 6);
+    expect(finished.points).toBeCloseTo(13.3333, 4);
+  });
+
+  it("serves points from the stored column, not recomputed at read time", async () => {
+    // The stored value is the record of what that race was worth. A later
+    // formula change must not silently rewrite it, so the read path reports
+    // whatever is in the column.
+    await seedRace(env, {
+      user_id: "u1", difficulty: "easy", finished: 1,
+      finish_time_ms: 60_000, problems_correct: 20, points: 999,
+    });
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    expect(body.recent[0].points).toBe(999);
+    expect(aggFor(body, "easy").total_points).toBe(999);
+    // PPM *is* derived, so it still reflects the raw columns.
+    expect(body.recent[0].ppm).toBeCloseTo(20, 6);
   });
 });
 

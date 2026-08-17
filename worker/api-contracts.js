@@ -38,6 +38,11 @@
  * @property {DifficultyAggregates[]} aggregates  always 3 entries (one per difficulty)
  * @property {RaceListItem[]} recent
  *
+ * Scoring note: `points` and `ppm` are per-difficulty by construction. The
+ * three difficulties are separate point pools — this API never returns a
+ * cross-difficulty total, ranking, or weighted score, and consumers must not
+ * build one. Formula: worker/race-score.js.
+ *
  * @typedef {Object} DifficultyAggregates
  * @property {Difficulty} difficulty
  * @property {number} races_played
@@ -45,6 +50,9 @@
  * @property {number|null} best_time_ms
  * @property {number} avg_accuracy        0..100
  * @property {number} avg_problem_time_ms
+ * @property {number} total_points        sum over this difficulty only; 0 if none scored
+ * @property {number|null} avg_ppm        mean problems/minute over *finished* races; null if none
+ * @property {number|null} best_ppm       best problems/minute; null if no finished race
  *
  * @typedef {Object} RaceListItem
  * @property {number} race_seq            1-based per-user counter
@@ -52,6 +60,8 @@
  * @property {number|null} finish_time_ms
  * @property {number} accuracy_pct
  * @property {number} avg_time_per_problem_ms
+ * @property {number|null} points         null for a DNF (0 is an earnable score)
+ * @property {number|null} ppm            problems/minute; null for a DNF
  * @property {string} played_at           ISO 8601
  */
 

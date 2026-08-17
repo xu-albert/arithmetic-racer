@@ -8,10 +8,13 @@ import { _internals } from "./profile.js";
 const {
   fmtMs,
   fmtAvgMs,
+  fmtPpm,
+  fmtPoints,
   fmtPct,
   fmtRelative,
   fmtDate,
-  computeHeadlineMs,
+  headlinePpm,
+  headlinePoints,
   computeTotalRaces,
   computeOverallAccuracy,
   computeFinishRate,
@@ -79,32 +82,64 @@ test("fmtDate handles bad input", () => {
   assert.ok(v && v !== "—", `expected formatted date, got ${v}`);
 });
 
-// ---------- computeHeadlineMs ----------
+// ---------- fmtPpm / fmtPoints ----------
 
-test("computeHeadlineMs weights by races_played", () => {
-  const aggs = [
-    { races_played: 4, avg_problem_time_ms: 1100 },
-    { races_played: 1, avg_problem_time_ms: 5000 },
-  ];
-  // (4*1100 + 1*5000) / 5 = 1880
-  assert.equal(computeHeadlineMs(aggs), 1880);
+test("fmtPpm shows one decimal", () => {
+  assert.equal(fmtPpm(34.06), "34.1");
+  assert.equal(fmtPpm(0), "0.0");
+  assert.equal(fmtPpm(null), "—");
+  assert.equal(fmtPpm(undefined), "—");
+  assert.equal(fmtPpm(Infinity), "—");
 });
 
-test("computeHeadlineMs returns null when no races", () => {
+test("fmtPoints shows one decimal", () => {
+  // Points are stored unrounded so sums stay exact; only the display rounds.
+  // A single race is worth a few points, so whole numbers would collapse the
+  // column and stop the rows adding up to the tier total shown above them.
+  assert.equal(fmtPoints(6.6667), "6.7");
+  assert.equal(fmtPoints(0), "0.0");
+  // A DNF earned nothing and is not a zero score.
+  assert.equal(fmtPoints(null), "—");
+  assert.equal(fmtPoints(Infinity), "—");
+});
+
+// ---------- headlinePpm / headlinePoints ----------
+
+const AGGS = [
+  { difficulty: "easy", races_played: 4, races_finished: 4, avg_ppm: 34.2, total_points: 120.4 },
+  { difficulty: "medium", races_played: 2, races_finished: 1, avg_ppm: 22.5, total_points: 40 },
+  { difficulty: "hard", races_played: 0, races_finished: 0, avg_ppm: null, total_points: 0 },
+];
+
+test("headlinePpm reads one tier and never blends tiers", () => {
+  assert.equal(headlinePpm(AGGS, "easy"), 34.2);
+  assert.equal(headlinePpm(AGGS, "medium"), 22.5);
+  // An untouched tier has no speed to show — not 0, which would read as slow.
+  assert.equal(headlinePpm(AGGS, "hard"), null);
+});
+
+test("headlinePpm is null for missing or malformed aggregates", () => {
+  assert.equal(headlinePpm([], "easy"), null);
+  assert.equal(headlinePpm(null, "easy"), null);
+  assert.equal(headlinePpm([{ difficulty: "easy" }], "easy"), null);
+  assert.equal(headlinePpm([{ difficulty: "easy", avg_ppm: "20" }], "easy"), null);
+});
+
+test("headlinePoints reports the tier's own pool, 0 included", () => {
+  assert.equal(headlinePoints(AGGS, "easy"), 120.4);
+  assert.equal(headlinePoints(AGGS, "medium"), 40);
+  // Never raced -> null, so it renders as "—" rather than a real 0 standing.
+  assert.equal(headlinePoints(AGGS, "hard"), null);
+  // Raced but earned nothing -> a genuine 0.
   assert.equal(
-    computeHeadlineMs([{ races_played: 0, avg_problem_time_ms: 0 }]),
-    null,
+    headlinePoints([{ difficulty: "easy", races_played: 1, total_points: 0 }], "easy"),
+    0,
   );
-  assert.equal(computeHeadlineMs([]), null);
-  assert.equal(computeHeadlineMs(null), null);
 });
 
-test("computeHeadlineMs ignores zero-races buckets", () => {
-  const aggs = [
-    { races_played: 2, avg_problem_time_ms: 1000 },
-    { races_played: 0, avg_problem_time_ms: 9999 }, // ignored
-  ];
-  assert.equal(computeHeadlineMs(aggs), 1000);
+test("headlinePoints is null for missing aggregates", () => {
+  assert.equal(headlinePoints([], "easy"), null);
+  assert.equal(headlinePoints(null, "easy"), null);
 });
 
 // ---------- computeTotalRaces ----------
