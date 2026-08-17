@@ -668,6 +668,7 @@ describe("admin dashboard — captured context", () => {
     os: "macOS",
     page: "/some/route",
     app_version: "0.1.0",
+    deploy_id: "66a6cecb-309c-4637-8a93-748840df0cee",
     signed_in: false,
     viewport: "1512x845",
     screen: "3024x1964",
@@ -684,6 +685,24 @@ describe("admin dashboard — captured context", () => {
     for (const value of ["Chrome 141", "macOS", "/some/route", "0.1.0", "1512x845", "3024x1964"]) {
       expect(body).toContain(value);
     }
+  });
+
+  it("shows the deploy id under its own label, not as a raw key", async () => {
+    // The one field that distinguishes builds, so it must be readable at a
+    // glance rather than falling through to the unknown-key passthrough.
+    await insertWithContext(CONTEXT);
+    expect(await dashboard()).toMatch(
+      /deploy<\/dt><dd>66a6cecb-309c-4637-8a93-748840df0cee<\/dd>/
+    );
+  });
+
+  it("still renders a report from a build with no deploy id", async () => {
+    // Reports filed before the version_metadata binding existed have no
+    // deploy_id at all; the row must render rather than showing an empty field.
+    await insertWithContext(JSON.stringify({ app_version: "0.1.0", browser: "Chrome 141" }));
+    const body = await dashboard();
+    expect(body).toContain("Chrome 141");
+    expect(body).not.toContain("deploy</dt>");
   });
 
   it("labels the fields rather than dumping raw JSON keys", async () => {
