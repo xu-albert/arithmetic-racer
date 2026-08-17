@@ -445,6 +445,27 @@ describe("public quickmatch rooms are not wound down", () => {
       expect(await room.ctx.storage.get("state")).toBeUndefined();
     });
   });
+
+  it("schedules its deadlines exactly, without the winddown's slop window", async () => {
+    // The slop exists for a clock that moves on every client frame. A room
+    // with no idle clock moves its deadlines a handful of times per match, so
+    // skipping the write there only buys a no-op wake-up on a stale alarm.
+    await withPublicRoom("m-alarm-" + crypto.randomUUID(), async (room, { conns }) => {
+      await join(room, conns, "Alice");
+      const lone = await room.ctx.storage.getAlarm();
+      expect(lone).toBe(room.state.autoStartDeadline);
+
+      // The second joiner moves auto-start from now+LONE_TIMEOUT_MS to
+      // now+GATHER_WINDOW_MS: later, but by far less than a slop window.
+      await new Promise((r) => setTimeout(r, 20));
+      await join(room, conns, "Bob");
+      const gather = room.state.autoStartDeadline;
+      expect(gather).toBeGreaterThan(lone);
+      expect(gather - lone).toBeLessThan(ALARM_SLOP_MS);
+
+      expect(await room.ctx.storage.getAlarm()).toBe(gather);
+    });
+  });
 });
 
 describe("private room — the winddown does not disturb the reconnect grace", () => {

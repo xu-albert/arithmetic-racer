@@ -39,12 +39,14 @@ if a secret reaches the wire.
 ## Room lifecycle: private rooms wind down, public ones do not
 
 Every timer a room owns shares one DO alarm slot, coalesced by
-`scheduleNextAlarm()` — add a deadline there or it never fires. It rewrites the
-alarm only when the new deadline is earlier, or later by more than
-`ALARM_SLOP_MS`; the idle clock moves on every client frame, and paying a
-durable `setAlarm` for each one is what that skip avoids. An alarm firing up to
-a slop window early costs a wake-up, nothing more — `onAlarm()` re-derives its
-deadlines and reschedules. Three timers now run side by side, and they are
+`scheduleNextAlarm()` — add a deadline there or it never fires. In a room that
+expires when idle it rewrites the alarm only when the new deadline is earlier,
+or later by more than `ALARM_SLOP_MS`; the idle clock moves on every client
+frame, and paying a durable `setAlarm` for each one is what that skip avoids.
+An alarm firing up to a slop window early costs a wake-up, nothing more —
+`onAlarm()` re-derives its deadlines and reschedules. Rooms without an idle
+clock (public) keep writing every changed deadline exactly, since they only
+move one a few times per match. Three timers now run side by side, and they are
 deliberately different mechanisms:
 
 - **Reconnect grace** (30s) and **empty-room cleanup** (5 min) — unchanged, and

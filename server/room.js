@@ -30,12 +30,13 @@ export const PRIVATE_ROOM_IDLE_MS = 30 * 60 * 1000;
 export const EXPIRED_ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 
 // How far a deadline may drift later than the alarm already on disk before
-// scheduleNextAlarm() pays for a rewrite. The idle clock moves on every client
-// frame, so without this an answer costs a durable setAlarm — on the hottest
-// path of a feature whose point is conserving resources. Firing early is
-// harmless: onAlarm re-derives idleExpiryAt() and falls through to reschedule
-// when the deadline has not been reached yet. An *earlier* deadline is never
-// skipped; missing one of those would drop a real timer.
+// scheduleNextAlarm() pays for a rewrite, in rooms that expire when idle. The
+// idle clock moves on every client frame, so without this an answer costs a
+// durable setAlarm — on the hottest path of a feature whose point is
+// conserving resources. Firing early is harmless: onAlarm re-derives
+// idleExpiryAt() and falls through to reschedule when the deadline has not
+// been reached yet. An *earlier* deadline is never skipped; missing one of
+// those would drop a real timer.
 export const ALARM_SLOP_MS = 60 * 1000;
 
 // Public wire payload for a wound-down room. Sent to anyone attached when the
@@ -899,7 +900,11 @@ export class RaceRoom extends Server {
     // A pending alarm that is merely a little early is left alone: onAlarm
     // re-derives the deadlines and reschedules if none has been reached, so the
     // drift costs one wake-up instead of a storage write per client frame.
-    if (cur != null && cur > Date.now() && next > cur && next - cur < ALARM_SLOP_MS) return;
+    // Only rooms carrying an idle clock have frames to conserve writes on; a
+    // room without one moves its deadlines a handful of times per match, and
+    // would trade a write it already pays for a wake-up it does not.
+    if (this.expiresWhenIdle()
+      && cur != null && cur > Date.now() && next > cur && next - cur < ALARM_SLOP_MS) return;
     await this.ctx.storage.setAlarm(next);
   }
 }
