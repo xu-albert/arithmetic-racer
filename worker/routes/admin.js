@@ -383,9 +383,11 @@ async function loadContactMessages(env, kind = null, limit = 50) {
 const CONTEXT_FIELD_ORDER = [
   ["browser", "browser"],
   ["os", "OS"],
-  // Derived from the referrer, so it is the page they navigated to the form
-  // from — not necessarily where the bug happened. The form asks that
-  // separately and it is composed into the message.
+  // The surface they left for the form: an in-game entry point names its own
+  // screen with `?from=` and everything else falls back to the referrer path —
+  // see BUG_REPORT_SOURCES in public/src/bug-report-context.js. Still where
+  // they came from rather than where the bug is; the form asks that separately
+  // and it is composed into the message.
   ["page", "came from"],
   ["app_version", "version"],
   // The Worker Version id of the deploy that served the report — the field that
