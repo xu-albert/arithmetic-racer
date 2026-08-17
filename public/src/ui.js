@@ -134,8 +134,21 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   // bug-report link opens in a new tab with the race still running. Hand focus
   // back, but only while there is a race to type into — input.disabled is
   // false exactly between 'start' and the player finishing.
+  //
+  // Never take focus from something else that wants it. A modal (sign-in, pick
+  // a username, the invite card) sits outside #race and installs no focus trap,
+  // so alt-tabbing back while one is open would otherwise pull the caret out of
+  // it and into an answer box the player cannot see.
+  function modalIsOpen() {
+    const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+    return [...dialogs].some((el) => !el.hidden && !el.classList.contains('hidden'));
+  }
+
   function restoreAnswerFocus() {
     if (input.disabled || screens.race.classList.contains('hidden')) return;
+    const active = document.activeElement;
+    const raceHasFocus = !active || active === document.body || screens.race.contains(active);
+    if (!raceHasFocus || modalIsOpen()) return;
     input.focus();
   }
 
