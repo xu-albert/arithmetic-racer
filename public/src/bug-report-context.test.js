@@ -9,7 +9,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -133,31 +133,86 @@ test("every allowlisted source survives the server's path-only strip", () => {
   }
 });
 
-// The entry points themselves: every /bug-report?from= link in the static
-// pages must carry a declared source, and the surfaces the game promises an
-// entry point on — the race screen and the results screen — must have one.
+// --- The entry points themselves --------------------------------------------
+//
+// public/ has no build step, so every page under it is served byte-for-byte and
+// its anchors are an owned contract. A link is judged by what a report filed
+// through it would actually record — the href is handed to the real collector —
+// rather than by the text of the href, and the two screens the game promises an
+// entry point on are looked for inside the section that owns each screen, so an
+// anchor that drifts out of #race or #results fails here.
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-function fromValuesIn(page) {
-  const html = readFileSync(join(PUBLIC_DIR, page), "utf8");
-  return [...html.matchAll(/href="\/bug-report\?from=([^"&]*)"/g)].map(([, v]) =>
-    decodeURIComponent(v)
-  );
+function pageHtml(page) {
+  return readFileSync(join(PUBLIC_DIR, page), "utf8").replace(/<!--[\s\S]*?-->/g, "");
 }
 
-test("every entry point's ?from= names a declared source", () => {
-  for (const page of ["index.html", "contact.html"]) {
-    for (const value of fromValuesIn(page)) {
-      assert.ok(BUG_REPORT_SOURCES.includes(value), `${page} carries undeclared from=${value}`);
+/** The markup a screen's own <section> encloses, nesting counted. */
+function sectionHtml(html, id) {
+  const opened = html.match(new RegExp(`<section\\b[^>]*\\sid="${id}"[^>]*>`));
+  assert.ok(opened, `no <section id="${id}"> to hold an entry point`);
+  const from = opened.index + opened[0].length;
+  let depth = 0;
+  for (const tag of html.slice(from).matchAll(/<(\/?)section\b/g)) {
+    if (!tag[1]) depth += 1;
+    else if (depth === 0) return html.slice(from, from + tag.index);
+    else depth -= 1;
+  }
+  assert.fail(`<section id="${id}"> is never closed`);
+}
+
+function bugReportLinksIn(html) {
+  return [...html.matchAll(/<a\b[^>]*>/g)]
+    .map((tag) => tag[0].match(/\shref="([^"]*)"/)?.[1])
+    .filter((href) => href && href.split(/[?#]/)[0] === "/bug-report");
+}
+
+/** What a report opened through this link would store as its page. */
+function pageRecordedFrom(href) {
+  const win = fakeWindow({
+    referrer: "",
+    window: {
+      location: {
+        origin: "https://racer.test",
+        href: new URL(href, "https://racer.test/").href,
+      },
+    },
+  });
+  return collectBugPayload(win).context.page;
+}
+
+test("every entry point in the static pages records the source it names", () => {
+  // Every page, not a hand-kept list: a link added to any of them is held to
+  // the allowlist, since an undeclared source records nothing at all.
+  const pages = readdirSync(PUBLIC_DIR).filter((name) => name.endsWith(".html"));
+  assert.ok(pages.includes("index.html"), "expected the game page among public/*.html");
+  for (const page of pages) {
+    for (const href of bugReportLinksIn(pageHtml(page))) {
+      const from = new URL(href, "https://racer.test/").searchParams.get("from");
+      if (from === null) continue; // a bare pointer still falls back to the referrer
+      assert.equal(
+        pageRecordedFrom(href),
+        from,
+        `${page} links to ${href}, whose from= is not a declared source`
+      );
     }
   }
 });
 
 test("the race and results screens each carry a bug-report entry point", () => {
-  const values = fromValuesIn("index.html");
-  assert.ok(values.includes("/race"), "no entry point on the race screen");
-  assert.ok(values.includes("/results"), "no entry point on the results screen");
+  const html = pageHtml("index.html");
+  for (const [id, source] of [
+    ["race", "/race"],
+    ["results", "/results"],
+  ]) {
+    const links = bugReportLinksIn(sectionHtml(html, id));
+    assert.ok(links.length > 0, `no bug-report entry point inside <section id="${id}">`);
+    assert.ok(
+      links.some((href) => pageRecordedFrom(href) === source),
+      `<section id="${id}"> has no entry point recording ${source}`
+    );
+  }
 });
 
 test("keeps no page for a cross-origin referrer", () => {
