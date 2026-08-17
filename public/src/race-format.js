@@ -1,10 +1,13 @@
-// Display formatters for race numbers, shared by every screen that shows them.
+// Display helpers for race rows, shared by every screen that renders them.
 //
-// Extracted from profile.js when the lobby leaderboard needed the same three:
-// PPM, points, and a relative timestamp have to read identically wherever they
-// appear, and two copies of "one decimal" is exactly how they stop doing that.
-// profile.js re-exports these through its `_internals` so its existing tests
-// keep addressing them where they always did.
+// Extracted from profile.js when the lobby leaderboard needed the same three
+// formatters: PPM, points, and a relative timestamp have to read identically
+// wherever they appear, and two copies of "one decimal" is exactly how they
+// stop doing that. `escapeHtml` moved here for the stronger version of that
+// argument — every caller interpolates a server-supplied username into
+// innerHTML, and a second copy is a copy that a hardening fix can miss.
+// profile.js re-exports all of them through its `_internals` so its existing
+// tests keep addressing them where they always did.
 
 /**
  * Format problems-per-minute — the headline speed number. One decimal, because
@@ -27,6 +30,20 @@ export function fmtPoints(points) {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   });
+}
+
+/**
+ * Escape text for interpolation into innerHTML. The single canonical copy: the
+ * profile's race table and the lobby leaderboard both put a username straight
+ * into markup, and that name arrives over the wire.
+ */
+export function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 /** Coarse "h ago" / "d ago" relative timestamp. */

@@ -39,15 +39,17 @@ export async function setUsername(username) {
 /**
  * One leaderboard: the fastest races at one difficulty in one period.
  *
- * No `credentials` — the boards are public and identical for everyone, so
- * sending the session cookie would only make them look personalized.
+ * `credentials: 'omit'` — the boards are public and identical for everyone, so
+ * the session cookie has nothing to say here and sending it would only make
+ * them look personalized. Omitting the option would not do it: fetch defaults
+ * to 'same-origin', and this is a same-origin request.
  *
  * @param {{difficulty: string, period?: string, limit?: number}} opts
  */
 export async function getLeaderboard({ difficulty, period = "all", limit } = {}) {
   const params = new URLSearchParams({ difficulty, period });
   if (limit != null) params.set("limit", String(limit));
-  const res = await fetch(`/api/leaderboard?${params}`);
+  const res = await fetch(`/api/leaderboard?${params}`, { credentials: "omit" });
   if (!res.ok) throw new Error(`leaderboard ${res.status}`);
   return res.json();
 }

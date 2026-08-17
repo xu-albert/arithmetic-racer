@@ -36,7 +36,8 @@
 // and it is a private identifier that must never reach the wire. Signing in is
 // how a racer opts into being listed.
 
-import { db } from "../db.js";
+import { db, isMissingColumnError } from "../db.js";
+import { logWarn, KINDS } from "../logger.js";
 import { isPeriod, periodStartMs } from "../leaderboard-period.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
@@ -53,6 +54,20 @@ const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
 
 /**
+ * How long a shared cache may serve one board. The response is byte-identical
+ * for every caller (no session is read and no per-caller field is emitted), so
+ * a burst of lobby mounts and tab flips can collapse onto one D1 read.
+ *
+ * 30s rather than the longer end of the useful range: a racer who has just set
+ * a mark reloads the lobby to look for themselves, and half a minute is about
+ * the longest that reads as "the board hasn't caught up" rather than "the
+ * board is wrong". `max-age=0` keeps the private cache out of it — only the
+ * shared cache absorbs repeats, so one racer's stale copy never outlives the
+ * edge's.
+ */
+const CACHE_CONTROL = "public, max-age=0, s-maxage=30";
+
+/**
  * One row per racer — their single best race in the window — rather than one
  * row per race. Without the PARTITION BY, one fast racer having a good evening
  * fills every slot and the board stops being a board.
@@ -65,11 +80,16 @@ const MAX_LIMIT = 50;
  * Ties break toward the earlier race, so a racer who has already set a mark
  * does not get bumped by someone matching it later. `user_id` is the last
  * tiebreak purely so the order is total and the response is deterministic.
+ *
+ * `pointsExpr` is the one thing that varies: `points` normally, `NULL` against
+ * a database that has not had migration 0009 applied yet. See the fallback in
+ * `fetchBoard`.
  */
-const BOARD_SQL = `
+function boardSql(pointsExpr) {
+  return `
   WITH eligible AS (
     SELECT user_id,
-           points,
+           ${pointsExpr} AS points,
            played_at,
            problems_correct * 60000.0 / finish_time_ms AS ppm
       FROM race_results
@@ -98,13 +118,45 @@ const BOARD_SQL = `
    ORDER BY b.ppm DESC, b.played_at ASC, b.user_id ASC
    LIMIT ?3
 `;
+}
+
+const BOARD_SQL = boardSql("points");
+const BOARD_SQL_WITHOUT_POINTS = boardSql("NULL");
+
+/**
+ * Read one board, degrading to a points-less board rather than failing when
+ * the column is not there yet.
+ *
+ * `race_results.points` arrives in migration 0009, and migrations here are
+ * applied by hand while the Worker deploys from a push — so a build can run
+ * against a database one migration behind (migrations/README.md). This is the
+ * public lobby's first screen, and the ranking does not depend on the column:
+ * PPM is derived from problems_correct and finish_time_ms, both of which have
+ * been there since 0002. So the board still ranks, completely and in the same
+ * order, with the points column reported as null.
+ *
+ * Only a genuinely missing column takes the fallback; every other D1 failure
+ * propagates, so a real database error still surfaces as one.
+ */
+async function fetchBoard(env, { difficulty, since, limit, period }) {
+  const run = (sql) => db(env).prepare(sql).bind(difficulty, since, limit).all();
+  try {
+    const { results } = await run(BOARD_SQL);
+    return results ?? [];
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+    logWarn(KINDS.LEADERBOARD_SCHEMA_BEHIND, err, { difficulty, period });
+    const { results } = await run(BOARD_SQL_WITHOUT_POINTS);
+    return results ?? [];
+  }
+}
 
 /**
  * Parse `?limit=`. Anything unreadable falls back to the default rather than
  * 400-ing: a board is a read-only view and a bad size is not worth an error
  * page.
  */
-function parseLimit(raw) {
+export function parseLimit(raw) {
   if (raw == null || raw === "") return DEFAULT_LIMIT;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIMIT;
@@ -127,30 +179,31 @@ export async function handleLeaderboard(request, env) {
   const now = Date.now();
   const since = periodStartMs(period, now);
 
-  const { results } = await db(env)
-    .prepare(BOARD_SQL)
-    .bind(difficulty, since, limit)
-    .all();
+  const results = await fetchBoard(env, { difficulty, since, limit, period });
 
-  const entries = (results ?? []).map((r, i) => ({
+  const entries = results.map((r, i) => ({
     rank: i + 1,
     username: r.username,
     ppm: Number(r.ppm),
     // A finished race always has points (the writer computes them from the
-    // same two columns PPM comes from), but a row backfilled before 0009 by a
-    // database one migration behind can still be NULL. Null, not 0 — 0 is a
-    // score a racer can genuinely earn.
+    // same two columns PPM comes from), but the row can still carry NULL: an
+    // unscored row, or every row when the column itself is missing and
+    // `fetchBoard` fell back. Null, not 0 — 0 is a score a racer can
+    // genuinely earn.
     points: r.points == null ? null : Number(r.points),
     played_at: new Date(Number(r.played_at)).toISOString(),
   }));
 
-  return Response.json({
-    difficulty,
-    period,
-    // NULL for the all-time board: it has no start, and sending 1970 would
-    // invite the UI to print it.
-    period_start: period === "all" ? null : new Date(since).toISOString(),
-    generated_at: new Date(now).toISOString(),
-    entries,
-  });
+  return Response.json(
+    {
+      difficulty,
+      period,
+      // NULL for the all-time board: it has no start, and sending 1970 would
+      // invite the UI to print it.
+      period_start: period === "all" ? null : new Date(since).toISOString(),
+      generated_at: new Date(now).toISOString(),
+      entries,
+    },
+    { headers: { "cache-control": CACHE_CONTROL } }
+  );
 }

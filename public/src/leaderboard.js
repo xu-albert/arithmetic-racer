@@ -13,7 +13,7 @@
 // leaderboard.test.js.
 
 import { getLeaderboard } from "./stats-api.js";
-import { fmtPpm, fmtPoints, fmtRelative } from "./race-format.js";
+import { fmtPpm, fmtPoints, fmtRelative, escapeHtml } from "./race-format.js";
 
 // ---------- pure helpers ----------
 
@@ -80,15 +80,6 @@ function rankLabel(rank) {
   if (rank === 2) return "🥈";
   if (rank === 3) return "🥉";
   return String(rank);
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 /**
@@ -182,9 +173,12 @@ export function mountLeaderboard(host, initial = {}) {
   // flip and a board does not change between two clicks; `loaded` also lets a
   // second mount-time refresh skip work the first one already did.
   const cache = new Map();
-  // Guards against a slow response for a board the racer has already tabbed
-  // away from overwriting the board they are looking at now.
-  let currentRequest = 0;
+  // Counts *selections*, not requests. Every load takes a ticket before it
+  // looks at the cache, so a board served instantly from cache still retires
+  // the ticket of a slower board still in flight — otherwise a cached Easy
+  // painted between a Hard request and its response leaves Hard's ticket
+  // current, and Hard's rows land under the Easy tab.
+  let currentSelection = 0;
 
   function syncTabs() {
     for (const btn of host.querySelectorAll("[data-difficulty]")) {
@@ -204,6 +198,7 @@ export function mountLeaderboard(host, initial = {}) {
 
   async function load() {
     syncTabs();
+    const ticket = ++currentSelection;
     const key = boardKey(difficulty, period);
     const cached = cache.get(key);
     if (cached) {
@@ -211,15 +206,14 @@ export function mountLeaderboard(host, initial = {}) {
       return;
     }
 
-    const ticket = ++currentRequest;
     statusEl.textContent = "Loading…";
     try {
       const board = await getLeaderboard({ difficulty, period });
       cache.set(key, board);
-      if (ticket !== currentRequest) return;
+      if (ticket !== currentSelection) return;
       paint(board);
     } catch (err) {
-      if (ticket !== currentRequest) return;
+      if (ticket !== currentSelection) return;
       // Best-effort, like every other read on this screen: the lobby stays
       // usable and the racer is told the board specifically is missing.
       console.warn("[leaderboard] load failed", err);

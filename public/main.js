@@ -242,8 +242,12 @@ if (initialRoomId) {
   setDifficulty('easy');
   // Mounted only on this route: a `?room=` deep link never shows the lobby, so
   // fetching boards there would be a request for a screen nobody will see.
+  //
+  // The board opens on Medium — the tier Find a Match sits on beside it — and
+  // deliberately does not follow `selectedDifficulty`, which is the Solo vs
+  // Bots picker and belongs to a mode that never reaches a board.
   leaderboardHandle = mountLeaderboard(document.getElementById('leaderboard'), {
-    difficulty: selectedDifficulty,
+    difficulty: 'medium',
   });
   showScreen('lobby');
 }

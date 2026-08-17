@@ -10,9 +10,9 @@
 // no test at all. Rows are seeded at exactly the boundary and one millisecond
 // before it, which is the only place an off-by-one can hide.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import { env } from "cloudflare:test";
-import { handleLeaderboard } from "./leaderboard.js";
+import { handleLeaderboard, parseLimit } from "./leaderboard.js";
 import { computePoints, computePpm } from "../race-score.js";
 import { periodStartMs } from "../leaderboard-period.js";
 
@@ -25,6 +25,14 @@ beforeEach(async () => {
 });
 
 let seq = 0;
+
+/** Columns every writer supplies, in the order seedRace binds them. */
+const RACE_COLUMNS = [
+  "id", "user_id", "device_id", "difficulty", "finished", "finish_time_ms",
+  "problems_total", "problems_correct", "problems_attempted",
+  "avg_time_per_problem_ms", "accuracy_pct", "longest_streak",
+  "played_at", "room_id", "suspect", "suspect_reason",
+];
 
 async function seedUser({ id, username }) {
   const now = Date.now();
@@ -40,8 +48,11 @@ async function seedUser({ id, username }) {
 /**
  * Seed one race_results row the way the real writers do. Defaults describe a
  * clean, eligible room race; every test overrides only the field it is about.
+ *
+ * `withPoints: false` writes the pre-0009 column set, for the suite that
+ * rebuilds the table without that column.
  */
-async function seedRace(overrides = {}) {
+async function seedRace(overrides = {}, { withPoints = true } = {}) {
   const r = {
     id: `race-${++seq}`,
     user_id: null,
@@ -68,20 +79,12 @@ async function seedRace(overrides = {}) {
       problems_correct: r.problems_correct,
     });
   }
+  const cols = withPoints ? [...RACE_COLUMNS, "points"] : RACE_COLUMNS;
   await env.DB.prepare(
-    `INSERT INTO race_results (
-       id, user_id, device_id, difficulty, finished, finish_time_ms,
-       problems_total, problems_correct, problems_attempted,
-       avg_time_per_problem_ms, accuracy_pct, longest_streak,
-       played_at, room_id, suspect, suspect_reason, points
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO race_results (${cols.join(", ")})
+     VALUES (${cols.map(() => "?").join(",")})`
   )
-    .bind(
-      r.id, r.user_id, r.device_id, r.difficulty, r.finished, r.finish_time_ms,
-      r.problems_total, r.problems_correct, r.problems_attempted,
-      r.avg_time_per_problem_ms, r.accuracy_pct, r.longest_streak,
-      r.played_at, r.room_id, r.suspect, r.suspect_reason, r.points
-    )
+    .bind(...cols.map((c) => r[c]))
     .run();
   return r;
 }
@@ -363,6 +366,33 @@ describe("limits", () => {
     }
   }
 
+  // The ceiling is asserted on parseLimit directly rather than by seeding 51+
+  // racers: a row-count assertion under the cap passes whatever the cap is (or
+  // if there is none), so it cannot fail when the bound is raised or dropped —
+  // and the bound is what stops a crafted `?limit=` becoming a table scan.
+  describe("parseLimit", () => {
+    it("clamps anything above the ceiling to 50", () => {
+      expect(parseLimit("5000")).toBe(50);
+      expect(parseLimit("51")).toBe(50);
+      expect(parseLimit(String(Number.MAX_SAFE_INTEGER))).toBe(50);
+    });
+
+    it("passes through a size at or under the ceiling", () => {
+      expect(parseLimit("50")).toBe(50);
+      expect(parseLimit("3")).toBe(3);
+      expect(parseLimit("1")).toBe(1);
+    });
+
+    it("falls back to 10 when there is no readable size", () => {
+      expect(parseLimit(null)).toBe(10);
+      expect(parseLimit("")).toBe(10);
+      expect(parseLimit("abc")).toBe(10);
+      expect(parseLimit("0")).toBe(10);
+      expect(parseLimit("-5")).toBe(10);
+      expect(parseLimit("NaN")).toBe(10);
+    });
+  });
+
   it("returns 10 rows by default", async () => {
     await seedRacers(14);
     const { body } = await board();
@@ -376,10 +406,11 @@ describe("limits", () => {
     expect(body.entries).toHaveLength(3);
   });
 
-  it("clamps an oversized limit to the ceiling", async () => {
+  it("serves an oversized limit rather than erroring", async () => {
     await seedRacers(14);
-    const { body } = await board({ limit: 5_000 });
-    expect(body.entries).toHaveLength(14); // all that exist, capped at 50
+    const { res, body } = await board({ limit: 5_000 });
+    expect(res.status).toBe(200);
+    expect(body.entries).toHaveLength(14);
   });
 
   it("falls back to the default on junk, zero, or negative limits", async () => {
@@ -388,6 +419,23 @@ describe("limits", () => {
       const { body } = await board({ limit: bad });
       expect(body.entries).toHaveLength(10);
     }
+  });
+});
+
+// --- caching ---------------------------------------------------------------
+
+describe("cache headers", () => {
+  it("lets a shared cache hold a board briefly, but not a private one", async () => {
+    const { res } = await board();
+    const cc = res.headers.get("cache-control");
+    // Shared cache only: `s-maxage` bounded to the agreed staleness window,
+    // `max-age=0` so a racer's own browser always asks again.
+    const sMaxAge = Number(/s-maxage=(\d+)/.exec(cc)?.[1]);
+    expect(sMaxAge).toBeGreaterThanOrEqual(30);
+    expect(sMaxAge).toBeLessThanOrEqual(60);
+    expect(cc).toMatch(/(^|,\s*)max-age=0(\s*,|$)/);
+    expect(cc).toMatch(/public/);
+    expect(cc).not.toMatch(/private|no-store/);
   });
 });
 
@@ -484,5 +532,111 @@ describe("period windows", () => {
     for (const period of ["all", ...BOUNDED]) {
       expect((await board({ period })).body.entries).toEqual([]);
     }
+  });
+});
+
+// --- a database one migration behind --------------------------------------
+
+// `points` arrives in 0009, and migrations here go on by hand while the Worker
+// deploys from a push — so a build can serve the public lobby against a
+// database that does not have the column. Run against 0008's table shape
+// verbatim: the board must still rank, completely and in the same order,
+// because PPM comes from columns that have been there since 0002.
+describe("without race_results.points (a database at 0008)", () => {
+  const COLUMNS_0008 =
+    "id TEXT PRIMARY KEY, " +
+    `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
+    "device_id TEXT NOT NULL, " +
+    "difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','medium','hard')), " +
+    "finished INTEGER NOT NULL CHECK (finished IN (0,1)), " +
+    "finish_time_ms INTEGER, " +
+    "problems_total INTEGER NOT NULL DEFAULT 20, " +
+    "problems_correct INTEGER NOT NULL, " +
+    "problems_attempted INTEGER NOT NULL, " +
+    "avg_time_per_problem_ms INTEGER NOT NULL, " +
+    "accuracy_pct REAL NOT NULL, " +
+    "longest_streak INTEGER NOT NULL, " +
+    "played_at INTEGER NOT NULL, " +
+    "room_id TEXT, " +
+    "suspect INTEGER NOT NULL DEFAULT 0, " +
+    "suspect_reason TEXT";
+
+  const INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_race_results_user_played ON race_results (user_id, played_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_race_results_anon_device ON race_results (device_id) WHERE user_id IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_race_results_played_at ON race_results (played_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_race_results_room ON race_results (room_id) WHERE room_id IS NOT NULL",
+  ];
+
+  const rebuild = async (columns) => {
+    await env.DB.exec("DROP TABLE IF EXISTS race_results");
+    await env.DB.exec(`CREATE TABLE race_results (${columns})`);
+    for (const sql of INDEXES) await env.DB.exec(sql);
+  };
+
+  beforeAll(() => rebuild(COLUMNS_0008));
+  afterAll(() => rebuild(`${COLUMNS_0008}, points REAL`));
+
+  const seedOld = (overrides) => seedRace(overrides, { withPoints: false });
+
+  it("still ranks by PPM, reporting every points cell as null", async () => {
+    await seedUser({ id: "u1", username: "slow" });
+    await seedUser({ id: "u2", username: "mid" });
+    await seedUser({ id: "u3", username: "fast" });
+    await seedOld({ user_id: "u1", finish_time_ms: 120_000 });
+    await seedOld({ user_id: "u2", finish_time_ms: 60_000 });
+    await seedOld({ user_id: "u3", finish_time_ms: 30_000 });
+
+    const { res, body } = await board();
+    expect(res.status).toBe(200);
+    // Proof the rows really landed in the old shape rather than a migrated one.
+    const [row] = (await env.DB.prepare("SELECT * FROM race_results LIMIT 1").all()).results;
+    expect(row).not.toHaveProperty("points");
+
+    expect(names(body)).toEqual(["fast", "mid", "slow"]);
+    expect(body.entries.map((e) => e.rank)).toEqual([1, 2, 3]);
+    expect(body.entries.map((e) => e.points)).toEqual([null, null, null]);
+    expect(body.entries[0].ppm).toBeCloseTo(40, 6);
+  });
+
+  it("keeps every other eligibility rule while degraded", async () => {
+    await seedUser({ id: "u1", username: "solo" });
+    await seedUser({ id: "u2", username: "grace" });
+    // The excluded race is the fastest, so a rule dropped by the fallback path
+    // would show up at rank 1.
+    await seedOld({ user_id: "u1", room_id: null, finish_time_ms: 10_000 });
+    await seedOld({ user_id: null, finish_time_ms: 12_000 });
+    await seedOld({ user_id: "u2", finish_time_ms: 60_000 });
+
+    const { body } = await board();
+    expect(names(body)).toEqual(["grace"]);
+  });
+
+  it("serves the period boards too, not only all-time", async () => {
+    const start = periodStartMs("day", Date.now());
+    await seedUser({ id: "u1", username: "today" });
+    await seedUser({ id: "u2", username: "yesterday" });
+    await seedOld({ user_id: "u1", played_at: start, finish_time_ms: 60_000 });
+    await seedOld({ user_id: "u2", played_at: start - 1, finish_time_ms: 20_000 });
+
+    expect(names((await board({ period: "day" })).body)).toEqual(["today"]);
+    expect(names((await board({ period: "all" })).body)).toEqual(["yesterday", "today"]);
+  });
+});
+
+describe("database failures other than a missing column", () => {
+  it("propagates rather than silently retrying the degraded query", async () => {
+    const boom = new Error("D1_ERROR: no such table: race_results");
+    const failingEnv = {
+      DB: {
+        prepare: () => ({ bind: () => ({ all: async () => { throw boom; } }) }),
+      },
+    };
+    await expect(
+      handleLeaderboard(
+        new Request("https://x.test/api/leaderboard?difficulty=medium"),
+        failingEnv
+      )
+    ).rejects.toThrow(/no such table/);
   });
 });

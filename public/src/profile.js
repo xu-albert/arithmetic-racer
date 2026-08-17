@@ -13,8 +13,10 @@
 import { getMe, setUsername } from "./stats-api.js";
 import { validateUsernameSync } from "./username-validator-client.js";
 // PPM / points / "3d ago" must read the same here and on the lobby
-// leaderboard, so they live in one module rather than two copies.
-import { fmtPpm, fmtPoints, fmtRelative } from "./race-format.js";
+// leaderboard, so they live in one module rather than two copies. The escaper
+// is there for the same reason, and matters more: both screens interpolate a
+// username off the wire into innerHTML.
+import { fmtPpm, fmtPoints, fmtRelative, escapeHtml } from "./race-format.js";
 
 // ---------- pure helpers ----------
 
@@ -467,17 +469,6 @@ export function mountProfile(host) {
       refresh();
     }
   });
-}
-
-// ---------- helpers ----------
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 // ---------- test exports ----------
