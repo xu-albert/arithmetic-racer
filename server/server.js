@@ -63,9 +63,11 @@ export default {
       return handleRecentFinishes(request, env);
     }
     // Public read-only boards — no session required; the response carries only
-    // usernames people chose to publish by signing in.
+    // usernames people chose to publish by signing in. The only handler here
+    // that takes `ctx`: it stores each board in the Workers cache, and the
+    // put has to outlive the response.
     if (pathname === "/api/leaderboard" && request.method === "GET") {
-      return handleLeaderboard(request, env);
+      return handleLeaderboard(request, env, ctx);
     }
 
     if (pathname === "/api/contact" && request.method === "POST") {

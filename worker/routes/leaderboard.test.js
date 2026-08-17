@@ -11,18 +11,36 @@
 // before it, which is the only place an off-by-one can hide.
 
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
-import { env } from "cloudflare:test";
+import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { handleLeaderboard, parseLimit } from "./leaderboard.js";
 import { computePoints, computePpm } from "../race-score.js";
 import { periodStartMs } from "../leaderboard-period.js";
 
 // --- helpers ---------------------------------------------------------------
 
+// Unlike D1, `caches.default` is not rolled back between tests in this pool —
+// one board stored here outlives the test that stored it and would answer the
+// next test's request against data that test never seeded. The host is part of
+// the cache key, so each test gets its own: two calls *inside* a test still
+// share an entry exactly as two requests in production would, and no test can
+// see another's. Every request built here goes through `boardUrl`.
+let originSeq = 0;
+let origin = "";
+
 beforeEach(async () => {
+  origin = `https://board-${++originSeq}.test`;
   // race_results.user_id has an FK to user.id; clear the child table first.
   await env.DB.exec("DELETE FROM race_results");
   await env.DB.exec(`DELETE FROM "user"`);
 });
+
+function boardUrl({ difficulty, period, limit } = {}) {
+  const u = new URL("/api/leaderboard", origin);
+  if (difficulty != null) u.searchParams.set("difficulty", difficulty);
+  if (period != null) u.searchParams.set("period", period);
+  if (limit != null) u.searchParams.set("limit", String(limit));
+  return u.toString();
+}
 
 let seq = 0;
 
@@ -89,14 +107,30 @@ async function seedRace(overrides = {}, { withPoints = true } = {}) {
   return r;
 }
 
-async function board({ difficulty = "medium", period = "all", limit } = {}) {
-  const params = new URLSearchParams({ difficulty, period });
-  if (limit != null) params.set("limit", String(limit));
+/**
+ * Call the handler the way the Worker does — with an execution context, so the
+ * cache write it defers actually happens before the assertion looks.
+ * `dbEnv` is a seam for the suites that need to watch or break D1.
+ */
+async function board({ difficulty = "medium", period = "all", limit, dbEnv = env } = {}) {
+  const ctx = createExecutionContext();
   const res = await handleLeaderboard(
-    new Request(`https://x.test/api/leaderboard?${params}`),
-    env
+    new Request(boardUrl({ difficulty, period, limit })),
+    dbEnv,
+    ctx
   );
+  await waitOnExecutionContext(ctx);
   return { res, body: await res.json() };
+}
+
+/** An `env` whose D1 counts how many statements were prepared through it. */
+function countingEnv() {
+  let prepares = 0;
+  const real = env.DB;
+  return {
+    env: { ...env, DB: { prepare: (sql) => (prepares++, real.prepare(sql)) } },
+    prepares: () => prepares,
+  };
 }
 
 /** Racers on a board, in rank order. */
@@ -109,7 +143,7 @@ function names(body) {
 describe("request validation", () => {
   it("400s without a difficulty — there is no combined board", async () => {
     const res = await handleLeaderboard(
-      new Request("https://x.test/api/leaderboard"),
+      new Request(boardUrl()),
       env
     );
     expect(res.status).toBe(400);
@@ -130,7 +164,7 @@ describe("request validation", () => {
 
   it("defaults to the all-time board when period is omitted", async () => {
     const res = await handleLeaderboard(
-      new Request("https://x.test/api/leaderboard?difficulty=easy"),
+      new Request(boardUrl({ difficulty: "easy" })),
       env
     );
     const body = await res.json();
@@ -424,7 +458,7 @@ describe("limits", () => {
 
 // --- caching ---------------------------------------------------------------
 
-describe("cache headers", () => {
+describe("caching", () => {
   it("lets a shared cache hold a board briefly, but not a private one", async () => {
     const { res } = await board();
     const cc = res.headers.get("cache-control");
@@ -436,6 +470,90 @@ describe("cache headers", () => {
     expect(cc).toMatch(/(^|,\s*)max-age=0(\s*,|$)/);
     expect(cc).toMatch(/public/);
     expect(cc).not.toMatch(/private|no-store/);
+  });
+
+  it("serves a repeat of the same board without touching D1 again", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1", finish_time_ms: 30_000 });
+
+    const spy = countingEnv();
+    const first = await board({ dbEnv: spy.env });
+    const second = await board({ dbEnv: spy.env });
+
+    expect(spy.prepares()).toBe(1);
+    expect(second.body).toEqual(first.body);
+    expect(names(second.body)).toEqual(["ada"]);
+  });
+
+  it("collapses junk and clamped limits onto the entry the default made", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1", finish_time_ms: 30_000 });
+
+    const spy = countingEnv();
+    await board({ dbEnv: spy.env });
+    // Every one of these normalizes to the default 10 that the first call
+    // already stored, so none of them may reach D1.
+    for (const same of ["abc", "0", "-5", "10", ""]) {
+      const { body } = await board({ dbEnv: spy.env, limit: same });
+      expect(names(body)).toEqual(["ada"]);
+    }
+    expect(spy.prepares()).toBe(1);
+
+    // A limit that really is a different board still costs a read.
+    await board({ dbEnv: spy.env, limit: 3 });
+    expect(spy.prepares()).toBe(2);
+  });
+
+  it("keys each difficulty and period separately — a cached board never answers for another", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedUser({ id: "u2", username: "grace" });
+    await seedRace({ user_id: "u1", difficulty: "easy", finish_time_ms: 30_000 });
+    await seedRace({ user_id: "u2", difficulty: "hard", finish_time_ms: 30_000 });
+
+    const spy = countingEnv();
+    expect(names((await board({ dbEnv: spy.env, difficulty: "easy" })).body)).toEqual(["ada"]);
+    expect(names((await board({ dbEnv: spy.env, difficulty: "hard" })).body)).toEqual(["grace"]);
+    expect(names((await board({ dbEnv: spy.env, difficulty: "easy", period: "day" })).body)).toEqual(["ada"]);
+    expect((await board({ dbEnv: spy.env, difficulty: "medium" })).body.entries).toEqual([]);
+    expect(spy.prepares()).toBe(4);
+
+    // ...and the repeats still come back from the cache.
+    expect(names((await board({ dbEnv: spy.env, difficulty: "easy" })).body)).toEqual(["ada"]);
+    expect(names((await board({ dbEnv: spy.env, difficulty: "hard" })).body)).toEqual(["grace"]);
+    expect(spy.prepares()).toBe(4);
+  });
+
+  it("never stores a rejected request", async () => {
+    const spy = countingEnv();
+    const bad = await board({ dbEnv: spy.env, difficulty: "expert" });
+    expect(bad.res.status).toBe(400);
+    expect(spy.prepares()).toBe(0);
+
+    // The 400 must not have poisoned anything: a valid board still queries.
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1" });
+    expect(names((await board({ dbEnv: spy.env })).body)).toEqual(["ada"]);
+    expect(spy.prepares()).toBe(1);
+  });
+
+  it("serves the board without an execution context, and stores nothing", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1", finish_time_ms: 30_000 });
+
+    const spy = countingEnv();
+    const call = async () => {
+      const res = await handleLeaderboard(
+        new Request(boardUrl({ difficulty: "medium" })),
+        spy.env
+      );
+      return res.json();
+    };
+
+    expect(names(await call())).toEqual(["ada"]);
+    expect(names(await call())).toEqual(["ada"]);
+    // No ctx, no place to defer the write to — so every call is a fresh read
+    // rather than a silently dropped or response-delaying put.
+    expect(spy.prepares()).toBe(2);
   });
 });
 
@@ -476,14 +594,15 @@ describe("period windows", () => {
     expect(names(all.body)).toEqual(["outside", "inside"]);
   });
 
-  it("widens as the window widens: yesterday's race is out of the day board and in the year board", async () => {
+  it("widens as the window widens: yesterday's race is out of the day board and on the all-time board", async () => {
     const now = Date.now();
     const dayStart = periodStartMs("day", now);
-    const yearStart = periodStartMs("year", now);
-    // Midway through the previous UTC day — inside the year, outside the day.
+    // Midway through the previous UTC day. Widening is asserted against
+    // all-time rather than the year board on purpose: on Jan 1 UTC the year
+    // starts at the same instant as the day, so "yesterday" is last year and a
+    // day-vs-year comparison is a test that fails once a calendar. All-time
+    // contains every instant, on every date, in every timezone.
     const yesterday = dayStart - 43_200_000;
-    // Guard: only meaningful if that instant is still inside the current year.
-    expect(yesterday).toBeGreaterThanOrEqual(yearStart);
 
     await seedUser({ id: "u1", username: "today" });
     await seedUser({ id: "u2", username: "yesterday" });
@@ -491,7 +610,7 @@ describe("period windows", () => {
     await seedRace({ user_id: "u2", played_at: yesterday, finish_time_ms: 30_000 });
 
     expect(names((await board({ period: "day" })).body)).toEqual(["today"]);
-    expect(names((await board({ period: "year" })).body)).toEqual(["yesterday", "today"]);
+    expect(names((await board({ period: "all" })).body)).toEqual(["yesterday", "today"]);
   });
 
   it("picks each racer's best race *within* the window, not their best ever", async () => {
@@ -627,16 +746,25 @@ describe("without race_results.points (a database at 0008)", () => {
 describe("database failures other than a missing column", () => {
   it("propagates rather than silently retrying the degraded query", async () => {
     const boom = new Error("D1_ERROR: no such table: race_results");
+    let prepares = 0;
     const failingEnv = {
       DB: {
-        prepare: () => ({ bind: () => ({ all: async () => { throw boom; } }) }),
+        prepare: () => {
+          prepares++;
+          return { bind: () => ({ all: async () => { throw boom; } }) };
+        },
       },
     };
     await expect(
       handleLeaderboard(
-        new Request("https://x.test/api/leaderboard?difficulty=medium"),
+        new Request(boardUrl({ difficulty: "medium" })),
         failingEnv
       )
     ).rejects.toThrow(/no such table/);
+    // The count is the half of this the rejection cannot prove: the stub
+    // throws the same error every time, so a fallback that ran anyway would
+    // still reject with it. Exactly one attempt means the missing-column
+    // guard actually gated the retry.
+    expect(prepares).toBe(1);
   });
 });

@@ -47,25 +47,45 @@ const DEFAULT_LIMIT = 10;
 
 /**
  * Hard ceiling on rows. D1 bills by rows read and this endpoint is public and
- * uncached, so the LIMIT is not a UI preference — it is the bound that keeps a
- * crafted `?limit=` from turning a page load into a table scan's worth of
- * output.
+ * unauthenticated. The cache below blunts a repeat of the *same* board, but a
+ * caller who varies the query is asking for fresh reads every time, so the
+ * LIMIT is not a UI preference — it is the bound that keeps a crafted
+ * `?limit=` from turning a page load into a table scan's worth of output.
  */
 const MAX_LIMIT = 50;
 
 /**
- * How long a shared cache may serve one board. The response is byte-identical
- * for every caller (no session is read and no per-caller field is emitted), so
- * a burst of lobby mounts and tab flips can collapse onto one D1 read.
+ * How long one stored board stays servable. This is not decoration for a CDN
+ * edge — nothing on a workers.dev subdomain would honour it — it is the TTL
+ * the Workers Cache API reads off the response `caches.default.put()` stores,
+ * so it is what actually decides when the next request re-reads D1.
  *
  * 30s rather than the longer end of the useful range: a racer who has just set
  * a mark reloads the lobby to look for themselves, and half a minute is about
  * the longest that reads as "the board hasn't caught up" rather than "the
- * board is wrong". `max-age=0` keeps the private cache out of it — only the
- * shared cache absorbs repeats, so one racer's stale copy never outlives the
- * edge's.
+ * board is wrong". `max-age=0` is for the browser, which has no business
+ * holding a public board privately — every reload asks the Worker, and the
+ * Worker answers from its own cache until the 30s is up.
  */
 const CACHE_CONTROL = "public, max-age=0, s-maxage=30";
+
+/**
+ * The stored identity of one board.
+ *
+ * Built from the *validated, normalized* parameters rather than the request
+ * URL, because the URL carries noise the answer does not depend on: `?limit=`
+ * absent, `?limit=abc`, `?limit=0` and `?limit=5000` are three defaults and a
+ * clamp, i.e. two distinct boards, not four. Keying on the raw URL would let
+ * any caller walk straight past the cache by varying a parameter that changes
+ * nothing.
+ */
+function boardCacheKey(url, { difficulty, period, limit }) {
+  const key = new URL("/api/leaderboard", url.origin);
+  key.searchParams.set("difficulty", difficulty);
+  key.searchParams.set("period", period);
+  key.searchParams.set("limit", String(limit));
+  return new Request(key.toString(), { method: "GET" });
+}
 
 /**
  * One row per racer — their single best race in the window — rather than one
@@ -145,10 +165,28 @@ async function fetchBoard(env, { difficulty, since, limit, period }) {
     return results ?? [];
   } catch (err) {
     if (!isMissingColumnError(err)) throw err;
-    logWarn(KINDS.LEADERBOARD_SCHEMA_BEHIND, err, { difficulty, period });
+    warnSchemaBehind(err, { difficulty, period });
     const { results } = await run(BOARD_SQL_WITHOUT_POINTS);
     return results ?? [];
   }
+}
+
+/**
+ * Whether the missing-column warning has already been emitted by this isolate.
+ *
+ * The thing worth knowing is that *the deployment* is ahead of the database,
+ * which is true of every request or none — so one line says it, and a second
+ * line says nothing new. Without the latch this is a warn per board read on
+ * the lobby's first screen, at `head_sampling_rate: 1`, for as long as the
+ * migration is unapplied. (The response cache thins those reads out but does
+ * not bound them: every isolate, board and 30s window is another miss.)
+ */
+let warnedSchemaBehind = false;
+
+function warnSchemaBehind(err, context) {
+  if (warnedSchemaBehind) return;
+  warnedSchemaBehind = true;
+  logWarn(KINDS.LEADERBOARD_SCHEMA_BEHIND, err, context);
 }
 
 /**
@@ -163,11 +201,21 @@ export function parseLimit(raw) {
   return Math.min(n, MAX_LIMIT);
 }
 
-export async function handleLeaderboard(request, env) {
+/**
+ * @param {Request} request
+ * @param {object} env
+ * @param {{waitUntil?: (p: Promise<unknown>) => void}} [ctx] Worker execution
+ *   context. Optional: without one the board is still served, just never
+ *   stored, so the handler stays callable on its own.
+ */
+export async function handleLeaderboard(request, env, ctx) {
   const url = new URL(request.url);
   const difficulty = url.searchParams.get("difficulty") ?? "";
   const period = url.searchParams.get("period") ?? "all";
 
+  // Both rejections return before the cache is touched: a 400 is a statement
+  // about the request, not a board, and storing one would be storing garbage
+  // under a key no valid request can produce anyway.
   if (!DIFFICULTIES.has(difficulty)) {
     return Response.json({ error: "invalid_difficulty" }, { status: 400 });
   }
@@ -176,6 +224,11 @@ export async function handleLeaderboard(request, env) {
   }
 
   const limit = parseLimit(url.searchParams.get("limit"));
+  const cache = caches.default;
+  const cacheKey = boardCacheKey(url, { difficulty, period, limit });
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
   const now = Date.now();
   const since = periodStartMs(period, now);
 
@@ -194,7 +247,7 @@ export async function handleLeaderboard(request, env) {
     played_at: new Date(Number(r.played_at)).toISOString(),
   }));
 
-  return Response.json(
+  const response = Response.json(
     {
       difficulty,
       period,
@@ -206,4 +259,9 @@ export async function handleLeaderboard(request, env) {
     },
     { headers: { "cache-control": CACHE_CONTROL } }
   );
+
+  // Stored behind waitUntil so the racer waiting on this board never pays for
+  // the write, and cloned because put() consumes the body it is handed.
+  if (ctx?.waitUntil) ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 }
