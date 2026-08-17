@@ -1,5 +1,6 @@
 import { createRoomClient } from './room-client.js';
 import { canEditConfig } from './room-config-rules.js';
+import { createExpiryLatch } from './room-expiry.js';
 
 const DIFFS = ['easy', 'medium', 'hard'];
 
@@ -8,11 +9,12 @@ const DIFFS = ['easy', 'medium', 'hard'];
  * @param {string} opts.roomId
  * @param {object} opts.screens
  * @param {function} opts.onRaceStart
+ * @param {function} [opts.onRoomExpired] - the room wound down; nothing to join
  * @param {string} [opts.mode]       - 'public' activates public-mode UI
  * @param {string} [opts.difficulty] - forwarded to createRoomClient for public mode
  * @param {string} [opts.deviceId]   - forwarded to createRoomClient for public mode
  */
-export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, deviceId }) {
+export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode, difficulty, deviceId }) {
   const isPublic = mode === 'public';
 
   const roomTitle = document.getElementById('room-title');
@@ -330,7 +332,15 @@ export function attachLobby({ roomId, screens, onRaceStart, mode, difficulty, de
   }
 
   // ----- subscribe -----
+  const handleExpiry = createExpiryLatch({
+    close: () => client.close(),
+    onExpired: onRoomExpired,
+  });
+
   client.on((msg) => {
+    // Checked ahead of everything else — an expired room has no state worth
+    // rendering, and the server may deliver this on the very first message.
+    if (handleExpiry(msg)) return;
     if (msg.type === 'state') {
       currentState = msg.state;
       youAre = msg.youAre;

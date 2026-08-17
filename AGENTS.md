@@ -36,6 +36,39 @@ pushes `publicState`), so every new broadcast must go through `publicPlayer()`.
 `server/room-identity.test.js` and the hygiene tests in `server/public-room.test.js` fail
 if a secret reaches the wire.
 
+## Room lifecycle: private rooms wind down, public ones do not
+
+Every timer a room owns shares one DO alarm slot, coalesced by
+`scheduleNextAlarm()` — add a deadline there or it never fires. Three now run
+side by side, and they are deliberately different mechanisms:
+
+- **Reconnect grace** (30s) and **empty-room cleanup** (5 min) — unchanged, and
+  the cleanup still re-mints state, which is what resets `nextPid`.
+- **Idle winddown** (30 min, private only) — `PRIVATE_ROOM_IDLE_MS`. Driven by
+  `state.lastActivityAt`, which `touchActivity()` bumps on connect, close, and
+  any *recognized* client message. Alarm ticks are not activity, so a race
+  nobody is answering is idle. It ends in `expireRoom()`: state becomes an
+  `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped, and everyone attached
+  gets `room-expired` and a closed socket.
+
+Two traps this arrangement sets:
+
+- **The alarm time is durable; the timestamp behind it is not.** Bumping
+  `lastActivityAt` without persisting means a DO evicted before its alarm wakes
+  with a stale clock and winds a live room down early. `flushActivity()` exists
+  for the handlers that reply without persisting; keep new ones behind it.
+- **`PublicRaceRoom.expiresWhenIdle()` returns false**, and everything winddown
+  reads that hook. Quickmatch rooms are single-shot and unlinkable — expiring
+  one would strand a player on a screen whose only exit is a room they cannot
+  reach. Gate any new lifecycle behavior on the same hook.
+
+The tombstone answers for the room name for `EXPIRED_ROOM_TTL_MS`, because room
+ids are three words from a ~13k-combination list and a new room really can draw
+an expired one's name. `POST /api/rooms` clears it via the `claimRoomName()` RPC
+— which runs *before* `onStart()`, so it reads storage itself rather than
+trusting `this.state`. Coverage: `server/room-winddown.test.js` (server) and
+`public/src/room-expiry.test.js` (the client contract in `room-expiry.js`).
+
 ## Dependencies and the lockfile
 
 The Cloudflare Workers build runs `npm ci`, which hard-fails unless `package-lock.json`

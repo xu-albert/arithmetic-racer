@@ -18,6 +18,7 @@ import { handleMatchmakeJoin } from "../worker/routes/matchmake.js";
 import { handleAdminIndex, handleAdminUser } from "../worker/routes/admin.js";
 import { handleContact } from "../worker/routes/contact.js";
 import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
+import { logError, KINDS } from "../worker/logger.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
 
@@ -80,6 +81,15 @@ export default {
     // Phase 6 — private multiplayer rooms
     if (request.method === "POST" && pathname === "/api/rooms") {
       const roomId = generateRoomId();
+      // Creating a room is the one moment we know this name is being claimed
+      // anew, so clear any expired-room tombstone sitting on it — otherwise
+      // the creator opens their brand-new room onto the "room expired" screen.
+      // Best-effort: a failure here costs a confusing screen, not the room.
+      try {
+        await env.RaceRoom.get(env.RaceRoom.idFromName(roomId)).claimRoomName();
+      } catch (e) {
+        logError(KINDS.ROOM_CLAIM_FAILED, e, { roomId });
+      }
       return Response.json({ roomId });
     }
 

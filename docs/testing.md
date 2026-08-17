@@ -56,7 +56,11 @@ For browser tests open `http://localhost:8787` in two different browsers (or one
 | 12 | Slower player completes their last problem | Both see the results screen with rankings sorted by `finishMs`. |
 | 13 | Creator clicks **Race Again** (results / lobby-room) | Both return to lobby in state `lobby`; new problem sequence generated on next Start. |
 | 14 | Hard-refresh one tab mid-race | Player rejoins automatically with the same `playerId`; score, finishMs, dropped state all preserved. |
-| 15 | Close last tab, wait 5 minutes, revisit the URL | Treated as a brand-new empty room (state was wiped by the idle-cleanup alarm). |
+| 15 | Close last tab, wait 5 minutes, revisit the URL | Treated as a brand-new empty room (state was wiped by the idle-cleanup alarm). The 30-minute idle clock keeps running underneath — the reset does not restart it. |
+| 15b | Leave a private room untouched past its idle window, then look at the open tab | Both tabs land on the **Room expired** screen. Fastest way to see it without waiting 30 minutes: drop `PRIVATE_ROOM_IDLE_MS` in `server/room.js` to ~30s against `wrangler dev`. |
+| 15c | From that screen, click **Back to Home** / **Create a New Room** | Home clears `?room=` from the URL; Create navigates to a fresh `?room=<slug>` that opens as a working lobby (not "expired" again). |
+| 15d | Revisit the expired room's URL in a new tab | Straight to **Room expired** — no lobby, no spinner, and the socket does not sit there reconnecting. |
+| 15e | Quick Match a room, then leave it idle for the same window | Unaffected: public rooms never show the expired screen. |
 | 16 | Visit `/` with no `?room=` param | Quickplay lobby appears — no regression from multiplayer changes. |
 
 ## Things to watch for during regression sweeps

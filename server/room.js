@@ -2,6 +2,7 @@ import { Server } from 'partyserver';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
 import { isConfigurableState } from '../public/src/room-config-rules.js';
+import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE } from '../public/src/room-expiry.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
 import { containsProfanity } from '../worker/username-validator.js';
 import { logError, KINDS } from '../worker/logger.js';
@@ -13,6 +14,42 @@ export const COUNTDOWN_SECONDS = 3;
 export const IDLE_CLEANUP_MS = 5 * 60 * 1000;
 export const RECONNECT_GRACE_MS = 30 * 1000;
 export const ROOM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// A private room that sees no activity for this long winds down: its state is
+// replaced by a tombstone, its alarm is cleared, and everyone still attached is
+// sent to the "room expired" screen. "Activity" is any client touching the
+// room — a socket connecting or closing, or any recognized room message — so
+// both an empty room and a room full of AFK tabs qualify. Race *ticks* are not
+// activity; a race nobody is answering is idle by this definition.
+export const PRIVATE_ROOM_IDLE_MS = 30 * 60 * 1000;
+
+// How long the tombstone answers for the room name before it is reusable.
+// Room ids come from a 13k-combination word list, so holding one forever
+// would eventually stamp "expired" on a brand-new room; a day is long enough
+// that a stale invite link explains itself.
+export const EXPIRED_ROOM_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Public wire payload for a wound-down room. Sent to anyone attached when the
+// winddown happens, and to anyone who connects to the tombstone afterwards.
+export function expiredMessage(roomId) {
+  return JSON.stringify({ type: ROOM_EXPIRED_TYPE, reason: 'idle', roomId });
+}
+
+// Message types the room acts on. Only these count as activity for the idle
+// winddown — the set is kept next to the dispatch switch it mirrors.
+const HANDLED_MESSAGE_TYPES = new Set([
+  'hello', 'set-handle', 'set-config', 'start-race', 'answer', 'quit', 'rematch',
+]);
+
+function closeQuietly(connection, reason) {
+  // The socket may already be gone (hibernated peer, half-open close); a throw
+  // here would abort the winddown for every other connection.
+  try {
+    connection.close(1000, reason);
+  } catch {
+    /* already closed */
+  }
+}
 
 export const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const MAX_HANDLE_LEN = 24;
@@ -37,6 +74,9 @@ export function freshState(id) {
     countdownN: null,
     countdownAt: null,
     idleCleanupAt: null,
+    // Drives the private-room idle winddown. Bumped by touchActivity(); see
+    // PRIVATE_ROOM_IDLE_MS for what counts as activity.
+    lastActivityAt: Date.now(),
     // Counter behind the ephemeral broadcast ids handed out by nextBroadcastId.
     nextPid: 1,
     disconnectDeadlines: {}, // broadcast id -> deadline ms (Task 9 reconnection grace)
@@ -158,12 +198,27 @@ export class RaceRoom extends Server {
 
   state = null;
 
+  // Mirror of the last lastActivityAt value written to storage. In-memory and
+  // deliberately unpersisted: on a cold start it is null, so the first flush
+  // writes, which is the safe direction.
+  persistedActivityAt = null;
+
   // In-memory, per-instance. Not persisted and not shared across rooms: a
   // flood only ever needs to be stopped in the room receiving it.
   socketLimiter = createSocketLimiter();
 
   freshState(id) {
     return freshState(id);
+  }
+
+  /**
+   * Hook: true for room types that wind down after PRIVATE_ROOM_IDLE_MS of
+   * silence. PublicRaceRoom overrides this to false — quickmatch rooms are
+   * single-shot and already reclaimed by the auto-start / idle-cleanup path,
+   * and an "expired" screen has no meaning for a room nobody holds a link to.
+   */
+  expiresWhenIdle() {
+    return true;
   }
 
   async onStart() {
@@ -174,11 +229,37 @@ export class RaceRoom extends Server {
     // hibernated across that deploy holds the pre-migration id in its
     // connection state and has to `hello` again to act; accepted, since the
     // alternative is leaving the secret on the wire for the room's lifetime.
-    const migrated = stored ? adoptBroadcastIds(this.state) : false;
+    let migrated = stored ? adoptBroadcastIds(this.state) : false;
+
+    // The tombstone only answers for EXPIRED_ROOM_TTL_MS; past that the name
+    // is free again and this is an ordinary empty room.
+    if (this.state.state === EXPIRED_ROOM_STATE
+      && Date.now() - (this.state.expiredAt ?? 0) > EXPIRED_ROOM_TTL_MS) {
+      this.state = this.freshState(this.name);
+      migrated = true;
+    }
+
+    // A room persisted before the winddown shipped has no activity clock.
+    // Start it now rather than deriving one from createdAt, which would expire
+    // a room mid-race the first time it reloads after the deploy.
+    if (this.expiresWhenIdle() && this.state.state !== EXPIRED_ROOM_STATE && this.state.lastActivityAt == null) {
+      this.state.lastActivityAt = Date.now();
+      migrated = true;
+    }
+
     if (!stored || migrated) await this.persist();
   }
 
   async onConnect(connection, ctx) {
+    // The room wound down; there is nothing to join. Say so explicitly and
+    // close, so the client shows the expired screen instead of sitting on a
+    // socket that will never carry a lobby.
+    if (this.state.state === EXPIRED_ROOM_STATE) {
+      connection.send(expiredMessage(this.name));
+      closeQuietly(connection, 'room expired');
+      return;
+    }
+
     // Capture user_id from the upgrade-request header set by the Worker
     // entry. Client-supplied values are stripped/overwritten there, so this
     // is trustworthy. Null for anon users.
@@ -187,6 +268,12 @@ export class RaceRoom extends Server {
 
     // Don't add player yet — wait for `hello`.
     connection.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre: null }));
+
+    // Someone opening the page is activity: push the winddown out and make
+    // sure an alarm exists to enforce it.
+    this.touchActivity();
+    await this.flushActivity();
+    await this.scheduleNextAlarm();
   }
 
   async onMessage(connection, raw) {
@@ -204,19 +291,40 @@ export class RaceRoom extends Server {
     }
     if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
 
+    // A socket that survived the winddown (or an old client that reconnected
+    // into the tombstone) gets the same answer as a fresh connection.
+    if (this.state.state === EXPIRED_ROOM_STATE) {
+      connection.send(expiredMessage(this.name));
+      closeQuietly(connection, 'room expired');
+      return;
+    }
+
+    if (!HANDLED_MESSAGE_TYPES.has(msg.type)) return;
+
+    // Recorded before dispatch so whatever the handler persists carries the
+    // new timestamp; unrecognized types deliberately do not count, or a client
+    // could hold a room open forever with junk.
+    this.touchActivity();
+
     try {
       switch (msg.type) {
-        case 'hello': return await this.handleHello(connection, msg);
-        case 'set-handle': return await this.handleSetHandle(connection, msg);
-        case 'set-config': return await this.handleSetConfig(connection, msg);
-        case 'start-race': return await this.handleStartRace(connection);
-        case 'answer': return await this.handleAnswer(connection, msg);
-        case 'quit': return await this.handleQuit(connection);
-        case 'rematch': return await this.handleRematch(connection);
+        case 'hello': await this.handleHello(connection, msg); break;
+        case 'set-handle': await this.handleSetHandle(connection, msg); break;
+        case 'set-config': await this.handleSetConfig(connection, msg); break;
+        case 'start-race': await this.handleStartRace(connection); break;
+        case 'answer': await this.handleAnswer(connection, msg); break;
+        case 'quit': await this.handleQuit(connection); break;
+        case 'rematch': await this.handleRematch(connection); break;
       }
     } catch (e) {
       logError(KINDS.ROOM_MESSAGE, e, { roomId: this.name, msgType: msg.type });
     }
+
+    // Handlers reschedule for their own deadlines, but the ones that only
+    // reply with an error (or a wrong answer) do not — and the winddown clock
+    // just moved for all of them.
+    await this.flushActivity();
+    await this.scheduleNextAlarm();
   }
 
   async onClose(connection) {
@@ -225,29 +333,42 @@ export class RaceRoom extends Server {
     // socket it has ever seen.
     this.socketLimiter.forget(connection.id);
 
+    // A tab closing is the last thing a client does in this room, and it is
+    // where the idle clock for an emptying room starts.
+    this.touchActivity();
+
     // Resolved through playerFor, not by broadcast id alone: a socket whose
     // seat is gone must not open a grace window against whoever occupies that
     // id now — that would evict a live player 30s later.
     const player = this.playerFor(connection);
-    if (!player) return;
 
     // The secret alone does not make this close the seat's departure: a later
     // socket presenting the same racerId (second tab, or an auto-reconnect that
     // beat this close) took the seat over and is still live. Grace it and
     // onAlarm would evict a connected player 30s later.
-    if (!ownsSeat(player, connection)) return;
-
-    // Schedule a 30s reconnection grace (Task 9). If a fresh hello presenting
-    // this seat's racerId arrives within the window, the disconnect is cancelled.
-    const deadline = Date.now() + RECONNECT_GRACE_MS;
-    this.state.disconnectDeadlines[player.id] = deadline;
-    await this.persist();
+    if (player && ownsSeat(player, connection)) {
+      // Schedule a 30s reconnection grace (Task 9). If a fresh hello presenting
+      // this seat's racerId arrives within the window, the disconnect is cancelled.
+      this.state.disconnectDeadlines[player.id] = Date.now() + RECONNECT_GRACE_MS;
+      await this.persist();
+    } else {
+      // No grace window to open, but the winddown clock still moved.
+      await this.flushActivity();
+    }
     await this.scheduleNextAlarm();
   }
 
   async onAlarm() {
     const now = Date.now();
     let mutated = false;
+
+    // Idle winddown comes first: nothing below is worth doing in a room that
+    // is about to stop existing.
+    const expiryAt = this.idleExpiryAt();
+    if (expiryAt != null && expiryAt <= now) {
+      await this.expireRoom(now);
+      return;
+    }
 
     // Reconnection-grace expirations.
     for (const [pid, dl] of Object.entries(this.state.disconnectDeadlines)) {
@@ -283,8 +404,18 @@ export class RaceRoom extends Server {
 
     // Idle cleanup.
     if (this.state.idleCleanupAt != null && this.state.idleCleanupAt <= now && this.state.players.length === 0) {
-      await this.ctx.storage.delete('state');
+      const idleSince = this.state.lastActivityAt;
       this.state = this.freshState(this.name);
+      if (this.expiresWhenIdle()) {
+        // The room is reborn empty, not active: keep measuring the winddown
+        // from the last real activity, or this reset would silently hand it a
+        // fresh 30 minutes every time it emptied out.
+        this.state.lastActivityAt = idleSince ?? now;
+        await this.persist();
+        await this.scheduleNextAlarm();
+        return;
+      }
+      await this.ctx.storage.delete('state');
       // Don't broadcast; nobody's listening.
       return;
     }
@@ -655,6 +786,81 @@ export class RaceRoom extends Server {
 
   async persist() {
     await this.ctx.storage.put('state', this.state);
+    // What the durable copy of the idle clock now says. flushActivity() reads
+    // this to skip a redundant write when a handler already persisted.
+    this.persistedActivityAt = this.state.lastActivityAt ?? null;
+  }
+
+  // ---------- idle winddown ----------
+
+  /** Record that a client touched this room. In-memory; see flushActivity. */
+  touchActivity() {
+    if (!this.expiresWhenIdle()) return;
+    if (this.state.state === EXPIRED_ROOM_STATE) return;
+    this.state.lastActivityAt = Date.now();
+  }
+
+  /**
+   * Make sure the bumped clock reached storage. The alarm time is durable but
+   * the timestamp behind it is not, so a DO evicted between activity and its
+   * alarm would wake with a stale clock and wind the room down early.
+   */
+  async flushActivity() {
+    if (!this.expiresWhenIdle()) return;
+    if (this.state.lastActivityAt === this.persistedActivityAt) return;
+    await this.persist();
+  }
+
+  /** When this room winds down if nothing else happens, or null if it never does. */
+  idleExpiryAt() {
+    if (!this.expiresWhenIdle()) return null;
+    if (this.state.state === EXPIRED_ROOM_STATE) return null;
+    const since = this.state.lastActivityAt ?? this.state.createdAt;
+    if (since == null) return null;
+    return since + PRIVATE_ROOM_IDLE_MS;
+  }
+
+  /**
+   * Wind the room down: tell everyone still attached, replace the state with a
+   * tombstone, drop the alarm. With no alarm, no players and no live sockets,
+   * the DO goes dormant and stops costing anything until someone opens the
+   * link again — and when they do, the tombstone answers "expired" instead of
+   * quietly reviving the room under them.
+   */
+  async expireRoom(now = Date.now()) {
+    this.broadcast(expiredMessage(this.name));
+    this.state = {
+      ...this.freshState(this.name),
+      state: EXPIRED_ROOM_STATE,
+      expiredAt: now,
+      lastActivityAt: null,
+    };
+    await this.persist();
+    await this.ctx.storage.deleteAlarm();
+    for (const c of this.getConnections()) closeQuietly(c, 'room expired');
+  }
+
+  /**
+   * RPC, called by `POST /api/rooms` when this name is handed out for a new
+   * room. Room ids are drawn from a ~13k-combination word list, so a fresh
+   * room can land on the name of one that expired; without this, its creator
+   * would open the invite link straight onto the "room expired" screen.
+   *
+   * Reachable before onStart() — partyserver only initializes on fetch/alarm —
+   * so it reads storage itself rather than trusting `this.state`.
+   */
+  async claimRoomName() {
+    const stored = await this.ctx.storage.get('state');
+    if (stored?.state !== EXPIRED_ROOM_STATE) return false;
+    const fresh = this.freshState(this.name);
+    await this.ctx.storage.put('state', fresh);
+    // If this instance was already running on the tombstone, swap it out too;
+    // onStart will not run again to do it.
+    if (this.state == null || this.state.state === EXPIRED_ROOM_STATE) {
+      this.state = fresh;
+      this.persistedActivityAt = fresh.lastActivityAt;
+    }
+    return true;
   }
 
   extraAlarmDeadlines() {
@@ -668,6 +874,10 @@ export class RaceRoom extends Server {
     if (this.state.idleCleanupAt != null) candidates.push(this.state.idleCleanupAt);
     for (const dl of Object.values(this.state.disconnectDeadlines)) candidates.push(dl);
     for (const dl of this.extraAlarmDeadlines()) if (dl != null) candidates.push(dl);
+    // Re-derived from lastActivityAt on every call, so each bump of the idle
+    // clock pushes the winddown alarm out with it.
+    const expiryAt = this.idleExpiryAt();
+    if (expiryAt != null) candidates.push(expiryAt);
 
     if (candidates.length === 0) {
       const cur = await this.ctx.storage.getAlarm();

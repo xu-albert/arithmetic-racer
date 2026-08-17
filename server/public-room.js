@@ -26,6 +26,16 @@ export class PublicRaceRoom extends RaceRoom {
     return publicFreshState(id);
   }
 
+  /**
+   * Quickmatch rooms do not wind down on idleness. They are single-shot and
+   * unlinkable — nobody holds a URL to come back to — so the existing
+   * auto-start and idle-cleanup paths already reclaim them, and an "expired"
+   * screen would be a dead end where "Find Another Match" belongs.
+   */
+  expiresWhenIdle() {
+    return false;
+  }
+
   async handleHello(connection, msg) {
     // Source of truth for difficulty is the room name (prefixed by LobbyRouter).
     // The client's msg.difficulty is sanity-checked but never used to write state.
