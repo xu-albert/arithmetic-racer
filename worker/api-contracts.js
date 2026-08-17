@@ -78,6 +78,41 @@
  */
 
 /**
+ * GET /api/leaderboard?difficulty=…&period=…&limit=…   (no auth)
+ *
+ * ADDITIVE: a new endpoint, added after the freeze. Nothing above it changed —
+ * the freeze protects the shapes existing consumers already read, and this
+ * introduces no new consumer for any of them.
+ *
+ * One board = one (difficulty, period) pair. `difficulty` is required and the
+ * three tiers are never combined: there is no all-difficulty board, and a
+ * consumer must not build one by merging responses. `period` defaults to
+ * 'all'; every bounded period runs from a **UTC** calendar boundary to now
+ * (weeks start Monday) — see worker/leaderboard-period.js.
+ *
+ * Only server-observed races are listed: room races (room_id IS NOT NULL) by
+ * a signed-in racer, with suspect = 0. Solo/Quickplay results are client-
+ * reported and never appear. Rationale: worker/routes/leaderboard.js.
+ *
+ * Response (200): LeaderboardResponse
+ * Response (400): { error: 'invalid_difficulty' | 'invalid_period' }
+ *
+ * @typedef {Object} LeaderboardResponse
+ * @property {Difficulty} difficulty
+ * @property {'all'|'day'|'week'|'month'|'year'} period
+ * @property {string|null} period_start   ISO 8601 UTC; null on the all-time board
+ * @property {string} generated_at        ISO 8601
+ * @property {LeaderboardEntry[]} entries ranked best-first; at most `limit` (default 10, max 50)
+ *
+ * @typedef {Object} LeaderboardEntry
+ * @property {number} rank                1-based, dense within the response
+ * @property {string} username
+ * @property {number} ppm                 best problems/minute in the window
+ * @property {number|null} points         points from *that* race; null only if unscored
+ * @property {string} played_at           ISO 8601 — when the ranked race happened
+ */
+
+/**
  * GET /api/stats/by-device/:device_id   (no auth)
  * Counts only rows with user_id IS NULL — i.e., still-anonymous races.
  * After a claim, those rows have user_id set and stop counting here.

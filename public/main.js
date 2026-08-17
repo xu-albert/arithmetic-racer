@@ -14,6 +14,7 @@ import { createRemoteRunner } from './src/remote-runner.js';
 import { mountHeader } from './src/header.js';
 import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
+import { mountLeaderboard } from './src/leaderboard.js';
 import { postRaceResult } from './src/stats-api.js';
 import { getOrCreateDeviceId } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
@@ -113,6 +114,8 @@ const playAgainBtn = document.getElementById('play-again-btn');
 let selectedDifficulty = 'easy';
 let cleanupRace = null;
 let lobbyHandle = null;
+// Set only on the lobby route — see the initial-routing block below.
+let leaderboardHandle = null;
 
 function showScreen(name) {
   for (const [key, el] of Object.entries(screens)) {
@@ -237,6 +240,11 @@ if (initialRoomId) {
   });
   quickplayBtn.addEventListener('click', startQuickplay);
   setDifficulty('easy');
+  // Mounted only on this route: a `?room=` deep link never shows the lobby, so
+  // fetching boards there would be a request for a screen nobody will see.
+  leaderboardHandle = mountLeaderboard(document.getElementById('leaderboard'), {
+    difficulty: selectedDifficulty,
+  });
   showScreen('lobby');
 }
 
@@ -308,5 +316,8 @@ playAgainBtn.addEventListener('click', () => {
     showScreen('lobby-room');
   } else {
     showScreen('lobby');
+    // The tab may have sat on the race screen for a while; other people's
+    // room races land on the boards in the meantime.
+    leaderboardHandle?.refresh();
   }
 });

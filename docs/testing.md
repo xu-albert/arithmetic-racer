@@ -142,3 +142,27 @@ Automated coverage: `worker/routes/recent-finishes.test.js` (eligibility, suspec
 | F7 | Block `/api/recent-finishes` in DevTools, reload | The whole section is hidden; the lobby is otherwise unaffected and nothing throws |
 | F8 | After F7, unblock the request and wait for the next poll (~20s) | The section comes back with rows — a strip hidden by a failed load is recoverable, not gone for the page session |
 | F9 | Sit on the lobby with a screen reader running | The strip is announced when a finish appears or a label ticks over, not on every 5s redraw |
+
+## Lobby leaderboards
+
+`GET /api/leaderboard` is covered by `worker/routes/leaderboard.test.js` (eligibility, silo,
+ranking, period boundaries) and `worker/leaderboard-period.test.js` (UTC windows). What follows
+is the part the automated suite cannot see: that the boards reach the lobby correctly.
+
+Seed local D1 first (the endpoint reads only what `migrations/` defines, so apply them to the
+local database before `npx wrangler dev` — see the command in the section above).
+
+```bash
+curl -s "http://localhost:8787/api/leaderboard?difficulty=medium&period=day"
+```
+
+| # | Scenario | Expected |
+|---|---|---|
+| L1 | Load `/` with no `?room=` | Leaderboards card appears under **Solo vs Bots**; **Medium** and **All-time** tabs are selected |
+| L2 | Click each difficulty tab | Board reloads for that tier alone; a racer fast on Easy never shows on the Hard board |
+| L3 | Click each period tab | Caption under the tabs reads `Since <date> UTC.` for the four bounded windows, and `Every race, since the beginning.` for All-time |
+| L4 | Finish a room race while signed in, return to the lobby, click **Play again** | Your username appears on the matching difficulty's board (may need a period tab that covers now) |
+| L5 | Finish a **Solo vs Bots** race while signed in | Nothing changes on any board — solo results are never eligible |
+| L6 | Finish a room race while signed out | Nothing changes — anonymous races are never listed |
+| L7 | Load `/?room=<slug>` directly | No leaderboard request is issued (Network tab); the card is not mounted on the room route |
+| L8 | Board with no qualifying races | Empty-state line explains how to qualify; no empty table shell or spinner left behind |

@@ -1,6 +1,7 @@
 // Worker entry — merged after Phase A (users + auth + stats) joined Phase 6
 // (private multiplayer rooms). Order:
-//   1. Phase A routes — /api/auth/*, /api/race-result, /api/me*, /api/stats/*
+//   1. Phase A routes — /api/auth/*, /api/race-result, /api/me*, /api/stats/*,
+//      /api/leaderboard
 //   2. Phase 6 routes — /api/rooms (create) + partykit WebSocket upgrade
 //   3. Static assets fallback
 //
@@ -18,6 +19,7 @@ import { handleMatchmakeJoin } from "../worker/routes/matchmake.js";
 import { handleAdminIndex, handleAdminUser } from "../worker/routes/admin.js";
 import { handleContact } from "../worker/routes/contact.js";
 import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
+import { handleLeaderboard } from "../worker/routes/leaderboard.js";
 import { logError, KINDS } from "../worker/logger.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
@@ -59,6 +61,11 @@ export default {
     // Public, unauthenticated: the lobby's recent-finishes strip.
     if (pathname === "/api/recent-finishes" && request.method === "GET") {
       return handleRecentFinishes(request, env);
+    }
+    // Public read-only boards — no session required; the response carries only
+    // usernames people chose to publish by signing in.
+    if (pathname === "/api/leaderboard" && request.method === "GET") {
+      return handleLeaderboard(request, env);
     }
 
     if (pathname === "/api/contact" && request.method === "POST") {

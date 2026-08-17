@@ -36,6 +36,22 @@ export async function setUsername(username) {
   return res.json();
 }
 
+/**
+ * One leaderboard: the fastest races at one difficulty in one period.
+ *
+ * No `credentials` — the boards are public and identical for everyone, so
+ * sending the session cookie would only make them look personalized.
+ *
+ * @param {{difficulty: string, period?: string, limit?: number}} opts
+ */
+export async function getLeaderboard({ difficulty, period = "all", limit } = {}) {
+  const params = new URLSearchParams({ difficulty, period });
+  if (limit != null) params.set("limit", String(limit));
+  const res = await fetch(`/api/leaderboard?${params}`);
+  if (!res.ok) throw new Error(`leaderboard ${res.status}`);
+  return res.json();
+}
+
 export async function getStatsByDevice(deviceId) {
   const res = await fetch(`/api/stats/by-device/${encodeURIComponent(deviceId)}`);
   if (!res.ok) throw new Error(`by-device ${res.status}`);

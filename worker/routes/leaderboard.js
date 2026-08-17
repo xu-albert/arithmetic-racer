@@ -1,0 +1,156 @@
+// GET /api/leaderboard — public best-PPM boards.
+//
+// Contract: see worker/api-contracts.js.
+//
+// One board is one (difficulty, period) pair. There is no combined board and
+// never will be: easy/medium/hard are separate pools, and mixing them would
+// rank "who played easy" rather than "who is fast" — see
+// migrations/0009_race_results_points.sql and worker/race-score.js.
+//
+// ── What counts (the eligibility rule) ──────────────────────────────────────
+//
+// A row reaches a board only if all of these hold:
+//
+//   room_id IS NOT NULL   — the race happened in a Durable Object.
+//   suspect = 0           — plausibility bounds cleared (worker/plausibility.js).
+//   user_id IS NOT NULL   — and the account has a username to display.
+//   finished = 1 AND finish_time_ms > 0 — there is a rate to rank.
+//
+// `room_id IS NOT NULL` is the load-bearing one, so it is worth stating why.
+// Solo / Quickplay results are *self-reported*: POST /api/race-result stores
+// whatever the browser sends, bounded only by the plausibility floor. Room
+// results are *counted by the server*: RaceRoom.handleAnswer validates each
+// answer against the room's own problem sequence and stamps `finishMs` from
+// the server clock, and the row is written by the DO, not by the client. A
+// leaderboard is a public claim about who is fastest; it should be built only
+// from numbers the server itself observed.
+//
+// The lobby button for the excluded mode says "Solo vs Bots", which is the
+// other half of the argument: a podium made of practice bots is not a
+// standing. Bots never produce rows at all (persistResults skips `p.isBot`),
+// so a Quick Match that backfilled empty lanes with bots still contributes
+// only its humans — the bot backfill is not a reason to drop Quick Match.
+//
+// Anonymous racers are excluded for a different reason: there is nothing to
+// put in the name column. `device_id` is the only handle an anon row carries
+// and it is a private identifier that must never reach the wire. Signing in is
+// how a racer opts into being listed.
+
+import { db } from "../db.js";
+import { isPeriod, periodStartMs } from "../leaderboard-period.js";
+
+const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
+
+/** Rows returned when the caller does not ask for a size. */
+const DEFAULT_LIMIT = 10;
+
+/**
+ * Hard ceiling on rows. D1 bills by rows read and this endpoint is public and
+ * uncached, so the LIMIT is not a UI preference — it is the bound that keeps a
+ * crafted `?limit=` from turning a page load into a table scan's worth of
+ * output.
+ */
+const MAX_LIMIT = 50;
+
+/**
+ * One row per racer — their single best race in the window — rather than one
+ * row per race. Without the PARTITION BY, one fast racer having a good evening
+ * fills every slot and the board stops being a board.
+ *
+ * PPM is derived (problems_correct / minutes) rather than stored; `points` is
+ * read from the column because it accumulates and must not be recomputed by a
+ * later formula. Both come from the *same* race: the row shown is the one that
+ * earned the rank.
+ *
+ * Ties break toward the earlier race, so a racer who has already set a mark
+ * does not get bumped by someone matching it later. `user_id` is the last
+ * tiebreak purely so the order is total and the response is deterministic.
+ */
+const BOARD_SQL = `
+  WITH eligible AS (
+    SELECT user_id,
+           points,
+           played_at,
+           problems_correct * 60000.0 / finish_time_ms AS ppm
+      FROM race_results
+     WHERE difficulty = ?1
+       AND played_at >= ?2
+       AND room_id IS NOT NULL
+       AND suspect = 0
+       AND user_id IS NOT NULL
+       AND finished = 1
+       AND finish_time_ms > 0
+  ),
+  best AS (
+    SELECT user_id, points, played_at, ppm,
+           ROW_NUMBER() OVER (
+             PARTITION BY user_id ORDER BY ppm DESC, played_at ASC
+           ) AS rn
+      FROM eligible
+  )
+  SELECT u.username AS username, b.ppm AS ppm, b.points AS points,
+         b.played_at AS played_at
+    FROM best b
+    JOIN "user" u ON u.id = b.user_id
+   WHERE b.rn = 1
+     AND u.username IS NOT NULL
+     AND u.username <> ''
+   ORDER BY b.ppm DESC, b.played_at ASC, b.user_id ASC
+   LIMIT ?3
+`;
+
+/**
+ * Parse `?limit=`. Anything unreadable falls back to the default rather than
+ * 400-ing: a board is a read-only view and a bad size is not worth an error
+ * page.
+ */
+function parseLimit(raw) {
+  if (raw == null || raw === "") return DEFAULT_LIMIT;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIMIT;
+  return Math.min(n, MAX_LIMIT);
+}
+
+export async function handleLeaderboard(request, env) {
+  const url = new URL(request.url);
+  const difficulty = url.searchParams.get("difficulty") ?? "";
+  const period = url.searchParams.get("period") ?? "all";
+
+  if (!DIFFICULTIES.has(difficulty)) {
+    return Response.json({ error: "invalid_difficulty" }, { status: 400 });
+  }
+  if (!isPeriod(period)) {
+    return Response.json({ error: "invalid_period" }, { status: 400 });
+  }
+
+  const limit = parseLimit(url.searchParams.get("limit"));
+  const now = Date.now();
+  const since = periodStartMs(period, now);
+
+  const { results } = await db(env)
+    .prepare(BOARD_SQL)
+    .bind(difficulty, since, limit)
+    .all();
+
+  const entries = (results ?? []).map((r, i) => ({
+    rank: i + 1,
+    username: r.username,
+    ppm: Number(r.ppm),
+    // A finished race always has points (the writer computes them from the
+    // same two columns PPM comes from), but a row backfilled before 0009 by a
+    // database one migration behind can still be NULL. Null, not 0 — 0 is a
+    // score a racer can genuinely earn.
+    points: r.points == null ? null : Number(r.points),
+    played_at: new Date(Number(r.played_at)).toISOString(),
+  }));
+
+  return Response.json({
+    difficulty,
+    period,
+    // NULL for the all-time board: it has no start, and sending 1970 would
+    // invite the UI to print it.
+    period_start: period === "all" ? null : new Date(since).toISOString(),
+    generated_at: new Date(now).toISOString(),
+    entries,
+  });
+}

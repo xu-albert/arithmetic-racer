@@ -183,16 +183,27 @@ games. Anything aggregating them must `GROUP BY difficulty`. Rationale and formu
 
 ## Public views of `race_results` share two rules
 
-Any endpoint that shows race results to somebody other than their owner — a feed, a board,
-anything new of that shape — has to settle both of these, and the answers are already
-written down:
+`race_results` holds two populations that look identical in the table and are not
+interchangeable. A row with `room_id IS NOT NULL` was *counted by the server*: the Durable
+Object validated each answer against its own problem sequence and stamped `finishMs` from
+its own clock. A row with `room_id IS NULL` is *self-reported* — `POST /api/race-result`
+stores what the browser sent, bounded only by `worker/plausibility.js`.
+
+So any endpoint that shows race results to somebody other than their owner — a feed, a
+board, anything new of that shape — has to settle both of these, and the answers are
+already written down:
 
 - **Eligibility.** `room_id IS NOT NULL AND suspect = 0 AND finished = 1 AND
-  finish_time_ms > 0`. Solo/Quickplay rows are self-reported by the browser; room rows are
-  counted by the Durable Object. Only the second kind belongs in a public claim. The
-  reasoning in full, including where an *activity* feed legitimately diverges from a
-  *ranking* (anonymous racers), is the header comment of
-  `worker/routes/recent-finishes.js`.
+  finish_time_ms > 0`. Only server-counted rows belong in a public claim. Anything
+  *comparative* (the leaderboards; anything ranking racers against each other later) must
+  additionally join `"user".username` rather than listing anonymous rows — `device_id` is a
+  private identifier that never goes on the wire. Private, self-directed views (the profile
+  screen, admin) deliberately do not filter at all: your own history should include your own
+  solo races. The reasoning in full, including where an *activity* feed legitimately diverges
+  from a *ranking* (anonymous racers), is the header comment of
+  `worker/routes/recent-finishes.js`; `worker/routes/leaderboard.js` carries the ranking side
+  of the argument, and `worker/leaderboard-period.js` owns the UTC calendar windows every
+  board uses.
 - **Reading `points` can 500 the page.** The column arrives in migration 0009, migrations
   are applied by hand while the Worker deploys from a push, so a live build can be one
   migration ahead of the database. Wrap the read and fall back to selecting `NULL` via
