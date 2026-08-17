@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="css/header.css" />
   <link rel="stylesheet" href="css/auth-modal.css" />
   <link rel="stylesheet" href="css/profile.css" />
+  <link rel="stylesheet" href="css/recent-finishes.css" />
   <!-- Phase 6: partysocket vendored for the room WebSocket client -->
   <script type="importmap">
     {
@@ -52,6 +53,18 @@
           <button type="button" id="btn-find-match" class="primary">Find Match</button>
           <span class="match-status" id="match-status" aria-live="polite"></span>
         </div>
+      </section>
+
+      <!-- "Who's racing" — recent finishes, polled. Sits directly under Find a
+           Match because it is the evidence for that section's claim that real
+           players fill the lanes. Hidden by the client if the feed never
+           loads. See public/src/recent-finishes.js. -->
+      <section class="recent-finishes" id="recent-finishes">
+        <h3><span class="live-dot" aria-hidden="true"></span> Who's racing</h3>
+        <ul id="recent-finishes-list" aria-live="polite" aria-label="Recent race finishes"></ul>
+        <p id="recent-finishes-empty" class="recent-finishes-empty hidden">
+          No finishes yet — start a match and you'll be first.
+        </p>
       </section>
 
       <section class="solo-play">

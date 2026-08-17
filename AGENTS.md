@@ -133,6 +133,25 @@ weighted, summed, or ranked against each other — easy/medium/hard are three se
 games. Anything aggregating them must `GROUP BY difficulty`. Rationale and formula:
 `worker/race-score.js` and `migrations/0009_race_results_points.sql`.
 
+## Public views of `race_results` share two rules
+
+Any endpoint that shows race results to somebody other than their owner — a feed, a board,
+anything new of that shape — has to settle both of these, and the answers are already
+written down:
+
+- **Eligibility.** `room_id IS NOT NULL AND suspect = 0 AND finished = 1 AND
+  finish_time_ms > 0`. Solo/Quickplay rows are self-reported by the browser; room rows are
+  counted by the Durable Object. Only the second kind belongs in a public claim. The
+  reasoning in full, including where an *activity* feed legitimately diverges from a
+  *ranking* (anonymous racers), is the header comment of
+  `worker/routes/recent-finishes.js`.
+- **Reading `points` can 500 the page.** The column arrives in migration 0009, migrations
+  are applied by hand while the Worker deploys from a push, so a live build can be one
+  migration ahead of the database. Wrap the read and fall back to selecting `NULL` via
+  `isMissingColumnError` (`worker/db.js`); PPM is derivable from older columns, so only
+  points need the fallback. `worker/routes/recent-finishes.js` is the worked example, and
+  its test drops the column to prove the fallback.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

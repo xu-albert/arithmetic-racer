@@ -17,6 +17,7 @@ import { readUserId } from "../worker/session.js";
 import { handleMatchmakeJoin } from "../worker/routes/matchmake.js";
 import { handleAdminIndex, handleAdminUser } from "../worker/routes/admin.js";
 import { handleContact } from "../worker/routes/contact.js";
+import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
 
@@ -53,6 +54,10 @@ export default {
     }
     if (pathname.startsWith("/api/stats/by-device/") && request.method === "GET") {
       return handleByDevice(request, env);
+    }
+    // Public, unauthenticated: the lobby's recent-finishes strip.
+    if (pathname === "/api/recent-finishes" && request.method === "GET") {
+      return handleRecentFinishes(request, env);
     }
 
     if (pathname === "/api/contact" && request.method === "POST") {
