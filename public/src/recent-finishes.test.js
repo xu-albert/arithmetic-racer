@@ -232,6 +232,33 @@ test("a redraw whose labels have ticked over does repaint", () => {
   assert.equal(list.children[0].children[2].textContent, "42s ago");
 });
 
+test("a username reaches the row as text, never as markup", () => {
+  // A username is user-supplied and the strip is public, so the name has to
+  // land as the text of one node — verbatim, character for character — rather
+  // than as anything the browser would parse. Swapping the builder to markup
+  // would leave the name node empty and fail here.
+  const doc = fakeDocument();
+  const list = doc.addElement("recent-finishes-list", "ul");
+  const hostile = '<img src=x onerror="alert(1)">pwn';
+
+  renderFeed(list, toFeedRows({
+    generated_at: "2026-01-01T00:00:00.000Z",
+    finishes: [{
+      username: hostile, difficulty: "easy", problems_correct: 20,
+      ppm: 20, points: 7, played_at: "2026-01-01T00:00:00.000Z",
+    }],
+  }));
+
+  const nameEl = list.children[0].children[0];
+  assert.equal(nameEl.tag, "span");
+  assert.equal(nameEl.textContent, hostile);
+  assert.equal(nameEl.children.length, 0, "the name is one text node, not a subtree");
+  assert.ok(
+    doc.created.every((el) => el.tag === "li" || el.tag === "span"),
+    "no element from the username was ever built"
+  );
+});
+
 test("feedSignature covers every field the row puts on screen", () => {
   // A field left out of the signature would be a field whose change the strip
   // silently refuses to paint, so each one is pinned.

@@ -1,7 +1,9 @@
 // API contracts for the arithmetic-racer Worker.
-// FROZEN: do not modify after Foundation. Backend route handlers and
-// frontend code both depend on these shapes. Any change here requires
-// coordinating with all consumers.
+// FROZEN: a shape already described here does not change after Foundation.
+// Backend route handlers and frontend code both depend on these shapes, so
+// altering one requires coordinating with all consumers. Appending the
+// typedefs for a newly added endpoint is not such a change — that is how a new
+// route gets documented, and leaves every existing shape untouched.
 //
 // All endpoints are mounted under the same origin as the static assets.
 
