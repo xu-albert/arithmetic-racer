@@ -858,6 +858,22 @@ button[aria-pressed="true"]:hover {
   box-shadow: none;
 }
 
+/* "Report a bug" entry points -- deliberately quieter than the actions
+   around them so they never compete with play */
+.screen-footnote {
+  margin: 1.4rem 0 0;
+  text-align: center;
+}
+a.bug-report-link {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--navy-mute);
+  text-decoration-color: var(--navy-mute);
+}
+#hud .bug-report-link {
+  margin-left: auto;
+}
+
 /* ============================================================
    RESULTS / PODIUM
    1st = golden yellow card, 2nd = silver-blue, 3rd = bronze-orange
