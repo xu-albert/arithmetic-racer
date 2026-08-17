@@ -29,16 +29,32 @@ export const PRIVATE_ROOM_IDLE_MS = 30 * 60 * 1000;
 // that a stale invite link explains itself.
 export const EXPIRED_ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 
+// How far a deadline may drift later than the alarm already on disk before
+// scheduleNextAlarm() pays for a rewrite. The idle clock moves on every client
+// frame, so without this an answer costs a durable setAlarm — on the hottest
+// path of a feature whose point is conserving resources. Firing early is
+// harmless: onAlarm re-derives idleExpiryAt() and falls through to reschedule
+// when the deadline has not been reached yet. An *earlier* deadline is never
+// skipped; missing one of those would drop a real timer.
+export const ALARM_SLOP_MS = 60 * 1000;
+
 // Public wire payload for a wound-down room. Sent to anyone attached when the
 // winddown happens, and to anyone who connects to the tombstone afterwards.
 export function expiredMessage(roomId) {
   return JSON.stringify({ type: ROOM_EXPIRED_TYPE, reason: 'idle', roomId });
 }
 
-// Message types the room acts on. Only these count as activity for the idle
-// winddown — the set is kept next to the dispatch switch it mirrors.
-const HANDLED_MESSAGE_TYPES = new Set([
-  'hello', 'set-handle', 'set-config', 'start-race', 'answer', 'quit', 'rematch',
+// The room's whole client protocol: dispatch table and activity gate at once,
+// so a handler can never be wired up as one without being the other. Called
+// with the room rather than bound at module load, so subclass overrides win.
+const MESSAGE_HANDLERS = new Map([
+  ['hello', (room, conn, msg) => room.handleHello(conn, msg)],
+  ['set-handle', (room, conn, msg) => room.handleSetHandle(conn, msg)],
+  ['set-config', (room, conn, msg) => room.handleSetConfig(conn, msg)],
+  ['start-race', (room, conn) => room.handleStartRace(conn)],
+  ['answer', (room, conn, msg) => room.handleAnswer(conn, msg)],
+  ['quit', (room, conn) => room.handleQuit(conn)],
+  ['rematch', (room, conn) => room.handleRematch(conn)],
 ]);
 
 function closeQuietly(connection, reason) {
@@ -299,7 +315,8 @@ export class RaceRoom extends Server {
       return;
     }
 
-    if (!HANDLED_MESSAGE_TYPES.has(msg.type)) return;
+    const handler = MESSAGE_HANDLERS.get(msg.type);
+    if (!handler) return;
 
     // Recorded before dispatch so whatever the handler persists carries the
     // new timestamp; unrecognized types deliberately do not count, or a client
@@ -307,15 +324,7 @@ export class RaceRoom extends Server {
     this.touchActivity();
 
     try {
-      switch (msg.type) {
-        case 'hello': await this.handleHello(connection, msg); break;
-        case 'set-handle': await this.handleSetHandle(connection, msg); break;
-        case 'set-config': await this.handleSetConfig(connection, msg); break;
-        case 'start-race': await this.handleStartRace(connection); break;
-        case 'answer': await this.handleAnswer(connection, msg); break;
-        case 'quit': await this.handleQuit(connection); break;
-        case 'rematch': await this.handleRematch(connection); break;
-      }
+      await handler(this, connection, msg);
     } catch (e) {
       logError(KINDS.ROOM_MESSAGE, e, { roomId: this.name, msgType: msg.type });
     }
@@ -886,6 +895,11 @@ export class RaceRoom extends Server {
     }
     const next = Math.min(...candidates);
     const cur = await this.ctx.storage.getAlarm();
-    if (cur !== next) await this.ctx.storage.setAlarm(next);
+    if (cur === next) return;
+    // A pending alarm that is merely a little early is left alone: onAlarm
+    // re-derives the deadlines and reschedules if none has been reached, so the
+    // drift costs one wake-up instead of a storage write per client frame.
+    if (cur != null && cur > Date.now() && next > cur && next - cur < ALARM_SLOP_MS) return;
+    await this.ctx.storage.setAlarm(next);
   }
 }

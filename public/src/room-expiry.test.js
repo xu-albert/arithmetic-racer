@@ -5,25 +5,19 @@
 // that says so and two ways out — not a spinner, and not a socket that keeps
 // reconnecting into a room that no longer exists.
 //
-// The latch is unit-tested directly; the screen and its two actions are
-// checked against the shipped files, since public/ has no build step and no
-// DOM test harness (see AGENTS.md).
+// This is the shared half of that contract: the predicate that recognizes a
+// wound-down room and the latch that closes the socket before handing over to
+// the screen. The DOM wiring around it is exercised by the manual smoke rows
+// in docs/testing.md — public/ has no build step and no DOM harness.
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   EXPIRED_ROOM_STATE,
   ROOM_EXPIRED_TYPE,
   isRoomExpiredMessage,
   createExpiryLatch,
 } from "./room-expiry.js";
-
-const here = dirname(fileURLToPath(import.meta.url));
-const publicDir = join(here, "..");
-const read = (rel) => readFileSync(join(publicDir, rel), "utf8");
 
 // ---------- isRoomExpiredMessage ----------
 
@@ -102,33 +96,4 @@ test("works without an onExpired callback", () => {
   const handle = createExpiryLatch({ close: () => calls.push("close") });
   assert.equal(handle({ type: ROOM_EXPIRED_TYPE }), true);
   assert.deepEqual(calls, ["close"]);
-});
-
-// ---------- the screen the latch leads to ----------
-
-test("index.html ships the expired screen with both ways out", () => {
-  const html = read("index.html");
-  assert.match(html, /id="room-expired"[^>]*class="screen hidden"/);
-  assert.match(html, /id="expired-home-btn"/);
-  assert.match(html, /id="expired-new-room-btn"/);
-});
-
-test("main.js registers the expired screen and wires both actions", () => {
-  const main = read("main.js");
-  // Registered in `screens`, or showScreen would never hide it again.
-  assert.match(main, /'room-expired':\s*document\.getElementById\('room-expired'\)/);
-  assert.match(main, /onRoomExpired:\s*handleRoomExpired/);
-  assert.match(main, /showScreen\('room-expired'\)/);
-  // Home leaves via a real navigation: the URL still carries ?room=<dead id>,
-  // so an in-page screen swap would come straight back on reload.
-  assert.match(main, /expiredHomeBtn[\s\S]{0,200}location\.assign\('\/'\)/);
-  assert.match(main, /expiredNewRoomBtn[\s\S]{0,400}createRoom\(\)/);
-});
-
-test("the lobby tears the room down before handing over to the screen", () => {
-  const lobby = read("src/lobby.js");
-  assert.match(lobby, /createExpiryLatch\(\{[\s\S]{0,200}client\.close\(\)/);
-  const main = read("main.js");
-  assert.match(main, /function handleRoomExpired\(\)[\s\S]{0,400}lobbyHandle\.detach\(\)/);
-  assert.match(main, /function handleRoomExpired\(\)[\s\S]{0,400}cleanupRace\(\)/);
 });

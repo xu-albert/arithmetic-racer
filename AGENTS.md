@@ -39,8 +39,13 @@ if a secret reaches the wire.
 ## Room lifecycle: private rooms wind down, public ones do not
 
 Every timer a room owns shares one DO alarm slot, coalesced by
-`scheduleNextAlarm()` — add a deadline there or it never fires. Three now run
-side by side, and they are deliberately different mechanisms:
+`scheduleNextAlarm()` — add a deadline there or it never fires. It rewrites the
+alarm only when the new deadline is earlier, or later by more than
+`ALARM_SLOP_MS`; the idle clock moves on every client frame, and paying a
+durable `setAlarm` for each one is what that skip avoids. An alarm firing up to
+a slop window early costs a wake-up, nothing more — `onAlarm()` re-derives its
+deadlines and reschedules. Three timers now run side by side, and they are
+deliberately different mechanisms:
 
 - **Reconnect grace** (30s) and **empty-room cleanup** (5 min) — unchanged, and
   the cleanup still re-mints state, which is what resets `nextPid`.
@@ -61,6 +66,14 @@ Two traps this arrangement sets:
   reads that hook. Quickmatch rooms are single-shot and unlinkable — expiring
   one would strand a player on a screen whose only exit is a room they cannot
   reach. Gate any new lifecycle behavior on the same hook.
+
+For a private room the 5-minute cleanup no longer deletes DO storage — it
+re-mints state and persists it, carrying the idle clock forward — so an expired
+private room leaves a small storage row behind for good. Nothing wakes the DO
+to collect it; it is cleared lazily, by `claimRoomName()` when the name is drawn
+again or by the `EXPIRED_ROOM_TTL_MS` check in `onStart()` if someone connects
+after 24h. That unbounded-but-tiny growth was accepted deliberately: it is the
+price of the expired screen, and a collector alarm would cost more than the row.
 
 The tombstone answers for the room name for `EXPIRED_ROOM_TTL_MS`, because room
 ids are three words from a ~13k-combination list and a new room really can draw

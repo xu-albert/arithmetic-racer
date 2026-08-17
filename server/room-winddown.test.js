@@ -25,6 +25,7 @@ import {
   EXPIRED_ROOM_TTL_MS,
   IDLE_CLEANUP_MS,
   RECONNECT_GRACE_MS,
+  ALARM_SLOP_MS,
 } from "./room.js";
 import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE } from "../public/src/room-expiry.js";
 
@@ -76,6 +77,17 @@ async function join(room, conns, handle = "Alice") {
 function ageRoom(room, ms) {
   room.state.lastActivityAt = Date.now() - ms;
   room.persistedActivityAt = null;
+}
+
+/**
+ * The alarm enforces the winddown deadline derived from the current clock,
+ * give or take ALARM_SLOP_MS. A pending alarm is allowed to lag behind the
+ * newest activity bump (rewriting it on every frame is the storage write this
+ * avoids), but never to sit past the deadline it exists to enforce.
+ */
+function expectAlarmEnforces(alarm, deadline) {
+  expect(alarm).toBeLessThanOrEqual(deadline);
+  expect(alarm).toBeGreaterThan(deadline - ALARM_SLOP_MS);
 }
 
 describe("private room — the winddown trigger", () => {
@@ -154,7 +166,50 @@ describe("private room — the alarm follows the activity clock", () => {
     await withPrivateRoom("winddown-alarm-" + crypto.randomUUID(), async (room, { conns }) => {
       await join(room, conns);
       const alarm = await room.ctx.storage.getAlarm();
-      expect(alarm).toBe(room.state.lastActivityAt + PRIVATE_ROOM_IDLE_MS);
+      expectAlarmEnforces(alarm, room.state.lastActivityAt + PRIVATE_ROOM_IDLE_MS);
+    });
+  });
+
+  it("leaves a slightly-early alarm alone instead of rewriting it per frame", async () => {
+    await withPrivateRoom("winddown-slop-" + crypto.randomUUID(), async (room, { conns }) => {
+      await join(room, conns);
+      const before = await room.ctx.storage.getAlarm();
+      expect(before).not.toBeNull();
+
+      // Ordinary traffic moves the clock by less than the slop window. The
+      // alarm on disk is already close enough, so it is not rewritten.
+      room.state.lastActivityAt += ALARM_SLOP_MS - 1000;
+      await room.scheduleNextAlarm();
+      expect(await room.ctx.storage.getAlarm()).toBe(before);
+
+      // The early wake-up is self-correcting: the runtime consumes the alarm
+      // before onAlarm runs, which finds the deadline unreached, leaves the
+      // room alone, and rearms on the current clock.
+      await room.ctx.storage.deleteAlarm();
+      await room.onAlarm();
+      expect(room.state.state).toBe("lobby");
+      expect(await room.ctx.storage.getAlarm())
+        .toBe(room.state.lastActivityAt + PRIVATE_ROOM_IDLE_MS);
+    });
+  });
+
+  it("never lets that skip swallow an earlier deadline", async () => {
+    await withPrivateRoom("winddown-slop-earlier-" + crypto.randomUUID(), async (room, { conns }) => {
+      const conn = await join(room, conns);
+      const winddown = await room.ctx.storage.getAlarm();
+
+      // A grace deadline 30s out, against a winddown half an hour out.
+      await room.onClose(conn);
+      const pid = room.state.players[0].id;
+      const grace = room.state.disconnectDeadlines[pid];
+      expect(grace).toBeLessThan(winddown);
+      expect(await room.ctx.storage.getAlarm()).toBe(grace);
+
+      // Earlier is earlier however small the step: the skip is one-directional,
+      // or a real timer would be missed rather than merely fired early.
+      room.state.disconnectDeadlines[pid] = grace - 1;
+      await room.scheduleNextAlarm();
+      expect(await room.ctx.storage.getAlarm()).toBe(grace - 1);
     });
   });
 
@@ -172,7 +227,7 @@ describe("private room — the alarm follows the activity clock", () => {
 
       const later = await room.ctx.storage.getAlarm();
       expect(later).toBeGreaterThan(early);
-      expect(later).toBe(room.state.lastActivityAt + PRIVATE_ROOM_IDLE_MS);
+      expectAlarmEnforces(later, room.state.lastActivityAt + PRIVATE_ROOM_IDLE_MS);
 
       // The alarm time is durable but the timestamp behind it is not, so the
       // bump has to reach storage or a cold wake would expire the room early.
@@ -227,7 +282,7 @@ describe("private room — the alarm follows the activity clock", () => {
 
       expect(room.state.nextPid).toBe(1);
       expect(room.state.lastActivityAt).toBe(idleSince);
-      expect(await room.ctx.storage.getAlarm()).toBe(idleSince + PRIVATE_ROOM_IDLE_MS);
+      expectAlarmEnforces(await room.ctx.storage.getAlarm(), idleSince + PRIVATE_ROOM_IDLE_MS);
     });
   });
 });
