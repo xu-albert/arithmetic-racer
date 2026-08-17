@@ -22,12 +22,6 @@
 export const POLL_INTERVAL_MS = 20_000;
 export const TICK_INTERVAL_MS = 5_000;
 
-const DIFFICULTY_LABELS = {
-  easy: "easy",
-  medium: "medium",
-  hard: "hard",
-};
-
 /**
  * "just now" / "42s ago" / "7m ago" / "3h ago" / "2d ago".
  *
@@ -96,7 +90,7 @@ export function toFeedRows(payload, elapsedMs = 0) {
       // matches it rather than inventing a second word for the same thing.
       name: f?.username || "Guest",
       isGuest: !f?.username,
-      difficulty: DIFFICULTY_LABELS[f?.difficulty] ?? f?.difficulty ?? "",
+      difficulty: f?.difficulty ?? "",
       ppm: formatPpm(f?.ppm),
       points: formatPoints(f?.points),
       ago: formatAgo(serverAge + since),
@@ -107,14 +101,46 @@ export function toFeedRows(payload, elapsedMs = 0) {
 // --- DOM -------------------------------------------------------------------
 
 /**
- * Render rows into `listEl`. Text is set with textContent throughout — a
- * username is user-supplied and must never be parsed as markup.
+ * Everything a drawn row puts on screen, flattened into one comparable string.
  *
- * Rebuilds the list rather than diffing it: at most 8 rows, once every few
- * seconds. Diffing here would be more code defending a smaller number.
+ * The unit separator characters cannot appear in any of these fields, so two
+ * different feeds cannot collide on one signature.
+ */
+export function feedSignature(rows) {
+  return (rows ?? [])
+    .map((r) =>
+      [r?.name, r?.isGuest ? "guest" : "user", r?.difficulty, r?.ppm, r?.points, r?.ago]
+        .map((v) => v ?? "")
+        .join("\u001f")
+    )
+    .join("\u001e");
+}
+
+/** The last signature painted into a given list, so a redraw can skip. */
+const paintedSignatures = new WeakMap();
+
+/**
+ * Render rows into `listEl`, and report whether the DOM was touched.
+ *
+ * Text is set with textContent throughout — a username is user-supplied and
+ * must never be parsed as markup.
+ *
+ * The list is a `aria-live="polite"` region, so removing and re-adding its
+ * children is an announcement: a screen reader hears the whole strip again.
+ * The 5s tick redraws whether or not anything changed, so a draw whose rows are
+ * identical to the last one — same names, same numbers, same "3m ago" labels —
+ * leaves the DOM alone and stays silent. A label crossing a boundary is a real
+ * change and still repaints. Within a draw the list is rebuilt rather than
+ * diffed: at most 8 rows, and diffing would be more code defending a smaller
+ * number.
  */
 export function renderFeed(listEl, rows, { doc = listEl?.ownerDocument } = {}) {
-  if (!listEl || !doc) return;
+  if (!listEl || !doc) return false;
+
+  const signature = feedSignature(rows);
+  if (paintedSignatures.get(listEl) === signature) return false;
+  paintedSignatures.set(listEl, signature);
+
   listEl.textContent = "";
 
   for (const row of rows) {
@@ -141,6 +167,8 @@ export function renderFeed(listEl, rows, { doc = listEl?.ownerDocument } = {}) {
 
     listEl.append(li);
   }
+
+  return true;
 }
 
 /**
@@ -152,7 +180,7 @@ export function renderFeed(listEl, rows, { doc = listEl?.ownerDocument } = {}) {
  * @param {object} opts
  * @param {Element} opts.listEl      <ul> the rows go into.
  * @param {Element} [opts.emptyEl]   Shown instead when there is nothing to list.
- * @param {Element} [opts.sectionEl] Hidden entirely if the endpoint is unreachable.
+ * @param {Element} [opts.sectionEl] Hidden while the endpoint is unreachable.
  * @param {() => Promise<object>} opts.fetchFeed
  * @param {() => boolean} [opts.isActive] False while the lobby is off-screen.
  * @param {() => number} [opts.now]
@@ -198,6 +226,10 @@ export function createRecentFinishesFeed({
     try {
       payload = await fetchFeed();
       fetchedAt = now();
+      // Hiding on a failed first load is recoverable, not terminal: a later
+      // poll that succeeds puts the strip back rather than painting rows into a
+      // section that is display:none for the rest of the page session.
+      sectionEl?.classList.remove("hidden");
       draw();
     } catch (err) {
       // The strip is decoration on a game lobby: a failed poll leaves the last
@@ -253,6 +285,13 @@ export function mountRecentFinishes(doc = document) {
   const emptyEl = doc.getElementById("recent-finishes-empty");
   const lobbyEl = doc.getElementById("lobby");
 
+  // One definition of "the strip is worth feeding", used by the timers and by
+  // every event that wants an off-cycle refresh. A tab coming back to the
+  // foreground onto a race screen has nowhere to put the rows, so it must not
+  // spend a query on them either (docs/testing.md F4).
+  const isActive = () =>
+    doc.visibilityState !== "hidden" && !lobbyEl?.classList.contains("hidden");
+
   const feed = createRecentFinishesFeed({
     listEl,
     emptyEl,
@@ -264,16 +303,17 @@ export function mountRecentFinishes(doc = document) {
       if (!res.ok) throw new Error(`recent-finishes ${res.status}`);
       return res.json();
     },
-    isActive: () =>
-      doc.visibilityState !== "hidden" && !lobbyEl?.classList.contains("hidden"),
+    isActive,
   });
 
   // Coming back to a hidden tab or returning to the lobby should show current
   // rows immediately, not whatever was true when the strip went away.
   doc.addEventListener("visibilitychange", () => {
-    if (doc.visibilityState !== "hidden") feed.refresh();
+    if (isActive()) feed.refresh();
   });
-  doc.addEventListener("lobby-shown", () => feed.refresh());
+  doc.addEventListener("lobby-shown", () => {
+    if (isActive()) feed.refresh();
+  });
 
   feed.init();
   return feed;

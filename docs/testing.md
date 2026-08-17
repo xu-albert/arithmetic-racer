@@ -136,3 +136,5 @@ Automated coverage: `worker/routes/recent-finishes.test.js` (eligibility, suspec
 | F5 | Finish a **Solo vs Bots** race | It does **not** appear — only room races are eligible (`worker/routes/recent-finishes.js`) |
 | F6 | Empty database | The strip shows "No finishes yet…" rather than an empty card list |
 | F7 | Block `/api/recent-finishes` in DevTools, reload | The whole section is hidden; the lobby is otherwise unaffected and nothing throws |
+| F8 | After F7, unblock the request and wait for the next poll (~20s) | The section comes back with rows — a strip hidden by a failed load is recoverable, not gone for the page session |
+| F9 | Sit on the lobby with a screen reader running | The strip is announced when a finish appears or a label ticks over, not on every 5s redraw |

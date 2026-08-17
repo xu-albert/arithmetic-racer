@@ -204,16 +204,23 @@ describe("ordering", () => {
     expect(body.finishes.map((f) => f.username)).toEqual(["slow", "fast"]);
   });
 
-  it("breaks a same-millisecond tie deterministically", async () => {
+  it("breaks a same-millisecond tie on id, descending", async () => {
     const at = Date.now();
-    await seedRace({ id: "aaa", played_at: at });
-    await seedRace({ id: "bbb", played_at: at });
+    await seedUser({ id: "u-aaa", username: "alpha" });
+    await seedUser({ id: "u-bbb", username: "bravo" });
+    // Inserted low id first, so insertion order and `id DESC` disagree: only
+    // the ORDER BY tiebreak can produce the expected order. The usernames are
+    // what makes the two rows distinguishable in the response, which carries
+    // no id.
+    await seedRace({ id: "aaa", user_id: "u-aaa", device_id: "d-aaa", played_at: at });
+    await seedRace({ id: "bbb", user_id: "u-bbb", device_id: "d-bbb", played_at: at });
 
     const first = await getFeed();
     const second = await getFeed();
-    expect(first.finishes.map((f) => f.played_at))
-      .toEqual(second.finishes.map((f) => f.played_at));
-    expect(first.finishes).toHaveLength(2);
+    expect(first.finishes.map((f) => f.username)).toEqual(["bravo", "alpha"]);
+    // Deterministic: the same tie resolves the same way on the next poll, so
+    // the strip does not shuffle its rows between refreshes.
+    expect(second.finishes.map((f) => f.username)).toEqual(["bravo", "alpha"]);
   });
 });
 
