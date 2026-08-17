@@ -800,7 +800,8 @@ button[aria-pressed="true"]:hover {
    ============================================================ */
 #hud {
   display: flex;
-  gap: 1.2rem;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.2rem;
   align-items: center;
   font-family: var(--font);
   font-weight: 700;

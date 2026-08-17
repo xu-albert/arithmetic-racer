@@ -12,6 +12,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   const scoreEl = document.getElementById('score');
   const podium = document.getElementById('podium');
   const quitBtn = document.getElementById('quit-race-btn');
+  const bugReportLink = document.querySelector('#hud .bug-report-link');
   const playerRacer = runner.racers.find((r) => r.id === 'player');
 
   track.innerHTML = '';
@@ -129,8 +130,19 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     runner.quit();
   }
 
+  // #answer-input is the only thing listening for keystrokes, and the HUD's
+  // bug-report link opens in a new tab with the race still running. Hand focus
+  // back, but only while there is a race to type into — input.disabled is
+  // false exactly between 'start' and the player finishing.
+  function restoreAnswerFocus() {
+    if (input.disabled || screens.race.classList.contains('hidden')) return;
+    input.focus();
+  }
+
   input.addEventListener('keydown', onKey);
   quitBtn.addEventListener('click', onQuit);
+  bugReportLink?.addEventListener('click', restoreAnswerFocus);
+  window.addEventListener('focus', restoreAnswerFocus);
 
   const unsubscribe = runner.on((event, data) => {
     if (event === 'countdown') {
@@ -174,6 +186,8 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   return () => {
     input.removeEventListener('keydown', onKey);
     quitBtn.removeEventListener('click', onQuit);
+    bugReportLink?.removeEventListener('click', restoreAnswerFocus);
+    window.removeEventListener('focus', restoreAnswerFocus);
     unsubscribe();
     runner.stop();
   };
