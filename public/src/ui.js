@@ -135,10 +135,11 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   // back, but only while there is a race to type into — input.disabled is
   // false exactly between 'start' and the player finishing.
   //
-  // Never take focus from something else that wants it. A modal (sign-in, pick
-  // a username, the invite card) sits outside #race and installs no focus trap,
-  // so alt-tabbing back while one is open would otherwise pull the caret out of
-  // it and into an answer box the player cannot see.
+  // Only ever reclaim focus nothing has deliberately taken — the answer box
+  // itself, the report link it was handed to, or nobody at all. A modal
+  // (sign-in, pick a username, the invite card) installs no focus trap, and a
+  // Tab-focused Quit race button is a position the player chose; neither is
+  // ours to override.
   function modalIsOpen() {
     const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
     return [...dialogs].some((el) => !el.hidden && !el.classList.contains('hidden'));
@@ -147,8 +148,9 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   function restoreAnswerFocus() {
     if (input.disabled || screens.race.classList.contains('hidden')) return;
     const active = document.activeElement;
-    const raceHasFocus = !active || active === document.body || screens.race.contains(active);
-    if (!raceHasFocus || modalIsOpen()) return;
+    const unclaimed =
+      !active || active === document.body || active === input || active === bugReportLink;
+    if (!unclaimed || modalIsOpen()) return;
     input.focus();
   }
 

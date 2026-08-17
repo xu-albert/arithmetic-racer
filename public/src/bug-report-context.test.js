@@ -162,10 +162,29 @@ function sectionHtml(html, id) {
   assert.fail(`<section id="${id}"> is never closed`);
 }
 
+const SITE = "https://racer.test";
+
+// Both spellings reach the same asset — public/ is served byte-for-byte, so
+// /bug-report.html is as real a link as /bug-report.
+const BUG_REPORT_PATHS = new Set(["/bug-report", "/bug-report.html"]);
+
+function resolveHref(href) {
+  try {
+    return new URL(href, `${SITE}/`);
+  } catch {
+    return null;
+  }
+}
+
 function bugReportLinksIn(html) {
   return [...html.matchAll(/<a\b[^>]*>/g)]
-    .map((tag) => tag[0].match(/\shref="([^"]*)"/)?.[1])
-    .filter((href) => href && href.split(/[?#]/)[0] === "/bug-report");
+    .map((tag) => tag[0].match(/\shref=(?:"([^"]*)"|'([^']*)')/))
+    .map((match) => match && (match[1] ?? match[2]))
+    .filter((href) => {
+      if (!href) return false;
+      const url = resolveHref(href);
+      return !!url && url.origin === SITE && BUG_REPORT_PATHS.has(url.pathname);
+    });
 }
 
 /** What a report opened through this link would store as its page. */
@@ -173,10 +192,7 @@ function pageRecordedFrom(href) {
   const win = fakeWindow({
     referrer: "",
     window: {
-      location: {
-        origin: "https://racer.test",
-        href: new URL(href, "https://racer.test/").href,
-      },
+      location: { origin: SITE, href: resolveHref(href).href },
     },
   });
   return collectBugPayload(win).context.page;
@@ -189,7 +205,7 @@ test("every entry point in the static pages records the source it names", () => 
   assert.ok(pages.includes("index.html"), "expected the game page among public/*.html");
   for (const page of pages) {
     for (const href of bugReportLinksIn(pageHtml(page))) {
-      const from = new URL(href, "https://racer.test/").searchParams.get("from");
+      const from = resolveHref(href).searchParams.get("from");
       if (from === null) continue; // a bare pointer still falls back to the referrer
       assert.equal(
         pageRecordedFrom(href),
