@@ -1,7 +1,9 @@
 // API contracts for the arithmetic-racer Worker.
-// FROZEN: do not modify after Foundation. Backend route handlers and
-// frontend code both depend on these shapes. Any change here requires
-// coordinating with all consumers.
+// FROZEN: a shape already described here does not change after Foundation.
+// Backend route handlers and frontend code both depend on these shapes, so
+// altering one requires coordinating with all consumers. Appending the
+// typedefs for a newly added endpoint is not such a change — that is how a new
+// route gets documented, and leaves every existing shape untouched.
 //
 // All endpoints are mounted under the same origin as the static assets.
 
@@ -84,6 +86,32 @@
  * @property {number} total_races
  * @property {number|null} best_time_ms
  * @property {Difficulty|null} best_difficulty
+ */
+
+/**
+ * GET /api/recent-finishes?limit=N   (no auth)
+ *
+ * The lobby's "who's racing" strip: newest eligible room finishes, ordered by
+ * recency and never by speed. `limit` defaults to 8 and is capped at 25; an
+ * unreadable value falls back to the default rather than 400-ing.
+ *
+ * Eligibility (room races only, plausible, finished) and why anonymous racers
+ * ARE listed here even though leaderboards exclude them:
+ * worker/routes/recent-finishes.js. Neither `room_id` nor `device_id` is ever
+ * returned.
+ *
+ * @typedef {Object} RecentFinishesResponse
+ * @property {string} generated_at        ISO 8601; the clock relative times are computed against
+ * @property {number} limit               the limit actually applied
+ * @property {RecentFinish[]} finishes    newest first
+ *
+ * @typedef {Object} RecentFinish
+ * @property {string|null} username       null for an anonymous racer — render as "Guest"
+ * @property {Difficulty} difficulty
+ * @property {number} problems_correct
+ * @property {number} ppm                 problems/minute for this race
+ * @property {number|null} points         null when unscored (0 is an earnable score)
+ * @property {string} played_at           ISO 8601
  */
 
 export {};

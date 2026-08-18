@@ -122,3 +122,19 @@ npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, 
 | R6 | Solo Quickplay race (regression check) | One row written via the route; `room_id = NULL`; existing solo stats behavior unchanged |
 | R7 | Any finished race (solo or room) | Row has non-NULL `points`; a quit race has `points NULL` |
 | R8 | After R7, the logged-in player visits Profile | Headline shows a PPM figure for that difficulty only — the other two tiers are unchanged — and the race's row shows its own PPM and Points |
+
+## Lobby "who's racing" strip
+
+Automated coverage: `worker/routes/recent-finishes.test.js` (eligibility, suspect exclusion, ordering, limit, the missing-`points` fallback, and that the route is actually mounted) and `public/src/recent-finishes.test.js` (relative-time labels, Guest labelling, poll gating). What is left to check by hand is the browser behavior.
+
+| # | Scenario | Expected |
+|---|---|---|
+| F1 | Load `/` after finishing a room race | The strip lists that finish: name (or `Guest`), `finished <difficulty>`, PPM, points, `just now` |
+| F2 | Leave the tab open | The relative label ticks up on its own (`just now` → `12s ago` → `1m ago`) with no page reload; DevTools Network shows one `/api/recent-finishes` request roughly every 20s, not one every tick |
+| F3 | Switch to another browser tab, wait a minute, come back | No requests while hidden; one immediately on return |
+| F4 | Enter a room or start a race | Polling stops while the lobby is off-screen and resumes on returning to it |
+| F5 | Finish a **Solo vs Bots** race | It does **not** appear — only room races are eligible (`worker/routes/recent-finishes.js`) |
+| F6 | Empty database | The strip shows "No finishes yet…" rather than an empty card list |
+| F7 | Block `/api/recent-finishes` in DevTools, reload | The whole section is hidden; the lobby is otherwise unaffected and nothing throws |
+| F8 | After F7, unblock the request and wait for the next poll (~20s) | The section comes back with rows — a strip hidden by a failed load is recoverable, not gone for the page session |
+| F9 | Sit on the lobby with a screen reader running | The strip is announced when a finish appears or a label ticks over, not on every 5s redraw |

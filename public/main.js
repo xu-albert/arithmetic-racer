@@ -17,6 +17,7 @@ import { mountProfile } from './src/profile.js';
 import { postRaceResult } from './src/stats-api.js';
 import { getOrCreateDeviceId } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
+import { mountRecentFinishes } from './src/recent-finishes.js';
 
 // ---- Identity helpers --------------------------------------------------
 
@@ -83,6 +84,10 @@ function reportRaceResult({ runner, difficulty }) {
 mountHeader(document.getElementById('app-header'));
 mountAuthModal(document.getElementById('auth-modal-root'));
 mountProfile(document.getElementById('profile'));
+// Lobby "who's racing" strip. Mounted unconditionally — it no-ops on pages
+// (and screens) where its elements are absent, and gates its own polling on the
+// lobby being visible.
+mountRecentFinishes();
 
 document.addEventListener('open-profile', () => {
   showScreen('profile');
@@ -112,6 +117,9 @@ function showScreen(name) {
   for (const [key, el] of Object.entries(screens)) {
     el.classList.toggle('hidden', key !== name);
   }
+  // The "who's racing" strip polls only while the lobby is on-screen, so it
+  // needs to hear about coming back to a lobby that has been away.
+  if (name === 'lobby') document.dispatchEvent(new Event('lobby-shown'));
 }
 
 function setDifficulty(diff) {
