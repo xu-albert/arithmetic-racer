@@ -92,7 +92,10 @@
  *
  * Only server-observed races are listed: room races (room_id IS NOT NULL) by
  * a signed-in racer, with suspect = 0. Solo/Quickplay results are client-
- * reported and never appear. Rationale: worker/routes/leaderboard.js.
+ * reported and never appear. Only the standard 10-problem race is ranked
+ * (problems_total = 10) — a private room set to another length is eligible on
+ * every other axis and still does not appear, because PPM is not comparable
+ * across lengths. Rationale: worker/routes/leaderboard.js.
  *
  * Response (200): LeaderboardResponse
  * Response (400): { error: 'invalid_difficulty' | 'invalid_period' }

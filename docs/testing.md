@@ -161,11 +161,12 @@ curl -s "http://localhost:8787/api/leaderboard?difficulty=medium&period=day"
 | L1 | Load `/` with no `?room=` | Leaderboards card appears under **Solo vs Bots**; **Medium** and **All-time** tabs are selected |
 | L2 | Click each difficulty tab | Board reloads for that tier alone; a racer fast on Easy never shows on the Hard board |
 | L3 | Click each period tab | Caption under the tabs reads `Since <date> UTC.` for the four bounded windows, and `Every race, since the beginning.` for All-time |
-| L4 | Finish a room race while signed in, then navigate to `/` with **no** `?room=` | Your username appears on the matching difficulty's board (may need a period tab that covers now). Allow up to the `s-maxage` window (30s) — under `wrangler dev` the Miniflare Cache API *is* functional, so the board you get may predate your race |
+| L4 | Finish a **standard 10-problem** room race while signed in, then navigate to `/` with **no** `?room=` | Your username appears on the matching difficulty's board (may need a period tab that covers now). Allow up to the `s-maxage` window (30s) — under `wrangler dev` the Miniflare Cache API *is* functional, so the board you get may predate your race |
 | L5 | Finish a **Solo vs Bots** race while signed in | Nothing changes on any board — solo results are never eligible |
-| L6 | Finish a room race while signed out, then navigate to `/` with **no** `?room=` | Nothing changes — anonymous races are never listed |
+| L6 | Finish a **standard 10-problem** room race while signed out, then navigate to `/` with **no** `?room=` | Nothing changes — anonymous races are never listed. (The length matters: at any other length the row is ineligible anyway, so the row would pass without testing the anonymous rule) |
 | L7 | Load `/?room=<slug>` directly | No leaderboard request is issued (Network tab); the card is not mounted on the room route |
 | L8 | Board with no qualifying races | Empty-state line explains how to qualify; no empty table shell or spinner left behind |
+| L9 | Create a private room, set the race length to something other than 10 (5 is the minimum), finish it while signed in, then navigate to `/` | Nothing appears on any board. PPM is not comparable across race lengths, so only the standard 10-problem race is ranked — the blurb on the card says so |
 
 L4 and L6 say *navigate to `/`* rather than "click Play again" on purpose. Entering a room
 sets `?room=` (`enterRoom` does a `replaceState`), and the leaderboard is deliberately not

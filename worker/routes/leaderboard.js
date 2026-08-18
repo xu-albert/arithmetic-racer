@@ -15,6 +15,7 @@
 //   suspect = 0           — plausibility bounds cleared (worker/plausibility.js).
 //   user_id IS NOT NULL   — and the account has a username to display.
 //   finished = 1 AND finish_time_ms > 0 — there is a rate to rank.
+//   problems_total = 10   — it was the standard race (CANONICAL_RACE_LENGTH).
 //
 // `room_id IS NOT NULL` is the load-bearing one, so it is worth stating why.
 // Solo / Quickplay results are *self-reported*: POST /api/race-result stores
@@ -35,6 +36,20 @@
 // put in the name column. `device_id` is the only handle an anon row carries
 // and it is a private identifier that must never reach the wire. Signing in is
 // how a racer opts into being listed.
+//
+// `problems_total = 10` is a third axis again, and specifically *not* the
+// provenance one above: a private room set to five problems is genuinely
+// server-counted, so provenance has nothing to say about it. What rules it out
+// is comparability. Race length is caller-chosen — Quick Match is fixed at ten,
+// but a private-room host may set anything in [5, 50] (server/room.js) — and it
+// moves PPM exactly the way difficulty does. A finished race has
+// problems_correct = problems_total, so PPM is 60000 * n / finish_time, and the
+// per-problem pace needed to top the board falls as n rises: five problems in
+// 2.5s is 120 PPM, a rate no ten- or twenty-problem race can reach, from a
+// racer who was not going faster. Ranking across lengths would rank "who picked
+// the shortest race". That is the same argument the difficulty silo rests on,
+// so it gets the same answer — one canonical length, stated in the lobby copy
+// so nobody sets up a five-problem room expecting to appear.
 
 import { db, isMissingColumnError } from "../db.js";
 import { logWarn, KINDS } from "../logger.js";
@@ -45,6 +60,14 @@ const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
 /** Matches LEADERBOARD_IP_LIMIT's `period` in wrangler.jsonc. */
 const RATE_LIMIT_WINDOW_S = 60;
+
+/**
+ * The one race length a board ranks. Mirrors `RACE_LENGTH` in
+ * public/src/runner.js — the standard race, what Quick Match is hard-fixed at,
+ * and what the private-room length input starts on. See the eligibility block
+ * above for why the boards admit exactly this length and no other.
+ */
+const CANONICAL_RACE_LENGTH = 10;
 
 /** Rows returned when the caller does not ask for a size. */
 const DEFAULT_LIMIT = 10;
@@ -116,9 +139,11 @@ function boardCacheKey(url, { difficulty, period, limit }) {
  * does not get bumped by someone matching it later. `user_id` is the last
  * tiebreak purely so the order is total and the response is deterministic.
  *
- * `pointsExpr` is the one thing that varies: `points` normally, `NULL` against
- * a database that has not had migration 0009 applied yet. See the fallback in
- * `fetchBoard`.
+ * `pointsExpr` is the one thing that varies between the two compiled forms:
+ * `points` normally, `NULL` against a database that has not had migration 0009
+ * applied yet (see the fallback in `fetchBoard`). Everything else — every
+ * eligibility predicate included — is written once here precisely so the
+ * degraded board cannot drift into admitting rows the normal one rejects.
  */
 function boardSql(pointsExpr) {
   return `
@@ -135,6 +160,7 @@ function boardSql(pointsExpr) {
        AND user_id IS NOT NULL
        AND finished = 1
        AND finish_time_ms > 0
+       AND problems_total = ?4
   ),
   best AS (
     SELECT user_id, points, played_at, ppm,
@@ -174,7 +200,11 @@ const BOARD_SQL_WITHOUT_POINTS = boardSql("NULL");
  * propagates, so a real database error still surfaces as one.
  */
 async function fetchBoard(env, { difficulty, since, limit, period }) {
-  const run = (sql) => db(env).prepare(sql).bind(difficulty, since, limit).all();
+  const run = (sql) =>
+    db(env)
+      .prepare(sql)
+      .bind(difficulty, since, limit, CANONICAL_RACE_LENGTH)
+      .all();
   try {
     const { results } = await run(BOARD_SQL);
     return results ?? [];

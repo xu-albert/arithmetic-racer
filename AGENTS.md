@@ -211,6 +211,14 @@ already written down:
   points need the fallback. `worker/routes/recent-finishes.js` is the worked example, and
   its test drops the column to prove the fallback.
 
+Provenance is not the only axis. A rate is only comparable against races of the
+same length, and length is caller-chosen: Quick Match is fixed at ten problems but
+a private-room host may set anything in [5, 50] (`server/room.js`), which
+`room-stats.js` writes to `problems_total`. Five problems in 2.5s is 120 PPM
+without anyone going faster, so a public ranking must also filter
+`problems_total = 10` — the standard race, `RACE_LENGTH` in
+`public/src/runner.js`. Same reasoning as the difficulty silo, different column.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

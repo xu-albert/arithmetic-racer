@@ -59,6 +59,19 @@ function boardUrl({ difficulty, period, limit } = {}) {
 
 let seq = 0;
 
+/**
+ * The only race length a board ranks (worker/routes/leaderboard.js). Every
+ * seeded row uses it unless the test is specifically about the length rule,
+ * and expectations derive PPM from it rather than hardcoding a number that
+ * silently means "20 problems".
+ */
+const CANONICAL = 10;
+
+/** PPM a canonical race posts when it finishes in `finishMs`. */
+function ppmFor(finishMs) {
+  return (CANONICAL * 60_000) / finishMs;
+}
+
 /** Columns every writer supplies, in the order seedRace binds them. */
 const RACE_COLUMNS = [
   "id", "user_id", "device_id", "difficulty", "finished", "finish_time_ms",
@@ -93,9 +106,9 @@ async function seedRace(overrides = {}, { withPoints = true } = {}) {
     difficulty: "medium",
     finished: 1,
     finish_time_ms: 60_000,
-    problems_total: 20,
-    problems_correct: 20,
-    problems_attempted: 20,
+    problems_total: CANONICAL,
+    problems_correct: CANONICAL,
+    problems_attempted: CANONICAL,
     avg_time_per_problem_ms: 3000,
     accuracy_pct: 100,
     longest_streak: 20,
@@ -264,8 +277,8 @@ describe("eligibility", () => {
     });
     const { body } = await board();
     expect(body.entries).toHaveLength(1);
-    // The 1s race would be 1200 PPM; the clean 60s race is 20.
-    expect(body.entries[0].ppm).toBeCloseTo(20, 6);
+    // The 1s race would be 600 PPM; the clean 60s race is 10.
+    expect(body.entries[0].ppm).toBeCloseTo(ppmFor(60_000), 6);
   });
 
   it("excludes anonymous races — an anon row has no name to publish", async () => {
@@ -339,8 +352,91 @@ describe("difficulty silo", () => {
 
     const easy = await board({ difficulty: "easy" });
     const hard = await board({ difficulty: "hard" });
-    expect(easy.body.entries[0].ppm).toBeCloseTo(40, 6);
-    expect(hard.body.entries[0].ppm).toBeCloseTo(20 / 1.5, 6);
+    expect(easy.body.entries[0].ppm).toBeCloseTo(ppmFor(30_000), 6);
+    expect(hard.body.entries[0].ppm).toBeCloseTo(ppmFor(90_000), 6);
+  });
+});
+
+// --- race length -----------------------------------------------------------
+
+// PPM is only comparable between races of the same length, and length is
+// caller-chosen in a private room. These are the rows that would otherwise sit
+// at rank 1 forever without anyone racing faster.
+describe("canonical race length", () => {
+  it("excludes a five-problem sprint even though it posts the highest PPM", async () => {
+    await seedUser({ id: "u1", username: "sprinter" });
+    await seedUser({ id: "u2", username: "grace" });
+    // The exploit: 5 problems in 2.5s is 500ms each — clean by the plausibility
+    // floor, server-counted in a real private room, and 120 PPM.
+    await seedRace({
+      user_id: "u1",
+      problems_total: 5,
+      problems_correct: 5,
+      problems_attempted: 5,
+      finish_time_ms: 2_500,
+    });
+    await seedRace({ user_id: "u2", finish_time_ms: 30_000 });
+
+    const { body } = await board();
+    expect(names(body)).toEqual(["grace"]);
+    expect(body.entries[0].ppm).toBeCloseTo(ppmFor(30_000), 6);
+  });
+
+  it("excludes a longer race too — the rule is exactly canonical, not at most", async () => {
+    await seedUser({ id: "u1", username: "marathon" });
+    await seedRace({
+      user_id: "u1",
+      problems_total: 20,
+      problems_correct: 20,
+      problems_attempted: 20,
+      finish_time_ms: 30_000,
+    });
+    expect((await board()).body.entries).toEqual([]);
+  });
+
+  it("admits the canonical race and ranks it normally", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedUser({ id: "u2", username: "grace" });
+    await seedRace({ user_id: "u1", finish_time_ms: 30_000 });
+    await seedRace({ user_id: "u2", finish_time_ms: 60_000 });
+
+    const { body } = await board();
+    expect(names(body)).toEqual(["ada", "grace"]);
+    expect(body.entries[0].ppm).toBeCloseTo(ppmFor(30_000), 6);
+  });
+
+  it("keeps a racer's canonical race when their other race was a sprint", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({
+      user_id: "u1",
+      problems_total: 5,
+      problems_correct: 5,
+      problems_attempted: 5,
+      finish_time_ms: 2_500,
+    });
+    await seedRace({ user_id: "u1", finish_time_ms: 60_000 });
+
+    const { body } = await board();
+    // One row, and it is the canonical race — not the sprint's 120 PPM.
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0].ppm).toBeCloseTo(ppmFor(60_000), 6);
+  });
+
+  it("applies inside every period, not only all-time", async () => {
+    const now = Date.now();
+    await seedUser({ id: "u1", username: "sprinter" });
+    await seedRace({
+      user_id: "u1",
+      problems_total: 5,
+      problems_correct: 5,
+      problems_attempted: 5,
+      finish_time_ms: 2_500,
+      played_at: now,
+    });
+
+    for (const period of ["all", "day", "week", "month", "year"]) {
+      expect((await board({ period })).body.entries).toEqual([]);
+    }
   });
 });
 
@@ -371,35 +467,34 @@ describe("ranking", () => {
 
     const { body } = await board();
     expect(names(body)).toEqual(["ada", "grace"]);
-    expect(body.entries[0].ppm).toBeCloseTo(40, 6);
+    expect(body.entries[0].ppm).toBeCloseTo(ppmFor(30_000), 6);
   });
 
-  it("reports points from the same race that earned the rank", async () => {
+  it("reports points from the one race that earned the rank, not a sum", async () => {
     await seedUser({ id: "u1", username: "ada" });
-    // A long steady race and a short blistering one. PPM picks the short one;
-    // points must be the short one's points, not the long one's larger total.
-    const short = await seedRace({
-      user_id: "u1",
-      problems_total: 10,
-      problems_correct: 10,
-      problems_attempted: 10,
-      finish_time_ms: 20_000,
-    });
-    await seedRace({
-      user_id: "u1",
-      problems_total: 40,
-      problems_correct: 40,
-      problems_attempted: 40,
-      finish_time_ms: 120_000,
-    });
+    // Three canonical races. Every eligible row has problems_correct equal to
+    // the canonical length, so points rises with PPM and cannot be separated
+    // from it by making one race longer — the claim left to test is that the
+    // cell holds the ranked race's points rather than a total over all three.
+    const slow = await seedRace({ user_id: "u1", finish_time_ms: 60_000 });
+    const best = await seedRace({ user_id: "u1", finish_time_ms: 20_000 });
+    const middling = await seedRace({ user_id: "u1", finish_time_ms: 40_000 });
 
     const { body } = await board();
     expect(body.entries).toHaveLength(1);
     expect(body.entries[0].ppm).toBeCloseTo(
-      computePpm({ finished: true, finish_time_ms: 20_000, problems_correct: 10 }),
+      computePpm({
+        finished: true,
+        finish_time_ms: 20_000,
+        problems_correct: CANONICAL,
+      }),
       6
     );
-    expect(body.entries[0].points).toBeCloseTo(short.points, 6);
+    expect(body.entries[0].points).toBeCloseTo(best.points, 6);
+    // A sum would be strictly larger than any single race's points.
+    expect(body.entries[0].points).toBeLessThan(
+      slow.points + best.points + middling.points
+    );
   });
 
   it("breaks a PPM tie toward the race that happened first", async () => {
@@ -418,7 +513,7 @@ describe("ranking", () => {
     await seedRace({ user_id: "u1", points: null });
     const { body } = await board();
     expect(body.entries[0].points).toBeNull();
-    expect(body.entries[0].ppm).toBeCloseTo(20, 6);
+    expect(body.entries[0].ppm).toBeCloseTo(ppmFor(60_000), 6);
   });
 
   it("stamps played_at of the ranked race as ISO 8601", async () => {
@@ -507,6 +602,15 @@ describe("limits", () => {
 // deployed Worker is on workers.dev where `caches.default` may be inert
 // entirely — see the CACHE_CONTROL comment in leaderboard.js.
 describe("caching", () => {
+  it("the cache spy observes a real board's lookup and store", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1" });
+    // Positive control for withCacheSpy. Every other use of it asserts zero
+    // calls, which an inert patch would satisfy for the wrong reason; this is
+    // the one that fails if the methods stop being observable.
+    expect(await withCacheSpy(() => board())).toEqual({ match: 1, put: 1 });
+  });
+
   it("lets a shared cache hold a board briefly, but not a private one", async () => {
     const { res } = await board();
     const cc = res.headers.get("cache-control");
@@ -677,9 +781,9 @@ describe("period windows", () => {
     await seedRace({ user_id: "u1", played_at: now, finish_time_ms: 60_000 });
 
     const day = await board({ period: "day" });
-    expect(day.body.entries[0].ppm).toBeCloseTo(20, 6);
+    expect(day.body.entries[0].ppm).toBeCloseTo(ppmFor(60_000), 6);
     const all = await board({ period: "all" });
-    expect(all.body.entries[0].ppm).toBeCloseTo(60, 6);
+    expect(all.body.entries[0].ppm).toBeCloseTo(ppmFor(20_000), 6);
   });
 
   it("keeps the difficulty silo inside every period", async () => {
@@ -769,7 +873,7 @@ describe("without race_results.points (a database at 0008)", () => {
     expect(names(body)).toEqual(["fast", "mid", "slow"]);
     expect(body.entries.map((e) => e.rank)).toEqual([1, 2, 3]);
     expect(body.entries.map((e) => e.points)).toEqual([null, null, null]);
-    expect(body.entries[0].ppm).toBeCloseTo(40, 6);
+    expect(body.entries[0].ppm).toBeCloseTo(ppmFor(30_000), 6);
   });
 
   it("keeps every other eligibility rule while degraded", async () => {
@@ -783,6 +887,25 @@ describe("without race_results.points (a database at 0008)", () => {
 
     const { body } = await board();
     expect(names(body)).toEqual(["grace"]);
+  });
+
+  it("still excludes a non-canonical race — one template, both queries", async () => {
+    await seedUser({ id: "u1", username: "sprinter" });
+    await seedUser({ id: "u2", username: "grace" });
+    await seedOld({
+      user_id: "u1",
+      problems_total: 5,
+      problems_correct: 5,
+      problems_attempted: 5,
+      finish_time_ms: 2_500,
+    });
+    await seedOld({ user_id: "u2", finish_time_ms: 30_000 });
+
+    const { body } = await board();
+    // The eligibility rules must not loosen in the window the fallback exists
+    // for — that would be the board quietly changing what it claims.
+    expect(names(body)).toEqual(["grace"]);
+    expect(body.entries[0].points).toBeNull();
   });
 
   it("serves the period boards too, not only all-time", async () => {
@@ -893,11 +1016,16 @@ describe("rate limiting", () => {
     await seedRace({ user_id: "u1" });
 
     const allowed = limiterEnv(true);
-    await board({ dbEnv: allowed.env });
-    await board({ dbEnv: allowed.env });
-    // The second is a cache hit and still consulted the limiter: a sweep that
-    // is cheap to serve is still a sweep.
+    const spy = countingEnv();
+    const dbEnv = { ...allowed.env, DB: spy.env.DB };
+    await board({ dbEnv });
+    await board({ dbEnv });
+    // Two limiter consultations, one D1 read: the second call really was a
+    // cache hit, and it was charged anyway. A sweep that is cheap to serve is
+    // still a sweep. Without the D1 count the title's second half would hold
+    // even if the cache lookup were deleted.
     expect(allowed.keys()).toEqual([clientIp, clientIp]);
+    expect(spy.prepares()).toBe(1);
   });
 
   it("serves the board when no limiter is configured at all", async () => {

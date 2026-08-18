@@ -111,8 +111,9 @@ function renderRows(entries) {
 const LEADERBOARD_HTML = `
   <h3>Leaderboards</h3>
   <p class="leaderboard__blurb">
-    Fastest single race, by problems per minute. Multiplayer races only —
-    Solo vs Bots is practice, so it doesn't count. Sign in to appear here.
+    Fastest single race, by problems per minute. Standard 10-problem
+    multiplayer races only — Solo vs Bots is practice, and a private room set
+    to a different length won't show up here either. Sign in to appear.
   </p>
 
   <div class="leaderboard__tabs" role="tablist" aria-label="Leaderboard difficulty" data-tabs="difficulty">
