@@ -9,11 +9,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUG_CONTEXT_FIELDS,
+  BUG_REPORT_SOURCES,
   CLIENT_CONTEXT_FIELDS,
   COLUMN_FIELDS,
   collectBugPayload,
@@ -65,6 +66,168 @@ test("never sends a server-determined field from the client", () => {
   const sent = new Set([...Object.keys(payload.context), ...Object.keys(payload)]);
   for (const field of BUG_CONTEXT_FIELDS.filter((f) => f.source === "server")) {
     assert.equal(sent.has(field.key), false, `${field.key} must not be client-sent`);
+  }
+});
+
+// --- The explicit ?from= carried by in-game entry points ---------------------
+//
+// The whole game is one page, so a referrer can only ever say "/" — which
+// screen actually held the link has to travel explicitly. An entry point says
+// so with /bug-report?from=<source>, and `page` prefers that over the referrer.
+
+test("a ?from= carried by an entry point wins over the referrer", () => {
+  const win = fakeWindow({
+    window: {
+      location: { origin: "https://racer.test", href: "https://racer.test/bug-report?from=/race" },
+    },
+  });
+  const { context } = collectBugPayload(win);
+  assert.equal(context.page, "/race");
+});
+
+test("every declared source is honored as a ?from= value", () => {
+  for (const source of BUG_REPORT_SOURCES) {
+    const win = fakeWindow({
+      referrer: "",
+      window: {
+        location: {
+          origin: "https://racer.test",
+          href: `https://racer.test/bug-report?from=${encodeURIComponent(source)}`,
+        },
+      },
+    });
+    assert.equal(collectBugPayload(win).context.page, source);
+  }
+});
+
+test("a ?from= outside the allowlist falls back to the referrer", () => {
+  // An arbitrary crafted link must not get to plant its own words (or a
+  // smuggled credential) in the report.
+  const win = fakeWindow({
+    window: {
+      location: {
+        origin: "https://racer.test",
+        href: "https://racer.test/bug-report?from=" + encodeURIComponent("/reset-password?token=abc"),
+      },
+    },
+  });
+  assert.equal(collectBugPayload(win).context.page, "/race/hard");
+});
+
+test("an unknown ?from= with no referrer keeps no page at all", () => {
+  const win = fakeWindow({
+    referrer: "",
+    window: {
+      location: { origin: "https://racer.test", href: "https://racer.test/bug-report?from=/evil" },
+    },
+  });
+  assert.equal("page" in collectBugPayload(win).context, false);
+});
+
+test("every allowlisted source survives the server's path-only strip", () => {
+  // The Worker truncates page at the first ? or # — a source that carried
+  // either would be stored as something other than what this file declares.
+  for (const source of BUG_REPORT_SOURCES) {
+    assert.equal(source, source.split(/[?#]/)[0], `${source} is not path-only`);
+    assert.ok(source.startsWith("/"), `${source} is not path-shaped`);
+  }
+});
+
+// --- The entry points themselves --------------------------------------------
+//
+// public/ has no build step, so every page under it is served byte-for-byte and
+// its anchors are an owned contract. A link is judged by what a report filed
+// through it would actually record — the href is handed to the real collector —
+// rather than by the text of the href, and the two screens the game promises an
+// entry point on are looked for inside the section that owns each screen, so an
+// anchor that drifts out of #race or #results fails here.
+
+const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+function pageHtml(page) {
+  return readFileSync(join(PUBLIC_DIR, page), "utf8").replace(/<!--[\s\S]*?-->/g, "");
+}
+
+/** The markup a screen's own <section> encloses, nesting counted. */
+function sectionHtml(html, id) {
+  const opened = html.match(new RegExp(`<section\\b[^>]*\\sid="${id}"[^>]*>`));
+  assert.ok(opened, `no <section id="${id}"> to hold an entry point`);
+  const from = opened.index + opened[0].length;
+  let depth = 0;
+  for (const tag of html.slice(from).matchAll(/<(\/?)section\b/g)) {
+    if (!tag[1]) depth += 1;
+    else if (depth === 0) return html.slice(from, from + tag.index);
+    else depth -= 1;
+  }
+  assert.fail(`<section id="${id}"> is never closed`);
+}
+
+const SITE = "https://racer.test";
+
+// Both spellings reach the same asset — public/ is served byte-for-byte, so
+// /bug-report.html is as real a link as /bug-report.
+const BUG_REPORT_PATHS = new Set(["/bug-report", "/bug-report.html"]);
+
+function resolveHref(href) {
+  try {
+    return new URL(href, `${SITE}/`);
+  } catch {
+    return null;
+  }
+}
+
+function bugReportLinksIn(html) {
+  return [...html.matchAll(/<a\b[^>]*>/g)]
+    .map((tag) => tag[0].match(/\shref=(?:"([^"]*)"|'([^']*)')/))
+    .map((match) => match && (match[1] ?? match[2]))
+    .filter((href) => {
+      if (!href) return false;
+      const url = resolveHref(href);
+      return !!url && url.origin === SITE && BUG_REPORT_PATHS.has(url.pathname);
+    });
+}
+
+/** What a report opened through this link would store as its page. */
+function pageRecordedFrom(href) {
+  const win = fakeWindow({
+    referrer: "",
+    window: {
+      location: { origin: SITE, href: resolveHref(href).href },
+    },
+  });
+  return collectBugPayload(win).context.page;
+}
+
+test("every entry point in the static pages records the source it names", () => {
+  // Every page, not a hand-kept list: a link added to any of them is held to
+  // the allowlist, since an undeclared source records nothing at all.
+  const pages = readdirSync(PUBLIC_DIR).filter((name) => name.endsWith(".html"));
+  assert.ok(pages.includes("index.html"), "expected the game page among public/*.html");
+  for (const page of pages) {
+    for (const href of bugReportLinksIn(pageHtml(page))) {
+      const from = resolveHref(href).searchParams.get("from");
+      if (from === null) continue; // a bare pointer still falls back to the referrer
+      assert.equal(
+        pageRecordedFrom(href),
+        from,
+        `${page} links to ${href}, whose from= is not a declared source`
+      );
+    }
+  }
+});
+
+test("the race and results screens each carry a bug-report entry point", () => {
+  const html = pageHtml("index.html");
+  for (const [id, source] of [
+    ["race", "/race"],
+    ["results", "/results"],
+  ]) {
+    const links = bugReportLinksIn(sectionHtml(html, id));
+    assert.ok(links.length > 0, `no bug-report entry point inside <section id="${id}">`);
+    assert.ok(
+      links.some((href) => pageRecordedFrom(href) === source),
+      `<section id="${id}"> has no entry point recording ${source}`
+    );
   }
 });
 

@@ -713,8 +713,10 @@ describe("admin dashboard — captured context", () => {
   });
 
   it("labels the captured path as where they came from, not where the bug was", async () => {
-    // It is referrer-derived, so it is the page they reached the form from.
-    // Where the bug happened is a question the form asks outright.
+    // It prefers the allowlisted `?from=` the entry-point link carries and
+    // otherwise falls back to the same-origin referrer, so either way it is the
+    // surface they reached the form from. Where the bug happened is a question
+    // the form asks outright.
     await insertWithContext(CONTEXT);
     expect(await dashboard()).toMatch(/came from<\/dt><dd>\/some\/route<\/dd>/);
   });

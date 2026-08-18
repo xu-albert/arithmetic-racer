@@ -35,6 +35,24 @@
  * @property {(win: Window) => string|number|undefined} [collect] Client fields.
  */
 
+/**
+ * The values an entry-point link may carry in `/bug-report?from=…`, and
+ * therefore everything `page` can say beyond a real pathname. The game is a
+ * single page, so a referrer can only ever say `/` — these name the screen
+ * within it that actually held the link. Path-shaped on purpose: `page` is
+ * documented as a path, the server strips `?`/`#` from it, and an allowlist
+ * (rather than free text) keeps a crafted link from planting arbitrary words
+ * in the report. Every `?from=` an entry point uses must be listed here — a
+ * test reads the pages' hrefs and holds them to this list.
+ */
+export const BUG_REPORT_SOURCES = [
+  "/", // the main lobby
+  "/race", // mid-race
+  "/results", // the finish podium
+  "/room", // a private/quick-match room lobby
+  "/contact", // the contact form's pointer at the bug form
+];
+
 /** @type {BugContextField[]} */
 export const BUG_CONTEXT_FIELDS = [
   {
@@ -48,11 +66,17 @@ export const BUG_CONTEXT_FIELDS = [
     // slug (?room=); both are access credentials and neither is worth the
     // debugging value of the rest of the URL. The server strips them again.
     pathOnly: true,
+    // An entry-point link names its own surface with `?from=` — the referrer
+    // cannot, since every game screen lives at `/`. The referrer path remains
+    // the fallback for arrivals that carried nothing (a bookmark, the old
+    // contact-page link in someone's history).
     collect: (win) => {
+      const from = new URL(win.location.href).searchParams.get("from");
+      if (from && BUG_REPORT_SOURCES.includes(from)) return from;
       const referrer = win.document?.referrer;
       if (!referrer) return undefined;
-      const from = new URL(referrer, win.location.href);
-      return from.origin === win.location.origin ? from.pathname : undefined;
+      const ref = new URL(referrer, win.location.href);
+      return ref.origin === win.location.origin ? ref.pathname : undefined;
     },
   },
   {
