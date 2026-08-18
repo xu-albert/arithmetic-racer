@@ -77,6 +77,24 @@
       "name": "RACE_RESULT_IP_LIMIT",
       "namespace_id": "1002",
       "simple": { "limit": 60, "period": 60 }
+    },
+    // Cost control on the public boards. GET /api/leaderboard is
+    // unauthenticated and the all-time board scans race_results, so the thing
+    // worth bounding is a scripted sweep (3 difficulties x 5 periods x 50
+    // limits is 750 distinct queries) rather than anything a person does.
+    //
+    // The arithmetic: one lobby mount is 1 request, and the client caches per
+    // mount, so a racer who flips through every tab spends 15 — one per
+    // difficulty/period pair — and then stops. 300/min is 20 of those full
+    // sweeps, i.e. every racer in a NAT'd classroom of 30 exhausting all 15
+    // tabs twice inside the same minute. As with the limiter above, IP-only
+    // keying reads that classroom as one client, which is why the ceiling is
+    // this far above one person's worst case. Counters are per-colo, so this
+    // is a floor on what a distributed caller can send, not a global cap.
+    {
+      "name": "LEADERBOARD_IP_LIMIT",
+      "namespace_id": "1003",
+      "simple": { "limit": 300, "period": 60 }
     }
   ],
   // obscenity ships a broken ESM wrapper at dist/index.mjs (does
@@ -139,6 +157,11 @@
           "name": "RACE_RESULT_IP_LIMIT",
           "namespace_id": "2002",
           "simple": { "limit": 60, "period": 60 }
+        },
+        {
+          "name": "LEADERBOARD_IP_LIMIT",
+          "namespace_id": "2003",
+          "simple": { "limit": 300, "period": 60 }
         }
       ],
       "alias": {

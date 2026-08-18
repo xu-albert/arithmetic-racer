@@ -24,15 +24,30 @@ import { periodStartMs } from "../leaderboard-period.js";
 // the cache key, so each test gets its own: two calls *inside* a test still
 // share an entry exactly as two requests in production would, and no test can
 // see another's. Every request built here goes through `boardUrl`.
+//
+// LEADERBOARD_IP_LIMIT is the same shape of problem: the binding is real here
+// (vitest-pool-workers reads wrangler.jsonc) and its counters are not rolled
+// back either, so every test gets its own client IP as well. Two clients
+// genuinely do get separate budgets; sharing one across the whole file would
+// make a test's result depend on how many ran before it.
 let originSeq = 0;
 let origin = "";
+let clientIp = "";
 
 beforeEach(async () => {
   origin = `https://board-${++originSeq}.test`;
+  clientIp = `203.0.113.${originSeq}`;
   // race_results.user_id has an FK to user.id; clear the child table first.
   await env.DB.exec("DELETE FROM race_results");
   await env.DB.exec(`DELETE FROM "user"`);
 });
+
+/** A request from this test's client, the way the Worker would receive it. */
+function boardRequest(params) {
+  return new Request(boardUrl(params), {
+    headers: { "cf-connecting-ip": clientIp },
+  });
+}
 
 function boardUrl({ difficulty, period, limit } = {}) {
   const u = new URL("/api/leaderboard", origin);
@@ -115,7 +130,7 @@ async function seedRace(overrides = {}, { withPoints = true } = {}) {
 async function board({ difficulty = "medium", period = "all", limit, dbEnv = env } = {}) {
   const ctx = createExecutionContext();
   const res = await handleLeaderboard(
-    new Request(boardUrl({ difficulty, period, limit })),
+    boardRequest({ difficulty, period, limit }),
     dbEnv,
     ctx
   );
@@ -133,6 +148,31 @@ function countingEnv() {
   };
 }
 
+/**
+ * Count the cache interactions `fn` provokes, then put the real methods back.
+ *
+ * This is what makes "a rejection is never cached" a claim about *our* code.
+ * Looking for an absent entry afterwards proves nothing here: this Cache
+ * implementation silently declines to store a 4xx or 429 whatever the
+ * Cache-Control says, so the entry would be missing even if the handler had
+ * tried. Counting the calls tests the ordering we actually control.
+ */
+async function withCacheSpy(fn) {
+  const cache = caches.default;
+  const realMatch = cache.match;
+  const realPut = cache.put;
+  const calls = { match: 0, put: 0 };
+  cache.match = function (...args) { calls.match++; return realMatch.apply(this, args); };
+  cache.put = function (...args) { calls.put++; return realPut.apply(this, args); };
+  try {
+    await fn();
+  } finally {
+    cache.match = realMatch;
+    cache.put = realPut;
+  }
+  return calls;
+}
+
 /** Racers on a board, in rank order. */
 function names(body) {
   return body.entries.map((e) => e.username);
@@ -143,7 +183,7 @@ function names(body) {
 describe("request validation", () => {
   it("400s without a difficulty — there is no combined board", async () => {
     const res = await handleLeaderboard(
-      new Request(boardUrl()),
+      boardRequest(),
       env
     );
     expect(res.status).toBe(400);
@@ -164,7 +204,7 @@ describe("request validation", () => {
 
   it("defaults to the all-time board when period is omitted", async () => {
     const res = await handleLeaderboard(
-      new Request(boardUrl({ difficulty: "easy" })),
+      boardRequest({ difficulty: "easy" }),
       env
     );
     const body = await res.json();
@@ -458,6 +498,14 @@ describe("limits", () => {
 
 // --- caching ---------------------------------------------------------------
 
+// What these prove: the handler's own cache-interaction logic — look before
+// doing work, store on a miss, key on the normalized parameters, and never
+// store a rejection. What they do NOT prove is that anything is cached in
+// production. They run against Miniflare's Cache implementation, whose
+// admission rules are not Cloudflare's (Miniflare reads `s-maxage` ahead of
+// `max-age` and only refuses `no-store`/`no-cache`/`private`), and the
+// deployed Worker is on workers.dev where `caches.default` may be inert
+// entirely — see the CACHE_CONTROL comment in leaderboard.js.
 describe("caching", () => {
   it("lets a shared cache hold a board briefly, but not a private one", async () => {
     const { res } = await board();
@@ -529,6 +577,12 @@ describe("caching", () => {
     expect(bad.res.status).toBe(400);
     expect(spy.prepares()).toBe(0);
 
+    // "No second D1 read" cannot carry this on its own — an invalid request is
+    // never repeated and its key can never collide with a valid one. This is
+    // the assertion that fails if the lookup were moved above validation.
+    const calls = await withCacheSpy(() => board({ difficulty: "expert" }));
+    expect(calls).toEqual({ match: 0, put: 0 });
+
     // The 400 must not have poisoned anything: a valid board still queries.
     await seedUser({ id: "u1", username: "ada" });
     await seedRace({ user_id: "u1" });
@@ -543,7 +597,7 @@ describe("caching", () => {
     const spy = countingEnv();
     const call = async () => {
       const res = await handleLeaderboard(
-        new Request(boardUrl({ difficulty: "medium" })),
+        boardRequest({ difficulty: "medium" }),
         spy.env
       );
       return res.json();
@@ -757,7 +811,7 @@ describe("database failures other than a missing column", () => {
     };
     await expect(
       handleLeaderboard(
-        new Request(boardUrl({ difficulty: "medium" })),
+        boardRequest({ difficulty: "medium" }),
         failingEnv
       )
     ).rejects.toThrow(/no such table/);
@@ -766,5 +820,94 @@ describe("database failures other than a missing column", () => {
     // still reject with it. Exactly one attempt means the missing-column
     // guard actually gated the retry.
     expect(prepares).toBe(1);
+  });
+});
+
+// --- rate limiting ---------------------------------------------------------
+
+// A stub rather than a burst against the real binding: the policy under test
+// is what the handler does with a denial, not the limiter's own counting, and
+// a stub says so in one call instead of 301.
+function limiterEnv(success) {
+  let keys = [];
+  return {
+    env: { ...env, LEADERBOARD_IP_LIMIT: { limit: async ({ key }) => (keys.push(key), { success }) } },
+    keys: () => keys,
+  };
+}
+
+describe("rate limiting", () => {
+  it("is wired to a limiter that wrangler.jsonc actually declares", async () => {
+    // Miniflare builds `env` from wrangler.jsonc, so this is the real consumer
+    // resolving the real config: it fails if the binding is renamed on one
+    // side only, which allowRequest would otherwise swallow by failing open.
+    // Only the top-level environment — vitest does not load env.preview, whose
+    // copy of the binding is a separate edit (see AGENTS.md).
+    expect(typeof env.LEADERBOARD_IP_LIMIT?.limit).toBe("function");
+  });
+
+  it("429s with a retry-after when the limiter denies the client", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1" });
+
+    const denied = limiterEnv(false);
+    const { res, body } = await board({ dbEnv: denied.env });
+
+    expect(res.status).toBe(429);
+    expect(body).toEqual({ error: "rate_limited" });
+    expect(res.headers.get("retry-after")).toBe("60");
+    // Keyed on the caller's IP, which is all this endpoint has to key on.
+    expect(denied.keys()).toEqual([clientIp]);
+  });
+
+  it("serves the board when the limiter allows it", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1" });
+
+    const allowed = limiterEnv(true);
+    const { res, body } = await board({ dbEnv: allowed.env });
+    expect(res.status).toBe(200);
+    expect(names(body)).toEqual(["ada"]);
+  });
+
+  it("never stores a 429, so a lifted limit is not served the rejection", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1" });
+
+    const calls = await withCacheSpy(async () => {
+      const { res } = await board({ dbEnv: limiterEnv(false).env });
+      expect(res.status).toBe(429);
+    });
+    // The limiter returns before the cache exists to the handler at all.
+    expect(calls).toEqual({ match: 0, put: 0 });
+
+    // Same client, same board, limiter no longer denying: a real board, not
+    // the stored 429 that a cache-before-limit ordering would have kept.
+    const after = await board({ dbEnv: limiterEnv(true).env });
+    expect(after.res.status).toBe(200);
+    expect(names(after.body)).toEqual(["ada"]);
+  });
+
+  it("costs a token even when the board comes back from the cache", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1" });
+
+    const allowed = limiterEnv(true);
+    await board({ dbEnv: allowed.env });
+    await board({ dbEnv: allowed.env });
+    // The second is a cache hit and still consulted the limiter: a sweep that
+    // is cheap to serve is still a sweep.
+    expect(allowed.keys()).toEqual([clientIp, clientIp]);
+  });
+
+  it("serves the board when no limiter is configured at all", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedRace({ user_id: "u1" });
+
+    const { res, body } = await board({ dbEnv: { ...env, LEADERBOARD_IP_LIMIT: undefined } });
+    // allowRequest fails open by design — a missing binding must not take the
+    // public lobby down.
+    expect(res.status).toBe(200);
+    expect(names(body)).toEqual(["ada"]);
   });
 });

@@ -38,34 +38,49 @@
 
 import { db, isMissingColumnError } from "../db.js";
 import { logWarn, KINDS } from "../logger.js";
+import { allowRequest } from "../rate-limit.js";
 import { isPeriod, periodStartMs } from "../leaderboard-period.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
+
+/** Matches LEADERBOARD_IP_LIMIT's `period` in wrangler.jsonc. */
+const RATE_LIMIT_WINDOW_S = 60;
 
 /** Rows returned when the caller does not ask for a size. */
 const DEFAULT_LIMIT = 10;
 
 /**
  * Hard ceiling on rows. D1 bills by rows read and this endpoint is public and
- * unauthenticated. The cache below blunts a repeat of the *same* board, but a
- * caller who varies the query is asking for fresh reads every time, so the
- * LIMIT is not a UI preference — it is the bound that keeps a crafted
- * `?limit=` from turning a page load into a table scan's worth of output.
+ * unauthenticated, so the LIMIT is not a UI preference — it is the bound that
+ * keeps a crafted `?limit=` from turning a page load into a table scan's worth
+ * of output. It holds on its own: the cache below may be a no-op on this
+ * deployment (see CACHE_CONTROL), and a caller who varies the query would walk
+ * past it anyway. What bounds *rate* rather than size is LEADERBOARD_IP_LIMIT.
  */
 const MAX_LIMIT = 50;
 
 /**
- * How long one stored board stays servable. This is not decoration for a CDN
- * edge — nothing on a workers.dev subdomain would honour it — it is the TTL
- * the Workers Cache API reads off the response `caches.default.put()` stores,
- * so it is what actually decides when the next request re-reads D1.
+ * How long a stored board *would* stay servable. Read this as intent, not as a
+ * description of what happens today.
  *
- * 30s rather than the longer end of the useful range: a racer who has just set
- * a mark reloads the lobby to look for themselves, and half a minute is about
- * the longest that reads as "the board hasn't caught up" rather than "the
- * board is wrong". `max-age=0` is for the browser, which has no business
- * holding a public board privately — every reload asks the Worker, and the
- * Worker answers from its own cache until the 30s is up.
+ * The cache layer below is best-effort. Cloudflare documents functional cache
+ * operations for Workers on custom domains, and for Pages functions on either
+ * a custom domain or `*.pages.dev`; workers.dev is absent from that list, and
+ * this Worker is deployed to `arithmetic-racer.albertwxu.workers.dev` with no
+ * `routes` in wrangler.jsonc. `cache.put()` resolves to undefined either way,
+ * so on the current deployment it may silently store nothing and every
+ * `cache.match()` may miss — i.e. assume the whole layer is a no-op in
+ * production until the Worker gets a custom domain or route, or Workers
+ * Caching is enabled for it. Both are deploy-topology changes, deliberately
+ * out of scope here; the code is kept because it costs nothing and starts
+ * working the moment either lands. The real ceiling on abuse in the meantime
+ * is LEADERBOARD_IP_LIMIT, which does not depend on any of this.
+ *
+ * The number, for when it does apply: 30s rather than the longer end of the
+ * useful range, because a racer who has just set a mark reloads the lobby to
+ * look for themselves, and half a minute is about the longest that reads as
+ * "the board hasn't caught up" rather than "the board is wrong". `max-age=0`
+ * is for the browser, which has no business holding a public board privately.
  */
 const CACHE_CONTROL = "public, max-age=0, s-maxage=30";
 
@@ -209,13 +224,27 @@ export function parseLimit(raw) {
  *   stored, so the handler stays callable on its own.
  */
 export async function handleLeaderboard(request, env, ctx) {
+  // Before anything else, including the cache lookup: the limiter bounds
+  // *requests*, and a sweep that is being served cheaply is still a sweep.
+  // Keyed on IP because there is nothing else to key on — no session, no
+  // device id, no body. `allowRequest` fails open where no binding is
+  // configured, which is the same call every other limiter here makes.
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  if (!(await allowRequest(env.LEADERBOARD_IP_LIMIT, ip))) {
+    return Response.json(
+      { error: "rate_limited" },
+      { status: 429, headers: { "retry-after": String(RATE_LIMIT_WINDOW_S) } }
+    );
+  }
+
   const url = new URL(request.url);
   const difficulty = url.searchParams.get("difficulty") ?? "";
   const period = url.searchParams.get("period") ?? "all";
 
   // Both rejections return before the cache is touched: a 400 is a statement
   // about the request, not a board, and storing one would be storing garbage
-  // under a key no valid request can produce anyway.
+  // under a key no valid request can produce anyway. The 429 above returns
+  // earlier still, so neither rejection can ever be stored.
   if (!DIFFICULTIES.has(difficulty)) {
     return Response.json({ error: "invalid_difficulty" }, { status: 400 });
   }
