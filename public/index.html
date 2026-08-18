@@ -129,6 +129,20 @@
       </div>
     </div>
 
+    <!-- Focused (not announced) on arrival: the copy is static, so a live
+         region has nothing to report when the screen is merely unhidden. -->
+    <section id="room-expired" class="screen hidden" tabindex="-1">
+      <h2>Room expired</h2>
+      <p id="room-expired-message" class="lobby-hint">
+        This private room was closed after 30 minutes with nobody playing. Its
+        invite link no longer works — start a new room and share that instead.
+      </p>
+      <div class="room-actions">
+        <button id="expired-new-room-btn" class="primary">Create a New Room</button>
+        <button id="expired-home-btn" class="link-button">Back to Home</button>
+      </div>
+    </section>
+
     <section id="race" class="screen hidden">
       <div id="countdown" class="hidden" aria-live="polite"></div>
       <div id="finish-banner" class="hidden" aria-live="polite">

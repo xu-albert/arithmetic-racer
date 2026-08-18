@@ -101,6 +101,7 @@ const screens = {
   race: document.getElementById('race'),
   results: document.getElementById('results'),
   profile: document.getElementById('profile'),
+  'room-expired': document.getElementById('room-expired'),
 };
 
 // Difficulty picker is scoped to #lobby — the room lobby has its own.
@@ -187,17 +188,38 @@ function handleRoomRaceStart({ roomClient, initialState, youAre }) {
   cleanupRace = attachRaceUI({ runner, raceLength: initialState.raceLength, screens });
 }
 
+// Terminal state for a private room: the server wound it down after 30 minutes
+// of inactivity. Tear everything room-shaped down so nothing keeps rendering
+// against a room that no longer exists, then offer the two ways out.
+function handleRoomExpired() {
+  if (cleanupRace) { cleanupRace(); cleanupRace = null; }
+  if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
+  document.getElementById('invite-modal')?.classList.add('hidden');
+  showScreen('room-expired');
+  // The switch can happen while the player is staring at the race screen, so
+  // move focus rather than leaving a screen reader on a lane that just vanished.
+  screens['room-expired']?.focus();
+}
+
 function enterRoom(roomId, { mode, difficulty } = {}) {
   if (!mode) history.replaceState(null, '', `/?room=${roomId}`);
   lobbyHandle = attachLobby({
     roomId,
     screens,
     onRaceStart: handleRoomRaceStart,
+    onRoomExpired: handleRoomExpired,
     mode,
     difficulty,
     deviceId: getOrCreateDeviceId(),
   });
   showScreen('lobby-room');
+}
+
+async function createRoom() {
+  const res = await fetch('/api/rooms', { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed: ${res.status}`);
+  const { roomId } = await res.json();
+  return roomId;
 }
 
 // ---- Initial routing ----------------------------------------------------
@@ -243,15 +265,35 @@ findMatchBtn?.addEventListener('click', async () => {
 createRoomBtn.addEventListener('click', async () => {
   createRoomBtn.disabled = true;
   try {
-    const res = await fetch('/api/rooms', { method: 'POST' });
-    if (!res.ok) throw new Error(`Failed: ${res.status}`);
-    const { roomId } = await res.json();
-    enterRoom(roomId);
+    enterRoom(await createRoom());
   } catch (e) {
     console.error('create room failed', e);
     alert('Could not create room. Try again.');
   } finally {
     createRoomBtn.disabled = false;
+  }
+});
+
+// ---- Expired-room screen ------------------------------------------------
+
+const expiredHomeBtn = document.getElementById('expired-home-btn');
+const expiredNewRoomBtn = document.getElementById('expired-new-room-btn');
+
+expiredHomeBtn?.addEventListener('click', () => {
+  // Full navigation, not showScreen: the URL still carries ?room=<dead id>,
+  // and a reload of it would land right back on this screen.
+  location.assign('/');
+});
+
+expiredNewRoomBtn?.addEventListener('click', async () => {
+  expiredNewRoomBtn.disabled = true;
+  try {
+    const roomId = await createRoom();
+    location.assign(`/?room=${encodeURIComponent(roomId)}`);
+  } catch (e) {
+    console.error('create room failed', e);
+    alert('Could not create room. Try again.');
+    expiredNewRoomBtn.disabled = false;
   }
 });
 

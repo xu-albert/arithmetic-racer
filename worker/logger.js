@@ -17,6 +17,7 @@
 export const KINDS = {
   RACE_RESULT_DB: "race_result_db",
   ROOM_MESSAGE: "room_message",
+  ROOM_CLAIM_FAILED: "room_claim_failed",
   CLAIM_FAILED: "claim_failed",
   WELCOME_EMAIL_FAILED: "welcome_email_failed",
   EMAIL_SEND_FAILED: "email_send_failed",

@@ -36,6 +36,54 @@ pushes `publicState`), so every new broadcast must go through `publicPlayer()`.
 `server/room-identity.test.js` and the hygiene tests in `server/public-room.test.js` fail
 if a secret reaches the wire.
 
+## Room lifecycle: private rooms wind down, public ones do not
+
+Every timer a room owns shares one DO alarm slot, coalesced by
+`scheduleNextAlarm()` — add a deadline there or it never fires. In a room that
+expires when idle it rewrites the alarm only when the new deadline is earlier,
+or later by more than `ALARM_SLOP_MS`; the idle clock moves on every client
+frame, and paying a durable `setAlarm` for each one is what that skip avoids.
+An alarm firing up to a slop window early costs a wake-up, nothing more —
+`onAlarm()` re-derives its deadlines and reschedules. Rooms without an idle
+clock (public) keep writing every changed deadline exactly, since they only
+move one a few times per match. Three timers now run side by side, and they are
+deliberately different mechanisms:
+
+- **Reconnect grace** (30s) and **empty-room cleanup** (5 min) — unchanged, and
+  the cleanup still re-mints state, which is what resets `nextPid`.
+- **Idle winddown** (30 min, private only) — `PRIVATE_ROOM_IDLE_MS`. Driven by
+  `state.lastActivityAt`, which `touchActivity()` bumps on connect, close, and
+  any *recognized* client message. Alarm ticks are not activity, so a race
+  nobody is answering is idle. It ends in `expireRoom()`: state becomes an
+  `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped, and everyone attached
+  gets `room-expired` and a closed socket.
+
+Two traps this arrangement sets:
+
+- **The alarm time is durable; the timestamp behind it is not.** Bumping
+  `lastActivityAt` without persisting means a DO evicted before its alarm wakes
+  with a stale clock and winds a live room down early. `flushActivity()` exists
+  for the handlers that reply without persisting; keep new ones behind it.
+- **`PublicRaceRoom.expiresWhenIdle()` returns false**, and everything winddown
+  reads that hook. Quickmatch rooms are single-shot and unlinkable — expiring
+  one would strand a player on a screen whose only exit is a room they cannot
+  reach. Gate any new lifecycle behavior on the same hook.
+
+For a private room the 5-minute cleanup no longer deletes DO storage — it
+re-mints state and persists it, carrying the idle clock forward — so an expired
+private room leaves a small storage row behind for good. Nothing wakes the DO
+to collect it; it is cleared lazily, by `claimRoomName()` when the name is drawn
+again or by the `EXPIRED_ROOM_TTL_MS` check in `onStart()` if someone connects
+after 24h. That unbounded-but-tiny growth was accepted deliberately: it is the
+price of the expired screen, and a collector alarm would cost more than the row.
+
+The tombstone answers for the room name for `EXPIRED_ROOM_TTL_MS`, because room
+ids are three words from a ~13k-combination list and a new room really can draw
+an expired one's name. `POST /api/rooms` clears it via the `claimRoomName()` RPC
+— which runs *before* `onStart()`, so it reads storage itself rather than
+trusting `this.state`. Coverage: `server/room-winddown.test.js` (server) and
+`public/src/room-expiry.test.js` (the client contract in `room-expiry.js`).
+
 ## Dependencies and the lockfile
 
 The Cloudflare Workers build runs `npm ci`, which hard-fails unless `package-lock.json`
