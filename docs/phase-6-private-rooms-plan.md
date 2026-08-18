@@ -11,6 +11,12 @@
 > "a matching racerId" — that proof is what stops a stranger who read an id off the wire
 > from claiming the seat. See "Room identity" in `AGENTS.md`.
 
+> **Superseded on room lifetime (2026-08-18).** Every statement below about how a room
+> dies — the "Room lifetime" decision row, Task 4's idle-cleanup step, and the manual
+> test rows that expect a wiped room — predates the idle winddown. A private room now
+> also expires after 30 minutes with no client touching it, and the 5-minute empty-room
+> cleanup no longer deletes its storage. See "Room lifecycle" in `AGENTS.md`.
+
 ---
 
 ## Onboarding (read first, in order)
