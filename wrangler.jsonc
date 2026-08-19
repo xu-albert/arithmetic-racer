@@ -84,9 +84,11 @@
     // Sized against the false positive, not against the script. A scripted
     // sweep is 3 difficulties x 5 periods x 50 limits = 750 queries it can
     // issue as fast as the network allows; no per-minute ceiling in this range
-    // changes that outcome, and what actually bounds it is the response cache
-    // and MAX_LIMIT. What a ceiling CAN do is deny a real group on the lobby's
-    // first screen, and that is the direction worth avoiding.
+    // changes that outcome. This limiter is the rate bound and MAX_LIMIT is the
+    // size bound — do not credit the response cache with either, because on a
+    // workers.dev deployment it may store nothing at all (see CACHE_CONTROL in
+    // worker/routes/leaderboard.js). What a ceiling CAN do is deny a real group
+    // on the lobby's first screen, and that is the direction worth avoiding.
     //
     // The arithmetic: one lobby mount is 1 request, and the client caches per
     // mount, so a racer who flips through every tab spends 15 — one per

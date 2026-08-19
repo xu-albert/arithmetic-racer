@@ -7,13 +7,17 @@
 // Whether the real binding works under vitest-pool-workers is a separate
 // question, asserted at the bottom of this file.
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { env } from "cloudflare:test";
-import { allowRequest } from "./rate-limit.js";
+import { allowRequest, _resetFailOpenWarnings } from "./rate-limit.js";
 
 const allowing = { limit: async () => ({ success: true }) };
 const blocking = { limit: async () => ({ success: false }) };
 
+// The fail-open warnings latch per condition and the latches are module state,
+// so without this a test's log expectations would depend on whether an earlier
+// test had already tripped the same condition.
+beforeEach(() => _resetFailOpenWarnings());
 afterEach(() => vi.restoreAllMocks());
 
 describe("allowRequest", () => {
@@ -53,6 +57,37 @@ describe("allowRequest", () => {
     const logged = JSON.parse(warn.mock.calls[0][0]);
     expect(logged.kind).toBe("rate_limit_unavailable");
     expect(logged.context.outcome).toBe("failed_open");
+    expect(logged.context.cause).toBe("limiter_threw");
+  });
+
+  it("says it once, not once per request", async () => {
+    // The condition is a property of the deployment or of an ongoing incident,
+    // and this helper is consulted on every board load. A line per call would
+    // scale with traffic while telling an operator nothing the first line did
+    // not — and every call must still be allowed through.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const broken = { limit: async () => { throw new Error("binding exploded"); } };
+    for (let i = 0; i < 5; i++) {
+      expect(await allowRequest(broken, `device-${i}`)).toBe(true);
+    }
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("latches the two fail-open causes apart", async () => {
+    // A missing binding is a config mistake that will not fix itself; a
+    // throwing binding is usually transient. Silencing one must not silence
+    // the other, or an incident during a misconfiguration goes unreported.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const broken = { limit: async () => { throw new Error("binding exploded"); } };
+
+    await allowRequest(broken, "device-1");
+    await allowRequest(broken, "device-2");
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    expect(await allowRequest(undefined, "device-3")).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.map((c) => JSON.parse(c[0]).context.cause))
+      .toEqual(["limiter_threw", "no_binding"]);
   });
 
   it("treats a malformed limiter response as a block rather than a pass", async () => {

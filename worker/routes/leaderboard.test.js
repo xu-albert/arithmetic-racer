@@ -368,8 +368,6 @@ describe("difficulty silo", () => {
   });
 });
 
-// --- race length -----------------------------------------------------------
-
 describe("the canonical length constant", () => {
   it("equals the race length rooms actually create", async () => {
     // The coupling that a comment cannot hold. Every board-eligible row takes
@@ -381,32 +379,15 @@ describe("the canonical length constant", () => {
     expect(freshState("any-room").raceLength).toBe(CANONICAL_RACE_LENGTH);
   });
 
-  it("is the length the query actually filters on", async () => {
-    // Ties the constant to observable behaviour rather than to itself: a race
-    // at exactly this length lists, one problem either side does not.
-    await seedUser({ id: "u1", username: "canonical" });
-    await seedUser({ id: "u2", username: "shorter" });
-    await seedUser({ id: "u3", username: "longer" });
-    const at = CANONICAL_RACE_LENGTH;
-    for (const [user, n] of [["u1", at], ["u2", at - 1], ["u3", at + 1]]) {
-      await seedRace({
-        user_id: user,
-        problems_total: n,
-        problems_correct: n,
-        problems_attempted: n,
-        finish_time_ms: 30_000,
-      });
-    }
-
-    expect(names((await board()).body)).toEqual(["canonical"]);
-  });
 });
 
 // --- race length -----------------------------------------------------------
 
 // PPM is only comparable between races of the same length, and length is
 // caller-chosen in a private room. These are the rows that would otherwise sit
-// at rank 1 forever without anyone racing faster.
+// at rank 1 forever without anyone racing faster. The exclusions below are
+// stated in terms of CANONICAL_RACE_LENGTH, so together with the coupling
+// assertion above they tie the predicate to the length rooms actually create.
 describe("canonical race length", () => {
   it("excludes a five-problem sprint even though it posts the highest PPM", async () => {
     await seedUser({ id: "u1", username: "sprinter" });
@@ -437,6 +418,24 @@ describe("canonical race length", () => {
       finish_time_ms: 30_000,
     });
     expect((await board()).body.entries).toEqual([]);
+  });
+
+  it("excludes one problem either side of canonical", async () => {
+    await seedUser({ id: "u1", username: "canonical" });
+    await seedUser({ id: "u2", username: "shorter" });
+    await seedUser({ id: "u3", username: "longer" });
+    const at = CANONICAL_RACE_LENGTH;
+    for (const [user, n] of [["u1", at], ["u2", at - 1], ["u3", at + 1]]) {
+      await seedRace({
+        user_id: user,
+        problems_total: n,
+        problems_correct: n,
+        problems_attempted: n,
+        finish_time_ms: 30_000,
+      });
+    }
+
+    expect(names((await board()).body)).toEqual(["canonical"]);
   });
 
   it("admits the canonical race and ranks it normally", async () => {

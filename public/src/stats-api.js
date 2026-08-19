@@ -1,6 +1,6 @@
 // Wrapper for /api/* endpoints. Shapes match worker/api-contracts.js.
-// All requests use credentials: 'include' so the session cookie is sent
-// with cross-route fetches.
+// Session-bearing requests use credentials: 'include' so the cookie is sent
+// with cross-route fetches; the public boards omit it — see getLeaderboard.
 
 export async function postRaceResult(input) {
   const res = await fetch("/api/race-result", {

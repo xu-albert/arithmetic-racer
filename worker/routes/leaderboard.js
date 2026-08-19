@@ -404,7 +404,14 @@ export async function handleLeaderboard(request, env, ctx) {
   );
 
   // Stored behind waitUntil so the racer waiting on this board never pays for
-  // the write, and cloned because put() consumes the body it is handed.
-  if (ctx?.waitUntil) ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  // the write, and cloned because put() consumes the body it is handed. The
+  // rejection is swallowed to make "best-effort" true: the board has already
+  // been returned, a failed store has nothing to tell the caller, and an
+  // unhandled waitUntil rejection would attach an exception to every board
+  // request — whether the Cache API refuses this Cache-Control quietly or by
+  // throwing is exactly what the block above says we cannot assert.
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(cache.put(cacheKey, response.clone()).catch(() => {}));
+  }
   return response;
 }
