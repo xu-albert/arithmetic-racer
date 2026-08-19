@@ -12,11 +12,16 @@
 
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
-import { handleLeaderboard, parseLimit, CANONICAL_RACE_LENGTH } from "./leaderboard.js";
+import {
+  handleLeaderboard,
+  parseLimit,
+  CANONICAL_RACE_LENGTH,
+  rateLimitLogDecision,
+  _resetRateLimitLog,
+} from "./leaderboard.js";
 import { freshState } from "../../server/room.js";
 import { computePoints, computePpm } from "../race-score.js";
 import { periodStartMs } from "../leaderboard-period.js";
-import { logWarn, KINDS } from "../logger.js";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -39,6 +44,10 @@ let clientIp = "";
 beforeEach(async () => {
   origin = `https://board-${++originSeq}.test`;
   clientIp = `203.0.113.${originSeq}`;
+  // The denial-log latch is module state and a window is 60s, so without this
+  // every test after the first denial would silently observe zero lines and
+  // any assertion about logging would depend on execution order.
+  _resetRateLimitLog();
   // race_results.user_id has an FK to user.id; clear the child table first.
   await env.DB.exec("DELETE FROM race_results");
   await env.DB.exec(`DELETE FROM "user"`);
@@ -1047,29 +1056,70 @@ describe("rate limiting", () => {
     expect(names(after.body)).toEqual(["ada"]);
   });
 
-  it("logs that the limit is being hit, but not once per rejected request", async () => {
+  // The throttle is pure, so the bound is asserted on the decision itself
+  // rather than on wall-clock timing or on whichever test denied first.
+  describe("the denial-log throttle", () => {
+    const WINDOW_MS = 60_000;
+    const FRESH = { denials: 0, lastLogMs: null };
+
+    it("emits on the first denial, as a notice rather than a count", () => {
+      const first = rateLimitLogDecision(FRESH, 1_000);
+      expect(first.emit).toBe(true);
+      expect(first.denials).toBe(1);
+      // No previous line to measure from — the field that stops a reader
+      // taking `denials: 1` for "the limit was hit once".
+      expect(first.sinceMs).toBeNull();
+    });
+
+    it("stays silent for the rest of the window, however many denials arrive", () => {
+      let state = rateLimitLogDecision(FRESH, 1_000).state;
+      for (let i = 1; i <= 4; i++) {
+        const d = rateLimitLogDecision(state, 1_000 + i);
+        expect(d.emit).toBe(false);
+        state = d.state;
+      }
+      // Suppressed, not dropped: the tail is still being counted.
+      expect(state.denials).toBe(4);
+    });
+
+    it("reports the suppressed tail on the next denial past the window", () => {
+      let state = rateLimitLogDecision(FRESH, 1_000).state;
+      for (let i = 1; i <= 4; i++) state = rateLimitLogDecision(state, 1_000 + i).state;
+
+      const next = rateLimitLogDecision(state, 1_000 + WINDOW_MS);
+      expect(next.emit).toBe(true);
+      // Four suppressed plus the denial that carried them out.
+      expect(next.denials).toBe(5);
+      expect(next.sinceMs).toBe(WINDOW_MS);
+      expect(next.state).toEqual({ denials: 0, lastLogMs: 1_000 + WINDOW_MS });
+    });
+
+    it("does not emit one millisecond early", () => {
+      const state = rateLimitLogDecision(FRESH, 1_000).state;
+      expect(rateLimitLogDecision(state, 1_000 + WINDOW_MS - 1).emit).toBe(false);
+    });
+  });
+
+  it("logs when the limiter denies a request", async () => {
     const seen = [];
     const realWarn = console.warn;
     console.warn = (line) => { seen.push(String(line)); };
     try {
-      // Positive control: prove the spy is live before reading anything into
-      // a low count. Without this, an inert patch would "pass" the bound.
-      logWarn(KINDS.LEADERBOARD_RATE_LIMITED, "probe", {});
-      expect(seen).toHaveLength(1);
-
       const denied = limiterEnv(false);
-      for (let i = 0; i < 5; i++) {
-        expect((await board({ dbEnv: denied.env })).res.status).toBe(429);
-      }
+      expect((await board({ dbEnv: denied.env })).res.status).toBe(429);
     } finally {
       console.warn = realWarn;
     }
 
-    // Five denials, at most one line. The latch is module-level and a window
-    // is 60s, so an earlier test in this file may already hold it — zero is a
-    // legitimate outcome and five is not, which is exactly the bound.
-    const lines = seen.slice(1).filter((l) => l.includes("leaderboard_rate_limited"));
-    expect(lines.length).toBeLessThanOrEqual(1);
+    // Deterministic because beforeEach cleared the latch: the handler's denial
+    // path reaches the throttle, and the throttle's first decision emits.
+    const lines = seen.filter((l) => l.includes("leaderboard_rate_limited"));
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]).context).toEqual({
+      denials: 1,
+      since_ms: null,
+      window_s: 60,
+    });
   });
 
   it("costs a token even when the board comes back from the cache", async () => {

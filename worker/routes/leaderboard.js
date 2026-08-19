@@ -260,7 +260,7 @@ function warnSchemaBehind(err, context) {
 }
 
 /**
- * Denials since the last line, and when that line went out.
+ * Should this denial produce a log line, and what does the line say?
  *
  * race-result.js logs nothing when it turns a request away, and for a POST
  * that is fine — the client that sent it sees the 429. This endpoint is the
@@ -270,21 +270,49 @@ function warnSchemaBehind(err, context) {
  * Bounded to one line per window on purpose. A line per denial would scale
  * exactly with the flood the limiter exists to absorb, at
  * `observability.head_sampling_rate: 1` — the same shape of problem as the
- * schema-behind latch above. The signal wanted here is "this limit is being
- * hit, this much", which one line per minute carries and a thousand do not.
+ * schema-behind latch above.
+ *
+ * READ THE PAYLOAD CAREFULLY. This emits on the *leading* edge, so the first
+ * line of a burst is a first-denial notice, not a census: `denials: 1` with
+ * `since_ms: null` means "the limit just started being hit", not "the limit
+ * was hit once". A Worker has no timer and no trailing flush, so denials that
+ * accumulate after that line only surface when a later denial crosses the
+ * window — which means `denials` is a real count only on a line whose
+ * `since_ms` is at least one window. `since_ms` is carried precisely so the
+ * two cases cannot be confused: a big `denials` over a `since_ms` barely past
+ * the window is a flood, and a burst that dies inside one window leaves its
+ * tail uncounted rather than misreported.
+ *
+ * Pure so the bound is testable without leaning on wall-clock timing or on
+ * whichever test denied first: state in, decision out.
+ *
+ * @param {{denials: number, lastLogMs: number|null}} state
+ * @param {number} now
  */
-let rateLimitDenials = 0;
-let lastRateLimitLogMs = 0;
+export function rateLimitLogDecision(state, now) {
+  const denials = state.denials + 1;
+  const sinceMs = state.lastLogMs == null ? null : now - state.lastLogMs;
+  if (sinceMs !== null && sinceMs < RATE_LIMIT_WINDOW_S * 1000) {
+    return { emit: false, state: { denials, lastLogMs: state.lastLogMs } };
+  }
+  // The emitting denial counts itself, so this is the suppressed tail plus one.
+  return { emit: true, denials, sinceMs, state: { denials: 0, lastLogMs: now } };
+}
+
+let rateLimitLogState = { denials: 0, lastLogMs: null };
+
+/** Test seam: the latch outlives a request, so a suite must be able to clear it. */
+export function _resetRateLimitLog() {
+  rateLimitLogState = { denials: 0, lastLogMs: null };
+}
 
 function warnRateLimited() {
-  rateLimitDenials++;
-  const now = Date.now();
-  if (now - lastRateLimitLogMs < RATE_LIMIT_WINDOW_S * 1000) return;
-  const denials = rateLimitDenials;
-  rateLimitDenials = 0;
-  lastRateLimitLogMs = now;
+  const decision = rateLimitLogDecision(rateLimitLogState, Date.now());
+  rateLimitLogState = decision.state;
+  if (!decision.emit) return;
   logWarn(KINDS.LEADERBOARD_RATE_LIMITED, "per-IP board limit denied a request", {
-    denials,
+    denials: decision.denials,
+    since_ms: decision.sinceMs,
     window_s: RATE_LIMIT_WINDOW_S,
   });
 }
