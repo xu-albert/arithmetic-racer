@@ -49,9 +49,10 @@
     { "binding": "MATCHMAKING_LIMITS", "id": "11bbfc11f5504dab944ebc4d69bb91f0" },
     { "binding": "CONTACT_LIMITS", "id": "11bbfc11f5504dab944ebc4d69bb91f0" }
   ],
-  // Rate limiting for POST /api/race-result. `period` accepts only 10 or 60,
-  // and counters are per-colo — so these are floors on what a distributed
-  // client can send, not global ceilings.
+  // Rate limiting for the public routes — POST /api/race-result and, further
+  // down, GET /api/leaderboard. `period` accepts only 10 or 60, and counters
+  // are per-colo — so these are floors on what a distributed client can send,
+  // not global ceilings.
   //
   // 6/min/device: a race is 10 problems (RACE_LENGTH) and the game's own
   // human-speed model peaks at 35 problems/min, so an easy-mode cycle runs

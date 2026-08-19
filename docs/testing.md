@@ -145,12 +145,16 @@ Automated coverage: `worker/routes/recent-finishes.test.js` (eligibility, suspec
 
 ## Lobby leaderboards
 
-`GET /api/leaderboard` is covered by `worker/routes/leaderboard.test.js` (eligibility, silo,
-ranking, period boundaries) and `public/src/leaderboard-period.test.js` (UTC windows). What follows
-is the part the automated suite cannot see: that the boards reach the lobby correctly.
+Automated coverage: `worker/routes/leaderboard.test.js` (eligibility, silo, ranking, period
+boundaries), `public/src/leaderboard-period.test.js` (UTC windows), and
+`public/src/leaderboard.test.js` (row rendering and escaping, plus the mount-order rules — clearing
+the table before a cache-miss fetch, the live-region summary, and dropping a cached board whose UTC
+window has rolled). What follows is the part the automated suite cannot see: that the boards reach
+the lobby correctly.
 
 Seed local D1 first (the endpoint reads only what `migrations/` defines, so apply them to the
-local database before `npx wrangler dev` — see the command in the section above).
+local database before `npx wrangler dev` — the same `wrangler d1 execute … --local` invocation as
+the query above, with `--file=migrations/<file>.sql` in place of `--command`).
 
 ```bash
 curl -s "http://localhost:8787/api/leaderboard?difficulty=medium&period=day"

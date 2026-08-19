@@ -1,10 +1,13 @@
-// Pure-helper tests for leaderboard.js. DOM/event wiring is not covered here,
-// matching profile.test.js — the row-rendering helper is pure by design so the
-// escaping and the empty cases can be tested without a browser.
+// Tests for leaderboard.js.
+//
+// Most of it is pure by design — the row-rendering helper especially, so the
+// escaping and the empty cases can be tested without a browser. The mount
+// section at the bottom covers the ordering rules that only exist inside
+// `load()`, against a DOM stand-in the size of what the module touches.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { _internals } from "./leaderboard.js";
+import { _internals, mountLeaderboard } from "./leaderboard.js";
 
 const {
   DIFFICULTIES,
@@ -282,4 +285,294 @@ test("renderRows survives a malformed entry instead of throwing", () => {
 test("escapeHtml covers every character that can break out of a cell", () => {
   assert.equal(escapeHtml(`<>&"'`), "&lt;&gt;&amp;&quot;&#39;");
   assert.equal(escapeHtml("plain"), "plain");
+});
+
+// ---------- mount: the wiring those helpers sit behind -----------------------
+//
+// The three decisions below live in `load()`/`paint()`, not in a pure helper,
+// so a helper test cannot see them: the table is emptied *before* a cache-miss
+// fetch, a painted board announces itself in the live region, and a cached
+// board is dropped once its UTC window has rolled. Each is a rule about the
+// order things happen in, which is exactly what a later edit can undo without
+// touching a helper.
+//
+// The DOM here is a stand-in the size of what the module touches — the same
+// approach recent-finishes.test.js takes, and for the same reason (node --test,
+// no DOM). It deliberately does not parse `LEADERBOARD_HTML`: the markup is the
+// subject of the helper tests above and of docs/testing.md's L1-L9, while what
+// is under test here is control flow. `#leaderboard-tbody` and friends resolve
+// because this fake says so, so a template that lost one would fail in the
+// browser, not here.
+
+/** A node with just the surface leaderboard.js reaches for. */
+class FakeElement {
+  constructor(dataset = {}) {
+    this.dataset = dataset;
+    this.textContent = "";
+    this.innerHTML = "";
+    this.attrs = new Map();
+  }
+  setAttribute(name, value) {
+    this.attrs.set(name, value);
+  }
+  getAttribute(name) {
+    return this.attrs.get(name) ?? null;
+  }
+  /** Only ever asked for the tab selector, and a tab is its own match. */
+  closest() {
+    return this.dataset.difficulty || this.dataset.period ? this : null;
+  }
+}
+
+// The click handler gates on `target instanceof Element`, which is a real
+// global in a browser and absent here. node --test gives each file its own
+// process, so defining it cannot leak into another suite.
+globalThis.Element = FakeElement;
+
+function fakeHost() {
+  const tbody = new FakeElement();
+  const statusEl = new FakeElement();
+  const windowEl = new FakeElement();
+  const tabs = [
+    ...DIFFICULTIES.map((d) => new FakeElement({ difficulty: d })),
+    ...PERIODS.map((p) => new FakeElement({ period: p.id })),
+  ];
+  const byId = {
+    "#leaderboard-tbody": tbody,
+    "#leaderboard-status": statusEl,
+    "#leaderboard-window": windowEl,
+  };
+  let onClick = null;
+  const host = {
+    innerHTML: "",
+    tbody,
+    statusEl,
+    windowEl,
+    querySelector: (sel) => byId[sel] ?? null,
+    querySelectorAll: (sel) =>
+      sel === "[data-difficulty]"
+        ? tabs.filter((t) => t.dataset.difficulty)
+        : tabs.filter((t) => t.dataset.period),
+    addEventListener: (type, fn) => {
+      if (type === "click") onClick = fn;
+    },
+    contains: (el) => tabs.includes(el),
+    /** Click a tab the way a racer does. */
+    clickTab(kind, value) {
+      const tab = tabs.find((t) => t.dataset[kind] === value);
+      assert.ok(tab, `no ${kind} tab for ${value}`);
+      onClick({ target: tab, preventDefault() {} });
+    },
+    pressed: (kind, value) =>
+      tabs.find((t) => t.dataset[kind] === value)?.getAttribute("aria-pressed"),
+  };
+  return host;
+}
+
+/** A board response shaped the way worker/routes/leaderboard.js sends one. */
+function boardResponse(difficulty, period, entries, periodStart = null) {
+  return {
+    difficulty,
+    period,
+    period_start: periodStart,
+    generated_at: new Date().toISOString(),
+    entries: entries.map((e, i) => ({ rank: i + 1, ...e })),
+  };
+}
+
+const ROW = { username: "speedy_sam", ppm: 34.1, points: 5.7, played_at: new Date().toISOString() };
+
+/**
+ * UTC midnight of the day `nowMs` falls in.
+ *
+ * The two window tests below stamp their boards from this rather than from a
+ * hardcoded date, for the reason worker/routes/leaderboard.test.js gives: a
+ * board that only passes on a Tuesday is worse than none. `load()` reads its
+ * own `Date.now()`, so the pair can in principle straddle a UTC midnight and
+ * disagree — a sub-millisecond window that no injectable clock exists for here,
+ * and one that fails loudly rather than silently if it ever lands.
+ */
+function utcMidnight(nowMs) {
+  const d = new Date(nowMs);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+/**
+ * Stub `fetch` for the duration of one test, answering each call from
+ * `handler(difficulty, period)`. Returns the recorded calls plus a restore.
+ */
+function stubFetch(handler) {
+  const calls = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const params = new URLSearchParams(String(url).split("?")[1] ?? "");
+    const difficulty = params.get("difficulty");
+    const period = params.get("period");
+    calls.push(`${difficulty}:${period}`);
+    return { ok: true, json: async () => handler(difficulty, period) };
+  };
+  return { calls, restore: () => { globalThis.fetch = real; } };
+}
+
+/** Let every pending microtask and resolved promise settle. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+test("a cache-miss tab switch empties the table before the new board lands", async () => {
+  let release;
+  const pending = new Promise((r) => { release = r; });
+  const fetches = stubFetch(async (difficulty, period) => {
+    if (difficulty === "hard") await pending;
+    return boardResponse(difficulty, period, [ROW]);
+  });
+  try {
+    const host = fakeHost();
+    mountLeaderboard(host, { difficulty: "medium" });
+    await settle();
+    assert.match(host.tbody.innerHTML, /speedy_sam/, "the first board never painted");
+
+    host.clickTab("difficulty", "hard");
+    await settle();
+    // The Hard tab is already lit, so leaving Medium's rows up would put one
+    // tier's racers under another tier's tab — the silo, misstated.
+    assert.equal(host.pressed("difficulty", "hard"), "true");
+    assert.equal(host.tbody.innerHTML, "", "the previous tier's rows survived the switch");
+    assert.equal(host.windowEl.textContent, "", "the previous board's caption survived");
+    assert.equal(host.statusEl.textContent, "Loading…");
+
+    release();
+    await settle();
+    assert.match(host.tbody.innerHTML, /speedy_sam/);
+    assert.equal(host.statusEl.textContent, "Hard, All-time — 1 racer");
+  } finally {
+    fetches.restore();
+  }
+});
+
+test("a painted board announces which board it is, filled or empty", async () => {
+  const fetches = stubFetch((difficulty, period) =>
+    boardResponse(difficulty, period, difficulty === "easy" ? [] : [ROW, { ...ROW, username: "math_maya" }])
+  );
+  try {
+    const host = fakeHost();
+    mountLeaderboard(host, { difficulty: "medium" });
+    await settle();
+    assert.equal(host.statusEl.textContent, "Medium, All-time — 2 racers");
+
+    host.clickTab("difficulty", "easy");
+    await settle();
+    // Empty is the one case that must not leave the region silent *or*
+    // repeating: the line names the board so the next empty one differs.
+    assert.equal(
+      host.statusEl.textContent,
+      "Easy, All-time — no qualifying races yet. Finish a standard multiplayer race while signed in and you'll be first."
+    );
+  } finally {
+    fetches.restore();
+  }
+});
+
+test("a cached board is reused while its UTC window is still open", async () => {
+  const todayStart = new Date(utcMidnight(Date.now())).toISOString();
+  const fetches = stubFetch((difficulty, period) =>
+    boardResponse(difficulty, period, [ROW], period === "all" ? null : todayStart)
+  );
+  try {
+    const host = fakeHost();
+    mountLeaderboard(host, { difficulty: "medium" });
+    await settle();
+    host.clickTab("period", "day");
+    await settle();
+    host.clickTab("period", "all");
+    await settle();
+    host.clickTab("period", "day");
+    await settle();
+
+    assert.deepEqual(fetches.calls, ["medium:all", "medium:day"], "a still-open window refetched");
+    assert.match(host.tbody.innerHTML, /speedy_sam/);
+  } finally {
+    fetches.restore();
+  }
+});
+
+test("a cached board whose UTC window has rolled over is fetched again", async () => {
+  // What the tab left open overnight holds: a board stamped with *yesterday's*
+  // midnight, still filed under "Today".
+  const todayMidnight = utcMidnight(Date.now());
+  const yesterdayStart = new Date(todayMidnight - 86_400_000).toISOString();
+  let served = 0;
+  const fetches = stubFetch((difficulty, period) => {
+    if (period !== "day") return boardResponse(difficulty, period, [ROW], null);
+    served += 1;
+    return boardResponse(
+      difficulty,
+      period,
+      [{ ...ROW, username: served === 1 ? "yesterdays_racer" : "todays_racer" }],
+      served === 1 ? yesterdayStart : new Date(todayMidnight).toISOString()
+    );
+  });
+  try {
+    const host = fakeHost();
+    mountLeaderboard(host, { difficulty: "medium" });
+    await settle();
+    host.clickTab("period", "day");
+    await settle();
+    assert.match(host.tbody.innerHTML, /yesterdays_racer/);
+
+    host.clickTab("period", "all");
+    await settle();
+    host.clickTab("period", "day");
+    await settle();
+
+    assert.deepEqual(fetches.calls, ["medium:all", "medium:day", "medium:day"]);
+    assert.match(host.tbody.innerHTML, /todays_racer/, "yesterday's board was repainted under Today");
+  } finally {
+    fetches.restore();
+  }
+});
+
+test("a slow board never paints under the tab a racer moved on to", async () => {
+  let releaseHard;
+  const hardPending = new Promise((r) => { releaseHard = r; });
+  const fetches = stubFetch(async (difficulty, period) => {
+    if (difficulty === "hard") await hardPending;
+    return boardResponse(difficulty, period, [{ ...ROW, username: `${difficulty}_racer` }]);
+  });
+  try {
+    const host = fakeHost();
+    mountLeaderboard(host, { difficulty: "medium" });
+    await settle();
+
+    host.clickTab("difficulty", "hard");
+    await settle();
+    host.clickTab("difficulty", "easy");
+    await settle();
+    assert.match(host.tbody.innerHTML, /easy_racer/);
+
+    releaseHard();
+    await settle();
+    assert.match(host.tbody.innerHTML, /easy_racer/, "the abandoned board painted over the current one");
+    assert.equal(host.pressed("difficulty", "easy"), "true");
+  } finally {
+    fetches.restore();
+  }
+});
+
+test("a failed load says so instead of leaving another tier's rows up", async () => {
+  const fetches = stubFetch(() => boardResponse("medium", "all", [ROW]));
+  const realWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const host = fakeHost();
+    mountLeaderboard(host, { difficulty: "medium" });
+    await settle();
+    globalThis.fetch = async () => ({ ok: false, status: 429, json: async () => ({}) });
+
+    host.clickTab("difficulty", "hard");
+    await settle();
+    assert.equal(host.tbody.innerHTML, "");
+    assert.equal(host.statusEl.textContent, "Couldn't load the leaderboard. Try again in a moment.");
+  } finally {
+    console.warn = realWarn;
+    fetches.restore();
+  }
 });

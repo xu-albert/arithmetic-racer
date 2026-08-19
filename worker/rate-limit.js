@@ -80,10 +80,10 @@ export function _resetFailOpenWarnings() {
  * @returns {Promise<boolean>} true if the request may proceed.
  */
 export async function allowRequest(limiter, key, label = "unnamed") {
-  // Fail open on a missing binding. This endpoint's job is recording races;
-  // refusing every write because a limiter was not configured trades a
-  // hypothetical abuse problem for a certain outage. Same call the contact
-  // form already makes when KV is unavailable.
+  // Fail open on a missing binding. The callers here record races and serve
+  // the public boards; refusing all of that because a limiter was not
+  // configured trades a hypothetical abuse problem for a certain outage. Same
+  // call the contact form already makes when KV is unavailable.
   if (!limiter || typeof limiter.limit !== "function") {
     if (!warnedNoBinding.has(label)) {
       warnedNoBinding.add(label);
