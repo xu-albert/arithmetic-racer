@@ -69,7 +69,7 @@ function windowCaption(period, periodStartIso) {
 /** Empty-state copy, worded for the window that came up empty. */
 function emptyMessage(period) {
   if (period === "all") {
-    return "No qualifying races yet. Win a multiplayer race while signed in and you'll be first.";
+    return "No qualifying races yet. Finish a standard multiplayer race while signed in and you'll be first.";
   }
   return "Nobody has posted a qualifying race in this window yet.";
 }
@@ -207,6 +207,15 @@ export function mountLeaderboard(host, initial = {}) {
       return;
     }
 
+    // Blank the table before going to the network, and only here — the
+    // cache-hit path above repaints instantly and must not flash empty. The
+    // tab is already highlighted by syncTabs(), so leaving the previous
+    // board's rows and its "Since … UTC" caption up would put one tier's rows
+    // under another tier's tab for the length of the request. The silo is an
+    // absolute claim in this module's header and the route's; a slower empty
+    // table is the honest version of "we don't know yet".
+    tbody.innerHTML = "";
+    windowEl.textContent = "";
     statusEl.textContent = "Loading…";
     try {
       const board = await getLeaderboard({ difficulty, period });

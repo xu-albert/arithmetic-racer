@@ -86,6 +86,10 @@ test("emptyMessage words the all-time empty state differently from a window", ()
   // the one that should explain how to qualify.
   assert.match(all, /multiplayer/i);
   assert.match(day, /window/i);
+  // Finishing is what qualifies — there is no placement predicate anywhere in
+  // boardSql, so the one line that tells a new racer how to get on the board
+  // must not ask them to win one.
+  assert.doesNotMatch(all, /\bwins?\b/i);
 });
 
 // ---------- rankLabel ----------

@@ -216,8 +216,13 @@ same length, and length is caller-chosen: Quick Match is fixed at ten problems b
 a private-room host may set anything in [5, 50] (`server/room.js`), which
 `room-stats.js` writes to `problems_total`. Five problems in 2.5s is 120 PPM
 without anyone going faster, so a public ranking must also filter
-`problems_total = 10` — the standard race, `RACE_LENGTH` in
-`public/src/runner.js`. Same reasoning as the difficulty silo, different column.
+`problems_total = 10` — the standard race, which is `freshState().raceLength` in
+`server/room.js`. That is the constant to keep in step: it is what every
+board-eligible row's `problems_total` is copied from, and a leaderboard test
+asserts the two are equal so a drift empties every board loudly rather than
+silently. (`RACE_LENGTH` in `public/src/runner.js` is the *solo* race — same
+number, but those rows never reach a board.) Same reasoning as the difficulty
+silo, different column.
 
 ## Maintaining this file
 

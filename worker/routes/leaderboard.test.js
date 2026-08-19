@@ -12,7 +12,8 @@
 
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
-import { handleLeaderboard, parseLimit } from "./leaderboard.js";
+import { handleLeaderboard, parseLimit, CANONICAL_RACE_LENGTH } from "./leaderboard.js";
+import { freshState } from "../../server/room.js";
 import { computePoints, computePpm } from "../race-score.js";
 import { periodStartMs } from "../leaderboard-period.js";
 
@@ -60,12 +61,12 @@ function boardUrl({ difficulty, period, limit } = {}) {
 let seq = 0;
 
 /**
- * The only race length a board ranks (worker/routes/leaderboard.js). Every
- * seeded row uses it unless the test is specifically about the length rule,
- * and expectations derive PPM from it rather than hardcoding a number that
- * silently means "20 problems".
+ * The only race length a board ranks, taken from the route rather than copied.
+ * Every seeded row uses it unless the test is specifically about the length
+ * rule, and expectations derive PPM from it rather than hardcoding a number
+ * that silently means "20 problems".
  */
-const CANONICAL = 10;
+const CANONICAL = CANONICAL_RACE_LENGTH;
 
 /** PPM a canonical race posts when it finishes in `finishMs`. */
 function ppmFor(finishMs) {
@@ -354,6 +355,40 @@ describe("difficulty silo", () => {
     const hard = await board({ difficulty: "hard" });
     expect(easy.body.entries[0].ppm).toBeCloseTo(ppmFor(30_000), 6);
     expect(hard.body.entries[0].ppm).toBeCloseTo(ppmFor(90_000), 6);
+  });
+});
+
+// --- race length -----------------------------------------------------------
+
+describe("the canonical length constant", () => {
+  it("equals the race length rooms actually create", async () => {
+    // The coupling that a comment cannot hold. Every board-eligible row takes
+    // its problems_total from freshState().raceLength — buildRaceResultPayload
+    // copies it, publicFreshState inherits it, and handleSetConfig refuses to
+    // change it on a public room. If that number moved and the predicate did
+    // not, every board would answer 200 with zero rows: no error, no log, just
+    // the empty state. This is the assertion that turns that into a red suite.
+    expect(freshState("any-room").raceLength).toBe(CANONICAL_RACE_LENGTH);
+  });
+
+  it("is the length the query actually filters on", async () => {
+    // Ties the constant to observable behaviour rather than to itself: a race
+    // at exactly this length lists, one problem either side does not.
+    await seedUser({ id: "u1", username: "canonical" });
+    await seedUser({ id: "u2", username: "shorter" });
+    await seedUser({ id: "u3", username: "longer" });
+    const at = CANONICAL_RACE_LENGTH;
+    for (const [user, n] of [["u1", at], ["u2", at - 1], ["u3", at + 1]]) {
+      await seedRace({
+        user_id: user,
+        problems_total: n,
+        problems_correct: n,
+        problems_attempted: n,
+        finish_time_ms: 30_000,
+      });
+    }
+
+    expect(names((await board()).body)).toEqual(["canonical"]);
   });
 });
 
