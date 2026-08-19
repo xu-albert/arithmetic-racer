@@ -9,7 +9,8 @@ import { logError, KINDS } from '../worker/logger.js';
 import { buildRaceResultPayload } from './room-stats.js';
 import { createSocketLimiter } from './socket-limit.js';
 
-// Mirrors public/src/runner.js values; private rooms use 20 by default.
+// Mirrors public/src/runner.js values. The default race length is not here —
+// it is `raceLength` in freshState() below, which the leaderboards filter on.
 export const COUNTDOWN_SECONDS = 3;
 export const IDLE_CLEANUP_MS = 5 * 60 * 1000;
 export const RECONNECT_GRACE_MS = 30 * 1000;

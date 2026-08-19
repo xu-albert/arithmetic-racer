@@ -16,6 +16,7 @@ import { handleLeaderboard, parseLimit, CANONICAL_RACE_LENGTH } from "./leaderbo
 import { freshState } from "../../server/room.js";
 import { computePoints, computePpm } from "../race-score.js";
 import { periodStartMs } from "../leaderboard-period.js";
+import { logWarn, KINDS } from "../logger.js";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -507,10 +508,10 @@ describe("ranking", () => {
 
   it("reports points from the one race that earned the rank, not a sum", async () => {
     await seedUser({ id: "u1", username: "ada" });
-    // Three canonical races. Every eligible row has problems_correct equal to
-    // the canonical length, so points rises with PPM and cannot be separated
-    // from it by making one race longer — the claim left to test is that the
-    // cell holds the ranked race's points rather than a total over all three.
+    // Three canonical races. Points and PPM collapse into one number on an
+    // eligible row — boardSql's comment works through why — so no seeding can
+    // separate them, and the claim left to test is that the cell holds the
+    // ranked race's points rather than a total over all three.
     const slow = await seedRace({ user_id: "u1", finish_time_ms: 60_000 });
     const best = await seedRace({ user_id: "u1", finish_time_ms: 20_000 });
     const middling = await seedRace({ user_id: "u1", finish_time_ms: 40_000 });
@@ -1044,6 +1045,31 @@ describe("rate limiting", () => {
     const after = await board({ dbEnv: limiterEnv(true).env });
     expect(after.res.status).toBe(200);
     expect(names(after.body)).toEqual(["ada"]);
+  });
+
+  it("logs that the limit is being hit, but not once per rejected request", async () => {
+    const seen = [];
+    const realWarn = console.warn;
+    console.warn = (line) => { seen.push(String(line)); };
+    try {
+      // Positive control: prove the spy is live before reading anything into
+      // a low count. Without this, an inert patch would "pass" the bound.
+      logWarn(KINDS.LEADERBOARD_RATE_LIMITED, "probe", {});
+      expect(seen).toHaveLength(1);
+
+      const denied = limiterEnv(false);
+      for (let i = 0; i < 5; i++) {
+        expect((await board({ dbEnv: denied.env })).res.status).toBe(429);
+      }
+    } finally {
+      console.warn = realWarn;
+    }
+
+    // Five denials, at most one line. The latch is module-level and a window
+    // is 60s, so an earlier test in this file may already hold it — zero is a
+    // legitimate outcome and five is not, which is exactly the bound.
+    const lines = seen.slice(1).filter((l) => l.includes("leaderboard_rate_limited"));
+    expect(lines.length).toBeLessThanOrEqual(1);
   });
 
   it("costs a token even when the board comes back from the cache", async () => {

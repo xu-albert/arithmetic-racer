@@ -148,6 +148,18 @@ function boardCacheKey(url, { difficulty, period, limit }) {
  * later formula. Both come from the *same* race: the row shown is the one that
  * earned the rank.
  *
+ * On these boards the two columns are the same number twice, and that is known
+ * and deliberate rather than an oversight to be rediscovered. Eligibility pins
+ * `finished = 1` and `problems_total = ?4`, and a finished room race has
+ * `problems_correct = problems_total` (`handleAnswer` stops accepting answers
+ * at the race length), so every listed row has problems_correct = 10. Points
+ * is `problems_correct * ppm / 60` (migrations/0009, worker/race-score.js),
+ * which on those rows is exactly `ppm / 6` — 34.1 PPM always renders 5.7
+ * points. The column stays because points is the unit this feature was
+ * specified in and the one the profile screen speaks; it stops being a
+ * restatement the moment the canonical-length rule loosens, which is the only
+ * thing making the two collapse.
+ *
  * Ties break toward the earlier race, so a racer who has already set a mark
  * does not get bumped by someone matching it later. `user_id` is the last
  * tiebreak purely so the order is total and the response is deterministic.
@@ -248,6 +260,36 @@ function warnSchemaBehind(err, context) {
 }
 
 /**
+ * Denials since the last line, and when that line went out.
+ *
+ * race-result.js logs nothing when it turns a request away, and for a POST
+ * that is fine — the client that sent it sees the 429. This endpoint is the
+ * lobby's first screen, so a limit sized wrong shows a stranger "Couldn't load
+ * the leaderboard" and tells the operator nothing. Hence the divergence.
+ *
+ * Bounded to one line per window on purpose. A line per denial would scale
+ * exactly with the flood the limiter exists to absorb, at
+ * `observability.head_sampling_rate: 1` — the same shape of problem as the
+ * schema-behind latch above. The signal wanted here is "this limit is being
+ * hit, this much", which one line per minute carries and a thousand do not.
+ */
+let rateLimitDenials = 0;
+let lastRateLimitLogMs = 0;
+
+function warnRateLimited() {
+  rateLimitDenials++;
+  const now = Date.now();
+  if (now - lastRateLimitLogMs < RATE_LIMIT_WINDOW_S * 1000) return;
+  const denials = rateLimitDenials;
+  rateLimitDenials = 0;
+  lastRateLimitLogMs = now;
+  logWarn(KINDS.LEADERBOARD_RATE_LIMITED, "per-IP board limit denied a request", {
+    denials,
+    window_s: RATE_LIMIT_WINDOW_S,
+  });
+}
+
+/**
  * Parse `?limit=`. Anything unreadable falls back to the default rather than
  * 400-ing: a board is a read-only view and a bad size is not worth an error
  * page.
@@ -274,6 +316,7 @@ export async function handleLeaderboard(request, env, ctx) {
   // configured, which is the same call every other limiter here makes.
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
   if (!(await allowRequest(env.LEADERBOARD_IP_LIMIT, ip))) {
+    warnRateLimited();
     return Response.json(
       { error: "rate_limited" },
       { status: 429, headers: { "retry-after": String(RATE_LIMIT_WINDOW_S) } }

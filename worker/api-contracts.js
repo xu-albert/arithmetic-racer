@@ -99,6 +99,10 @@
  *
  * Response (200): LeaderboardResponse
  * Response (400): { error: 'invalid_difficulty' | 'invalid_period' }
+ * Response (429): { error: 'rate_limited' }, with a `retry-after` header in
+ *   seconds. Per-IP and unauthenticated, so a shared address can reach it
+ *   without any one caller misbehaving — a consumer should back off and retry
+ *   rather than treat it as a permanent failure.
  *
  * @typedef {Object} LeaderboardResponse
  * @property {Difficulty} difficulty

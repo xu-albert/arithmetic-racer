@@ -28,6 +28,7 @@ export const KINDS = {
   CONTACT_NOTIFY_FAILED: "contact_notify_failed",
   CONTACT_RATE_LIMIT: "contact_rate_limit",
   LEADERBOARD_SCHEMA_BEHIND: "leaderboard_schema_behind",
+  LEADERBOARD_RATE_LIMITED: "leaderboard_rate_limited",
   RATE_LIMIT_UNAVAILABLE: "rate_limit_unavailable",
   RACE_RESULT_RATE_LIMITED: "race_result_rate_limited",
 };
