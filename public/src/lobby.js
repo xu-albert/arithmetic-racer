@@ -78,11 +78,12 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
 
   // Scores on the finished scoreboard belong to the race that just ran, so
   // they keep that race's length even if the host has already dialled in a
-  // different one for the next race. Falls back to the live value for rooms
-  // that never recorded it (public quickmatch, pre-fix persisted state).
+  // different one for the next race. `lastRace` is the snapshot the server
+  // pins at finish; falls back to the live value for rooms that never
+  // recorded one (pre-pin persisted state).
   function scoreboardLength() {
-    if (currentState.state === 'finished' && currentState.lastRaceLength != null) {
-      return currentState.lastRaceLength;
+    if (currentState.state === 'finished' && currentState.lastRace?.raceLength != null) {
+      return currentState.lastRace.raceLength;
     }
     return currentState.raceLength;
   }

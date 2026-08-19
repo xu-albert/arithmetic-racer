@@ -225,6 +225,16 @@ silently. (`RACE_LENGTH` in `public/src/runner.js` is the *solo* race — same
 number, but those rows never reach a board.) Same reasoning as the difficulty
 silo, different column.
 
+Both of those columns — and the `finished` flag under them — are stamped by
+`buildRaceResultPayload` from `state.lastRace`, the snapshot `finishRace()` pins
+of the race that just ran, never from live `difficulty`/`raceLength`. `finished`
+is a configurable state and a D1 insert is a subrequest rather than a storage
+operation, so the input gate stays open across the per-player insert loop and a
+host's `set-config` or `rematch` lands in the middle of it. Every payload is
+therefore built before the first insert. Anything new that writes a race row
+belongs on the same side of that line; `server/room-config.test.js` drives both
+interleavings.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
