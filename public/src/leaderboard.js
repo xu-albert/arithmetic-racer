@@ -74,6 +74,20 @@ function emptyMessage(period) {
   return "Nobody has posted a qualifying race in this window yet.";
 }
 
+/**
+ * The one-line board summary that goes in the aria-live status region.
+ *
+ * That region is the only thing spoken when the board changes, so it must not
+ * be left empty on a successful load: a racer using a screen reader presses
+ * "Hard", hears nothing, and has to walk into the table to find out whether
+ * anything happened. One short line, because it is announced rather than read.
+ */
+function boardSummary(difficulty, period, count) {
+  const label = PERIODS.find((p) => p.id === period)?.label ?? titleCase(period);
+  const racers = count === 1 ? "1 racer" : `${count} racers`;
+  return `${titleCase(difficulty)}, ${label} — ${racers}`;
+}
+
 /** Medal for the top three; plain rank number after that. */
 function rankLabel(rank) {
   if (rank === 1) return "🥇";
@@ -108,6 +122,12 @@ function renderRows(entries) {
 
 // ---------- DOM template ----------
 
+// The two tab rows are toggle-button groups, not a tab widget: nothing here
+// owns a tabpanel or manages a roving tabindex, and role="tab" would replace
+// the native button role with a promise the markup does not keep. aria-pressed
+// is the same state attribute the lobby's difficulty picker uses two cards up,
+// so the two pickers on this screen announce alike — see the specificity note
+// in css/leaderboard.css, which that shared attribute drags in.
 const LEADERBOARD_HTML = `
   <h3>Leaderboards</h3>
   <p class="leaderboard__blurb">
@@ -116,19 +136,19 @@ const LEADERBOARD_HTML = `
     to a different length won't show up here either. Sign in to appear.
   </p>
 
-  <div class="leaderboard__tabs" role="tablist" aria-label="Leaderboard difficulty" data-tabs="difficulty">
+  <div class="leaderboard__tabs" role="group" aria-label="Leaderboard difficulty" data-tabs="difficulty">
     ${DIFFICULTIES.map(
       (d) =>
-        `<button type="button" role="tab" class="leaderboard__tab" data-difficulty="${d}" aria-selected="false">${titleCase(
+        `<button type="button" class="leaderboard__tab" data-difficulty="${d}" aria-pressed="false">${titleCase(
           d
         )}</button>`
     ).join("")}
   </div>
 
-  <div class="leaderboard__tabs leaderboard__tabs--period" role="tablist" aria-label="Leaderboard period" data-tabs="period">
+  <div class="leaderboard__tabs leaderboard__tabs--period" role="group" aria-label="Leaderboard period" data-tabs="period">
     ${PERIODS.map(
       (p) =>
-        `<button type="button" role="tab" class="leaderboard__tab" data-period="${p.id}" aria-selected="false">${p.label}</button>`
+        `<button type="button" class="leaderboard__tab" data-period="${p.id}" aria-pressed="false">${p.label}</button>`
     ).join("")}
   </div>
 
@@ -183,18 +203,22 @@ export function mountLeaderboard(host, initial = {}) {
 
   function syncTabs() {
     for (const btn of host.querySelectorAll("[data-difficulty]")) {
-      btn.setAttribute("aria-selected", btn.dataset.difficulty === difficulty ? "true" : "false");
+      btn.setAttribute("aria-pressed", btn.dataset.difficulty === difficulty ? "true" : "false");
     }
     for (const btn of host.querySelectorAll("[data-period]")) {
-      btn.setAttribute("aria-selected", btn.dataset.period === period ? "true" : "false");
+      btn.setAttribute("aria-pressed", btn.dataset.period === period ? "true" : "false");
     }
   }
 
   function paint(board) {
     windowEl.textContent = windowCaption(board.period, board.period_start);
-    const rows = renderRows(board.entries);
+    const entries = Array.isArray(board.entries) ? board.entries : [];
+    const rows = renderRows(entries);
     tbody.innerHTML = rows;
-    statusEl.textContent = rows === "" ? emptyMessage(board.period) : "";
+    statusEl.textContent =
+      rows === ""
+        ? emptyMessage(board.period)
+        : boardSummary(board.difficulty, board.period, entries.length);
   }
 
   async function load() {
@@ -269,6 +293,7 @@ export const _internals = {
   titleCase,
   windowCaption,
   emptyMessage,
+  boardSummary,
   rankLabel,
   renderRows,
   escapeHtml,

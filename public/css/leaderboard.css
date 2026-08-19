@@ -58,9 +58,19 @@
   outline: 3px solid var(--yellow);
   outline-offset: 2px;
 }
-.leaderboard__tab[aria-selected="true"] {
+/* Selected state.
+   These buttons are aria-pressed toggles, the same attribute the lobby's
+   difficulty picker uses — which means style-a.css's global
+   `button[aria-pressed="true"]` (0,1,1) and its `:hover` variant (0,2,1) now
+   match them too. Hence the extra `.leaderboard` in each selector: it takes
+   these to (0,3,0) and (0,4,0) so the picker's golden yellow never wins here,
+   on hover or otherwise. The box-shadow is restated for the same reason —
+   the global rule sets one, and inheriting the picker's inset ring would give
+   the card a border it was never drawn with. */
+.leaderboard .leaderboard__tab[aria-pressed="true"] {
   background: var(--navy);
   color: #ffffff;
+  box-shadow: var(--card-shadow);
 }
 
 /* The period row is the secondary axis, so it reads one step quieter. */
@@ -69,7 +79,7 @@
   padding: 0.34rem 0.8rem;
   color: var(--navy-soft);
 }
-.leaderboard__tabs--period .leaderboard__tab[aria-selected="true"] {
+.leaderboard .leaderboard__tabs--period .leaderboard__tab[aria-pressed="true"] {
   background: var(--green);
   color: #ffffff;
 }

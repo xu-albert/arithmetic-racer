@@ -17,6 +17,7 @@ import {
   parseLimit,
   CANONICAL_RACE_LENGTH,
   _resetRateLimitLog,
+  _resetSchemaBehindWarning,
 } from "./leaderboard.js";
 import { freshState } from "../../server/room.js";
 import { computePoints, computePpm } from "../race-score.js";
@@ -897,6 +898,11 @@ describe("without race_results.points (a database at 0008)", () => {
   beforeAll(() => rebuild(COLUMNS_0008));
   afterAll(() => rebuild(`${COLUMNS_0008}, points REAL`));
 
+  // The schema-behind warning latches for the isolate, and every test in this
+  // suite trips the condition — so without this the one that asserts on it
+  // would observe whatever the tests before it left behind.
+  beforeEach(() => _resetSchemaBehindWarning());
+
   const seedOld = (overrides) => seedRace(overrides, { withPoints: false });
 
   it("still ranks by PPM, reporting every points cell as null", async () => {
@@ -949,6 +955,36 @@ describe("without race_results.points (a database at 0008)", () => {
     // for — that would be the board quietly changing what it claims.
     expect(names(body)).toEqual(["grace"]);
     expect(body.entries[0].points).toBeNull();
+  });
+
+  it("tells the operator the deploy is ahead of the migration, once", async () => {
+    await seedUser({ id: "u1", username: "ada" });
+    await seedOld({ user_id: "u1", finish_time_ms: 60_000 });
+
+    const seen = [];
+    const realWarn = console.warn;
+    console.warn = (line) => { seen.push(String(line)); };
+    let statuses;
+    try {
+      // Two different boards, so the second is a cache miss and really does
+      // take the fallback again — two reads, and the operator hears once.
+      statuses = [
+        (await board({ period: "all" })).res.status,
+        (await board({ period: "day" })).res.status,
+      ];
+    } finally {
+      console.warn = realWarn;
+    }
+
+    // Serving the degraded board silently is the failure this guards: an
+    // all-null Points column on the public lobby with nothing in the logs to
+    // say the database is a migration behind.
+    expect(statuses).toEqual([200, 200]);
+    const lines = seen.filter((l) => l.includes("leaderboard_schema_behind"));
+    expect(lines).toHaveLength(1);
+    const logged = JSON.parse(lines[0]);
+    expect(logged.context).toEqual({ difficulty: "medium", period: "all" });
+    expect(logged.err.message).toMatch(/no such column/i);
   });
 
   it("serves the period boards too, not only all-time", async () => {

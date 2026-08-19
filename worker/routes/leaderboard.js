@@ -254,6 +254,11 @@ async function fetchBoard(env, { difficulty, since, limit, period }) {
  */
 let warnedSchemaBehind = false;
 
+/** Test seam: the latch outlives a request, so a suite must be able to clear it. */
+export function _resetSchemaBehindWarning() {
+  warnedSchemaBehind = false;
+}
+
 function warnSchemaBehind(err, context) {
   if (warnedSchemaBehind) return;
   warnedSchemaBehind = true;

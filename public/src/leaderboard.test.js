@@ -13,6 +13,7 @@ const {
   titleCase,
   windowCaption,
   emptyMessage,
+  boardSummary,
   rankLabel,
   renderRows,
   escapeHtml,
@@ -90,6 +91,34 @@ test("emptyMessage words the all-time empty state differently from a window", ()
   // boardSql, so the one line that tells a new racer how to get on the board
   // must not ask them to win one.
   assert.doesNotMatch(all, /\bwins?\b/i);
+});
+
+// ---------- boardSummary ----------
+
+test("boardSummary names the board a screen reader is about to be given", () => {
+  // The status region is aria-live, so this string is the whole announcement
+  // for a board switch. It has to say which board, in the words on the tabs.
+  const summary = boardSummary("hard", "all", 8);
+  assert.equal(summary, "Hard, All-time — 8 racers");
+});
+
+test("boardSummary uses the period's own label, not its id", () => {
+  const labels = PERIODS.map((p) => boardSummary("easy", p.id, 3));
+  for (const [i, line] of labels.entries()) {
+    assert.ok(
+      line.includes(PERIODS[i].label),
+      `${line} should carry ${PERIODS[i].label}`
+    );
+    assert.ok(line.startsWith("Easy, "), line);
+  }
+  // "week" is the id; "This week" is what the tab says and what is spoken.
+  assert.equal(boardSummary("medium", "week", 3), "Medium, This week — 3 racers");
+});
+
+test("boardSummary counts one racer without saying '1 racers'", () => {
+  assert.match(boardSummary("easy", "day", 1), /\b1 racer\b/);
+  assert.doesNotMatch(boardSummary("easy", "day", 1), /racers/);
+  assert.match(boardSummary("easy", "day", 2), /\b2 racers\b/);
 });
 
 // ---------- rankLabel ----------
