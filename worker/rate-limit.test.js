@@ -90,6 +90,54 @@ describe("allowRequest", () => {
       .toEqual(["limiter_threw", "no_binding"]);
   });
 
+  it("names the limiter that failed open", async () => {
+    // Three limiters share this seam, and the payload otherwise carries no
+    // route, no binding name and — on the no_binding path — no stack. A line
+    // that cannot say which limiter is unconfigured is not actionable.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await allowRequest(undefined, "ip-1", "LEADERBOARD_IP_LIMIT");
+    const logged = JSON.parse(warn.mock.calls[0][0]);
+    expect(logged.context.limiter).toBe("LEADERBOARD_IP_LIMIT");
+    expect(logged.context.cause).toBe("no_binding");
+  });
+
+  it("reports each unconfigured limiter, not just the first to fire", async () => {
+    // The bound is per limiter for exactly this reason: one shared latch would
+    // let whichever route ran first silence the other two, which is worse to
+    // debug than the unbounded version it replaced.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const label of ["LEADERBOARD_IP_LIMIT", "RACE_RESULT_IP_LIMIT", "RACE_RESULT_LIMIT"]) {
+      expect(await allowRequest(undefined, "ip-1", label)).toBe(true);
+      expect(await allowRequest(undefined, "ip-2", label)).toBe(true);
+    }
+    // Six calls, three limiters, one line each.
+    expect(warn.mock.calls.map((c) => JSON.parse(c[0]).context.limiter))
+      .toEqual(["LEADERBOARD_IP_LIMIT", "RACE_RESULT_IP_LIMIT", "RACE_RESULT_LIMIT"]);
+  });
+
+  it("bounds a throwing limiter per limiter too, and counts what it suppressed", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const broken = { limit: async () => { throw new Error("binding exploded"); } };
+
+    for (let i = 0; i < 4; i++) {
+      expect(await allowRequest(broken, `k${i}`, "LEADERBOARD_IP_LIMIT")).toBe(true);
+    }
+    expect(await allowRequest(broken, "k", "RACE_RESULT_LIMIT")).toBe(true);
+
+    const lines = warn.mock.calls.map((c) => JSON.parse(c[0]).context);
+    expect(lines.map((c) => c.limiter))
+      .toEqual(["LEADERBOARD_IP_LIMIT", "RACE_RESULT_LIMIT"]);
+    // Counting limiter failures, not denied requests — this path denies nothing.
+    expect(lines[0]).toMatchObject({ cause: "limiter_threw", failures: 1, since_ms: null });
+    expect(lines[0]).not.toHaveProperty("denials");
+  });
+
+  it("still works, and still says something, without a label", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await allowRequest(undefined, "device-1")).toBe(true);
+    expect(JSON.parse(warn.mock.calls[0][0]).context.limiter).toBe("unnamed");
+  });
+
   it("treats a malformed limiter response as a block rather than a pass", async () => {
     // A binding that returns something unexpected should not be read as
     // permission. This is the one case where failing open would let a

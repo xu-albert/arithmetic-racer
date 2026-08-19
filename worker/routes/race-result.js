@@ -85,7 +85,7 @@ export async function handleRaceResult(request, env) {
   // the only check that can absorb a flood of malformed requests. The device
   // limit below cannot — its key lives inside the body.
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-  if (!(await allowRequest(env.RACE_RESULT_IP_LIMIT, ip))) {
+  if (!(await allowRequest(env.RACE_RESULT_IP_LIMIT, ip, "RACE_RESULT_IP_LIMIT"))) {
     return rateLimited();
   }
 
@@ -103,7 +103,7 @@ export async function handleRaceResult(request, env) {
   // Device is the primary key for limiting — see wrangler.jsonc for why IP
   // alone is too coarse. Checked after validation so a client cannot burn
   // another device's budget by sending its id in a body we reject anyway.
-  if (!(await allowRequest(env.RACE_RESULT_LIMIT, body.device_id))) {
+  if (!(await allowRequest(env.RACE_RESULT_LIMIT, body.device_id, "RACE_RESULT_LIMIT"))) {
     return rateLimited();
   }
 

@@ -19,54 +19,78 @@
 //     what an attacker can send, not a ceiling.
 
 import { logWarn, KINDS } from "./logger.js";
+import { logThrottleDecision, FRESH_THROTTLE } from "./log-throttle.js";
 
 /**
- * Fail-open warnings, latched once per condition per isolate.
+ * How long one `limiter_threw` line speaks for. Not the limiter's own period —
+ * this is a claim about log volume, not about rate policy, and tying it to the
+ * binding's window would couple two unrelated numbers.
+ */
+const THREW_LOG_WINDOW_MS = 60_000;
+
+/**
+ * Bounded fail-open warnings, per condition and per limiter.
  *
  * What the warn reports is a property of the deployment or of an ongoing
- * incident — "this limiter is unavailable" is true of every request or of
- * none — so one line carries the whole signal and a line per request carries
- * nothing more. This only became material when the leaderboard put this helper
- * on the lobby's first screen: the previous caller was a POST that happens once
- * per race, where per-call was per-race. `observability.head_sampling_rate` is
- * 1, so nothing downstream thins it either.
+ * incident — "this limiter is unavailable" — so a line per request would scale
+ * with exactly the traffic it is about and add nothing. This only became
+ * material when the leaderboard put this helper on the lobby's first screen:
+ * the previous caller was a POST that happens once per race, where per-call was
+ * per-race. `observability.head_sampling_rate` is 1, so nothing downstream
+ * thins it either.
  *
- * The two conditions latch independently because an operator wants to tell
- * them apart: an absent binding is a configuration mistake that will not
- * resolve itself (AGENTS.md: `wrangler.jsonc` bindings are not inherited by
- * `env.preview`, so a one-place edit produces exactly this there), while a
- * throwing binding is usually a transient service failure. Seeing the second
- * appear while the first stays quiet is the difference between "we shipped it
- * wrong" and "Cloudflare is having a moment".
+ * Keyed by limiter, because three of them share this seam
+ * (LEADERBOARD_IP_LIMIT, RACE_RESULT_IP_LIMIT, RACE_RESULT_LIMIT). A single
+ * bound across all three would let the first one to fail silence the other two,
+ * and the surviving line does not say which fired — strictly worse to debug
+ * than the unbounded version it replaced.
  *
- * Volume only. Every caller still gets the same answer on every path.
+ * The two causes are bounded differently because they behave differently:
+ *
+ *   no_binding    — a configuration mistake that will not resolve itself
+ *                   (AGENTS.md: `wrangler.jsonc` bindings are not inherited by
+ *                   `env.preview`, so a one-place edit produces exactly this
+ *                   there). One line per deployment is the whole signal, so a
+ *                   plain latch fits.
+ *   limiter_threw — usually a transient service failure, and one that can
+ *                   recur. A permanent latch would let a blip at 10:00 hide a
+ *                   real outage at 14:00 in the same warm isolate, and would
+ *                   make a one-request hiccup indistinguishable from a
+ *                   two-hour incident. Windowed instead, so recurrence stays
+ *                   visible while volume stays bounded.
+ *
+ * Volume and content only. Every caller still gets the same answer on every
+ * path, and the label is optional so an unlabelled call still works.
  */
-let warnedNoBinding = false;
-let warnedLimiterThrew = false;
+const warnedNoBinding = new Set();
+const threwThrottles = new Map();
 
-/** Test seam: the latches outlive a call, so a suite must be able to clear them. */
+/** Test seam: this state outlives a call, so a suite must be able to clear it. */
 export function _resetFailOpenWarnings() {
-  warnedNoBinding = false;
-  warnedLimiterThrew = false;
+  warnedNoBinding.clear();
+  threwThrottles.clear();
 }
 
 /**
  * @param {{limit: (arg: {key: string}) => Promise<{success: boolean}>}|undefined} limiter
  *   A rate-limit binding from `env`, or undefined where none is configured.
  * @param {string} key The bucket to count against — a device id or client IP.
+ * @param {string} [label] Binding name, so a fail-open line says which limiter
+ *   it is about. Omitting it still works; the line just cannot name one.
  * @returns {Promise<boolean>} true if the request may proceed.
  */
-export async function allowRequest(limiter, key) {
+export async function allowRequest(limiter, key, label = "unnamed") {
   // Fail open on a missing binding. This endpoint's job is recording races;
   // refusing every write because a limiter was not configured trades a
   // hypothetical abuse problem for a certain outage. Same call the contact
   // form already makes when KV is unavailable.
   if (!limiter || typeof limiter.limit !== "function") {
-    if (!warnedNoBinding) {
-      warnedNoBinding = true;
+    if (!warnedNoBinding.has(label)) {
+      warnedNoBinding.add(label);
       logWarn(KINDS.RATE_LIMIT_UNAVAILABLE, "no rate limit binding configured", {
         outcome: "failed_open",
         cause: "no_binding",
+        limiter: label,
       });
     }
     return true;
@@ -76,11 +100,21 @@ export async function allowRequest(limiter, key) {
   try {
     result = await limiter.limit({ key });
   } catch (err) {
-    if (!warnedLimiterThrew) {
-      warnedLimiterThrew = true;
+    const decision = logThrottleDecision(
+      threwThrottles.get(label) ?? FRESH_THROTTLE,
+      Date.now(),
+      THREW_LOG_WINDOW_MS
+    );
+    threwThrottles.set(label, decision.state);
+    if (decision.emit) {
       logWarn(KINDS.RATE_LIMIT_UNAVAILABLE, err, {
         outcome: "failed_open",
         cause: "limiter_threw",
+        limiter: label,
+        // Failures, not denied requests: this path never denied anything.
+        failures: decision.count,
+        since_ms: decision.sinceMs,
+        window_s: THREW_LOG_WINDOW_MS / 1000,
       });
     }
     return true;

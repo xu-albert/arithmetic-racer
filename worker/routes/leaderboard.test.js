@@ -16,7 +16,6 @@ import {
   handleLeaderboard,
   parseLimit,
   CANONICAL_RACE_LENGTH,
-  rateLimitLogDecision,
   _resetRateLimitLog,
 } from "./leaderboard.js";
 import { freshState } from "../../server/room.js";
@@ -1053,50 +1052,6 @@ describe("rate limiting", () => {
     const after = await board({ dbEnv: limiterEnv(true).env });
     expect(after.res.status).toBe(200);
     expect(names(after.body)).toEqual(["ada"]);
-  });
-
-  // The throttle is pure, so the bound is asserted on the decision itself
-  // rather than on wall-clock timing or on whichever test denied first.
-  describe("the denial-log throttle", () => {
-    const WINDOW_MS = 60_000;
-    const FRESH = { denials: 0, lastLogMs: null };
-
-    it("emits on the first denial, as a notice rather than a count", () => {
-      const first = rateLimitLogDecision(FRESH, 1_000);
-      expect(first.emit).toBe(true);
-      expect(first.denials).toBe(1);
-      // No previous line to measure from — the field that stops a reader
-      // taking `denials: 1` for "the limit was hit once".
-      expect(first.sinceMs).toBeNull();
-    });
-
-    it("stays silent for the rest of the window, however many denials arrive", () => {
-      let state = rateLimitLogDecision(FRESH, 1_000).state;
-      for (let i = 1; i <= 4; i++) {
-        const d = rateLimitLogDecision(state, 1_000 + i);
-        expect(d.emit).toBe(false);
-        state = d.state;
-      }
-      // Suppressed, not dropped: the tail is still being counted.
-      expect(state.denials).toBe(4);
-    });
-
-    it("reports the suppressed tail on the next denial past the window", () => {
-      let state = rateLimitLogDecision(FRESH, 1_000).state;
-      for (let i = 1; i <= 4; i++) state = rateLimitLogDecision(state, 1_000 + i).state;
-
-      const next = rateLimitLogDecision(state, 1_000 + WINDOW_MS);
-      expect(next.emit).toBe(true);
-      // Four suppressed plus the denial that carried them out.
-      expect(next.denials).toBe(5);
-      expect(next.sinceMs).toBe(WINDOW_MS);
-      expect(next.state).toEqual({ denials: 0, lastLogMs: 1_000 + WINDOW_MS });
-    });
-
-    it("does not emit one millisecond early", () => {
-      const state = rateLimitLogDecision(FRESH, 1_000).state;
-      expect(rateLimitLogDecision(state, 1_000 + WINDOW_MS - 1).emit).toBe(false);
-    });
   });
 
   it("logs when the limiter denies a request", async () => {

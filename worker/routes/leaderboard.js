@@ -54,6 +54,7 @@
 import { db, isMissingColumnError } from "../db.js";
 import { logWarn, KINDS } from "../logger.js";
 import { allowRequest } from "../rate-limit.js";
+import { logThrottleDecision, FRESH_THROTTLE } from "../log-throttle.js";
 import { isPeriod, periodStartMs } from "../leaderboard-period.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
@@ -260,58 +261,36 @@ function warnSchemaBehind(err, context) {
 }
 
 /**
- * Should this denial produce a log line, and what does the line say?
+ * Should this denial produce a log line?
  *
  * race-result.js logs nothing when it turns a request away, and for a POST
  * that is fine — the client that sent it sees the 429. This endpoint is the
  * lobby's first screen, so a limit sized wrong shows a stranger "Couldn't load
  * the leaderboard" and tells the operator nothing. Hence the divergence.
  *
- * Bounded to one line per window on purpose. A line per denial would scale
- * exactly with the flood the limiter exists to absorb, at
- * `observability.head_sampling_rate: 1` — the same shape of problem as the
- * schema-behind latch above.
- *
- * READ THE PAYLOAD CAREFULLY. This emits on the *leading* edge, so the first
- * line of a burst is a first-denial notice, not a census: `denials: 1` with
- * `since_ms: null` means "the limit just started being hit", not "the limit
- * was hit once". A Worker has no timer and no trailing flush, so denials that
- * accumulate after that line only surface when a later denial crosses the
- * window — which means `denials` is a real count only on a line whose
- * `since_ms` is at least one window. `since_ms` is carried precisely so the
- * two cases cannot be confused: a big `denials` over a `since_ms` barely past
- * the window is a flood, and a burst that dies inside one window leaves its
- * tail uncounted rather than misreported.
- *
- * Pure so the bound is testable without leaning on wall-clock timing or on
- * whichever test denied first: state in, decision out.
- *
- * @param {{denials: number, lastLogMs: number|null}} state
- * @param {number} now
+ * Bounded to one line per window by the shared throttle in worker/log-throttle.js
+ * — a line per denial would scale exactly with the flood the limiter exists to
+ * absorb. Read that module's comment before reading a `denials` figure: the
+ * first line of a burst is a first-denial notice, not a census, and `since_ms`
+ * is what tells the two apart.
  */
-export function rateLimitLogDecision(state, now) {
-  const denials = state.denials + 1;
-  const sinceMs = state.lastLogMs == null ? null : now - state.lastLogMs;
-  if (sinceMs !== null && sinceMs < RATE_LIMIT_WINDOW_S * 1000) {
-    return { emit: false, state: { denials, lastLogMs: state.lastLogMs } };
-  }
-  // The emitting denial counts itself, so this is the suppressed tail plus one.
-  return { emit: true, denials, sinceMs, state: { denials: 0, lastLogMs: now } };
-}
-
-let rateLimitLogState = { denials: 0, lastLogMs: null };
+let rateLimitLogState = FRESH_THROTTLE;
 
 /** Test seam: the latch outlives a request, so a suite must be able to clear it. */
 export function _resetRateLimitLog() {
-  rateLimitLogState = { denials: 0, lastLogMs: null };
+  rateLimitLogState = FRESH_THROTTLE;
 }
 
 function warnRateLimited() {
-  const decision = rateLimitLogDecision(rateLimitLogState, Date.now());
+  const decision = logThrottleDecision(
+    rateLimitLogState,
+    Date.now(),
+    RATE_LIMIT_WINDOW_S * 1000
+  );
   rateLimitLogState = decision.state;
   if (!decision.emit) return;
   logWarn(KINDS.LEADERBOARD_RATE_LIMITED, "per-IP board limit denied a request", {
-    denials: decision.denials,
+    denials: decision.count,
     since_ms: decision.sinceMs,
     window_s: RATE_LIMIT_WINDOW_S,
   });
@@ -343,7 +322,7 @@ export async function handleLeaderboard(request, env, ctx) {
   // device id, no body. `allowRequest` fails open where no binding is
   // configured, which is the same call every other limiter here makes.
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-  if (!(await allowRequest(env.LEADERBOARD_IP_LIMIT, ip))) {
+  if (!(await allowRequest(env.LEADERBOARD_IP_LIMIT, ip, "LEADERBOARD_IP_LIMIT"))) {
     warnRateLimited();
     return Response.json(
       { error: "rate_limited" },

@@ -115,7 +115,11 @@
  * @property {number} rank                1-based, dense within the response
  * @property {string} username
  * @property {number} ppm                 best problems/minute in the window
- * @property {number|null} points         points from *that* race; null only if unscored
+ * @property {number|null} points         points from *that* race. Null for an
+ *   unscored row — or for every row at once while the deploy is ahead of
+ *   hand-applied migration 0009 and the board has degraded to the no-points
+ *   query (see fetchBoard in worker/routes/leaderboard.js). An all-null Points
+ *   column means the latter: a listed row already passed finished = 1.
  * @property {string} played_at           ISO 8601 — when the ranked race happened
  */
 
