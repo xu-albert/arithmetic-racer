@@ -202,8 +202,9 @@ already written down:
   solo races. The reasoning in full, including where an *activity* feed legitimately diverges
   from a *ranking* (anonymous racers), is the header comment of
   `worker/routes/recent-finishes.js`; `worker/routes/leaderboard.js` carries the ranking side
-  of the argument, and `worker/leaderboard-period.js` owns the UTC calendar windows every
-  board uses.
+  of the argument, and `public/src/leaderboard-period.js` owns the UTC calendar windows every
+  board uses — it sits under `public/` because the lobby needs it too and only that import
+  direction resolves (see its header).
 - **Reading `points` can 500 the page.** The column arrives in migration 0009, migrations
   are applied by hand while the Worker deploys from a push, so a live build can be one
   migration ahead of the database. Wrap the read and fall back to selecting `NULL` via

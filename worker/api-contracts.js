@@ -88,7 +88,7 @@
  * three tiers are never combined: there is no all-difficulty board, and a
  * consumer must not build one by merging responses. `period` defaults to
  * 'all'; every bounded period runs from a **UTC** calendar boundary to now
- * (weeks start Monday) — see worker/leaderboard-period.js.
+ * (weeks start Monday) — see public/src/leaderboard-period.js.
  *
  * Only server-observed races are listed: room races (room_id IS NOT NULL) by
  * a signed-in racer, with suspect = 0. Solo/Quickplay results are client-

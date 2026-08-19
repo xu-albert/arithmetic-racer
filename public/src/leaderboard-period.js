@@ -14,6 +14,12 @@
 //
 // Weeks start Monday (ISO 8601), so the week board resets when the work week
 // does rather than mid-weekend.
+//
+// This lives under public/ rather than worker/ because both sides need it and
+// only this direction resolves: public/ has no build step and is served
+// byte-for-byte, while the Worker is bundled by esbuild — so worker code can
+// import a module from here, and client code could not import one from there.
+// Nothing in it touches a Worker or a DOM API.
 
 /** Board windows, in the order the UI shows them. `all` has no lower bound. */
 export const PERIODS = ["all", "day", "week", "month", "year"];

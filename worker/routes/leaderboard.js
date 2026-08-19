@@ -55,7 +55,7 @@ import { db, isMissingColumnError } from "../db.js";
 import { logWarn, KINDS } from "../logger.js";
 import { allowRequest } from "../rate-limit.js";
 import { logThrottleDecision, FRESH_THROTTLE } from "../log-throttle.js";
-import { isPeriod, periodStartMs } from "../leaderboard-period.js";
+import { isPeriod, periodStartMs } from "../../public/src/leaderboard-period.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
@@ -353,7 +353,13 @@ export async function handleLeaderboard(request, env, ctx) {
   const limit = parseLimit(url.searchParams.get("limit"));
   const cache = caches.default;
   const cacheKey = boardCacheKey(url, { difficulty, period, limit });
-  const cached = await cache.match(cacheKey);
+  // Guarded the way the store below is, and for the same reason: this file
+  // declares the whole cache layer best-effort and unverifiable in production,
+  // so it must not become something the board can fail on. No path is known
+  // where match() rejects rather than resolving undefined — this is symmetry
+  // with that posture, not a fixed bug. A swallowed lookup just misses, and a
+  // miss is the D1 read the handler was about to do anyway.
+  const cached = await cache.match(cacheKey).catch(() => undefined);
   if (cached) return cached;
 
   const now = Date.now();

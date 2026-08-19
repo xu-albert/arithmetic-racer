@@ -13,7 +13,9 @@ const {
   titleCase,
   windowCaption,
   emptyMessage,
+  boardLabel,
   boardSummary,
+  isStaleBoard,
   rankLabel,
   renderRows,
   escapeHtml,
@@ -80,8 +82,8 @@ test("windowCaption stays quiet when the server sent no boundary", () => {
 // ---------- emptyMessage ----------
 
 test("emptyMessage words the all-time empty state differently from a window", () => {
-  const all = emptyMessage("all");
-  const day = emptyMessage("day");
+  const all = emptyMessage("hard", "all");
+  const day = emptyMessage("hard", "day");
   assert.notEqual(all, day);
   // The all-time board being empty means nobody has ever qualified, so it is
   // the one that should explain how to qualify.
@@ -91,6 +93,33 @@ test("emptyMessage words the all-time empty state differently from a window", ()
   // boardSql, so the one line that tells a new racer how to get on the board
   // must not ask them to win one.
   assert.doesNotMatch(all, /\bwins?\b/i);
+});
+
+test("emptyMessage names the board, so two empty boards never read alike", () => {
+  // The status region is aria-live and is commonly silent when assigned text
+  // it already holds. Fourteen of the fifteen boards can be empty at once on a
+  // quiet day, so a shared sentence would make those tab switches announce
+  // nothing at all — the gap boardSummary was added to close, reappearing on
+  // exactly the boards with no rows to fall back on.
+  const seen = new Set();
+  for (const d of DIFFICULTIES) {
+    for (const p of PERIODS) seen.add(emptyMessage(d, p.id));
+  }
+  assert.equal(seen.size, DIFFICULTIES.length * PERIODS.length);
+  assert.notEqual(emptyMessage("easy", "all"), emptyMessage("medium", "all"));
+  assert.notEqual(emptyMessage("easy", "day"), emptyMessage("easy", "week"));
+});
+
+test("boardLabel is the one name both announcements open with", () => {
+  assert.equal(boardLabel("hard", "all"), "Hard, All-time");
+  assert.equal(boardLabel("medium", "week"), "Medium, This week");
+  for (const d of DIFFICULTIES) {
+    for (const p of PERIODS) {
+      const label = boardLabel(d, p.id);
+      assert.ok(emptyMessage(d, p.id).startsWith(label), `${d}/${p.id} empty state`);
+      assert.ok(boardSummary(d, p.id, 3).startsWith(label), `${d}/${p.id} summary`);
+    }
+  }
 });
 
 // ---------- boardSummary ----------
@@ -119,6 +148,64 @@ test("boardSummary counts one racer without saying '1 racers'", () => {
   assert.match(boardSummary("easy", "day", 1), /\b1 racer\b/);
   assert.doesNotMatch(boardSummary("easy", "day", 1), /racers/);
   assert.match(boardSummary("easy", "day", 2), /\b2 racers\b/);
+});
+
+// ---------- isStaleBoard ----------
+
+// Fixed UTC instants, not "now" — a cache-invalidation rule about where the
+// day begins must not be tested against a clock that moves under it.
+const DAY_START = Date.UTC(2026, 7, 17); // Monday
+const NEXT_DAY_START = Date.UTC(2026, 7, 18);
+
+/** A board response the way the route sends one. */
+function boardAt(period, periodStartMs_) {
+  return {
+    difficulty: "medium",
+    period,
+    period_start: periodStartMs_ === null ? null : new Date(periodStartMs_).toISOString(),
+    entries: [],
+  };
+}
+
+test("isStaleBoard keeps a board whose window is still open", () => {
+  const today = boardAt("day", DAY_START);
+  assert.equal(isStaleBoard(today, DAY_START), false);
+  assert.equal(isStaleBoard(today, DAY_START + 12 * 3_600_000), false);
+  // Still inside the day at the last millisecond of it.
+  assert.equal(isStaleBoard(today, NEXT_DAY_START - 1), false);
+});
+
+test("isStaleBoard drops a bounded board once its window has rolled", () => {
+  // The reported sequence: open the lobby at 23:50 UTC on Today, come back at
+  // 00:30 the next day. Without this the Map repaints yesterday's racers under
+  // a highlighted Today tab, with no request and no way to force one.
+  const yesterday = boardAt("day", DAY_START);
+  assert.equal(isStaleBoard(yesterday, NEXT_DAY_START), true);
+  assert.equal(isStaleBoard(yesterday, NEXT_DAY_START + 30 * 60_000), true);
+
+  // Every bounded window, not just the day.
+  const lastWeek = boardAt("week", Date.UTC(2026, 7, 10));
+  assert.equal(isStaleBoard(lastWeek, DAY_START), true);
+  const lastMonth = boardAt("month", Date.UTC(2026, 6, 1));
+  assert.equal(isStaleBoard(lastMonth, DAY_START), true);
+  const lastYear = boardAt("year", Date.UTC(2025, 0, 1));
+  assert.equal(isStaleBoard(lastYear, DAY_START), true);
+});
+
+test("isStaleBoard never invalidates the all-time board", () => {
+  // All-time has no window to roll: period_start is null by design, and
+  // expiring it would turn every tab flip back into a request.
+  const all = boardAt("all", null);
+  assert.equal(isStaleBoard(all, DAY_START), false);
+  assert.equal(isStaleBoard(all, DAY_START + 400 * 86_400_000), false);
+});
+
+test("isStaleBoard refetches rather than trusting a board it cannot place", () => {
+  assert.equal(isStaleBoard(boardAt("day", null), DAY_START), false);
+  assert.equal(isStaleBoard({ ...boardAt("day", DAY_START), period_start: "nope" }, DAY_START), true);
+  // An unknown period cannot be handed to periodStartMs, which throws on one.
+  assert.equal(isStaleBoard(boardAt("decade", DAY_START), DAY_START), false);
+  assert.equal(isStaleBoard(undefined, DAY_START), false);
 });
 
 // ---------- rankLabel ----------

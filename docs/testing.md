@@ -146,7 +146,7 @@ Automated coverage: `worker/routes/recent-finishes.test.js` (eligibility, suspec
 ## Lobby leaderboards
 
 `GET /api/leaderboard` is covered by `worker/routes/leaderboard.test.js` (eligibility, silo,
-ranking, period boundaries) and `worker/leaderboard-period.test.js` (UTC windows). What follows
+ranking, period boundaries) and `public/src/leaderboard-period.test.js` (UTC windows). What follows
 is the part the automated suite cannot see: that the boards reach the lobby correctly.
 
 Seed local D1 first (the endpoint reads only what `migrations/` defines, so apply them to the

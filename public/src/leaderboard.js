@@ -14,6 +14,7 @@
 
 import { getLeaderboard } from "./stats-api.js";
 import { fmtPpm, fmtPoints, fmtRelative, escapeHtml } from "./race-format.js";
+import { periodStartMs } from "./leaderboard-period.js";
 
 // ---------- pure helpers ----------
 
@@ -66,12 +67,27 @@ function windowCaption(period, periodStartIso) {
   return `Since ${when} UTC.`;
 }
 
+/**
+ * Which board this is, in the words on its two tabs: "Hard, All-time".
+ *
+ * Every line the status region announces opens with this. An aria-live region
+ * assigned text it already holds is commonly not re-announced, so two boards
+ * that would otherwise share a sentence — the fourteen that can come up empty,
+ * most of all — have to differ somewhere, and the board's own name is the
+ * honest place for them to differ.
+ */
+function boardLabel(difficulty, period) {
+  const label = PERIODS.find((p) => p.id === period)?.label ?? titleCase(period);
+  return `${titleCase(difficulty)}, ${label}`;
+}
+
 /** Empty-state copy, worded for the window that came up empty. */
-function emptyMessage(period) {
+function emptyMessage(difficulty, period) {
+  const who = boardLabel(difficulty, period);
   if (period === "all") {
-    return "No qualifying races yet. Finish a standard multiplayer race while signed in and you'll be first.";
+    return `${who} — no qualifying races yet. Finish a standard multiplayer race while signed in and you'll be first.`;
   }
-  return "Nobody has posted a qualifying race in this window yet.";
+  return `${who} — nobody has posted a qualifying race in this window yet.`;
 }
 
 /**
@@ -83,9 +99,32 @@ function emptyMessage(period) {
  * anything happened. One short line, because it is announced rather than read.
  */
 function boardSummary(difficulty, period, count) {
-  const label = PERIODS.find((p) => p.id === period)?.label ?? titleCase(period);
   const racers = count === 1 ? "1 racer" : `${count} racers`;
-  return `${titleCase(difficulty)}, ${label} — ${racers}`;
+  return `${boardLabel(difficulty, period)} — ${racers}`;
+}
+
+/**
+ * Has this cached board's window closed since it was fetched?
+ *
+ * A lobby tab stays open for hours, so a board fetched at 23:50 UTC is still
+ * in the Map at 00:30 and would repaint yesterday's racers under a highlighted
+ * "Today" — from a feature whose whole subject is where the UTC day begins.
+ * The bound is the window, deliberately not a timer: a rolled window is the
+ * only staleness that misstates what the tab claims, and re-fetching on the
+ * clock instead would break the arithmetic sizing LEADERBOARD_IP_LIMIT, which
+ * assumes a full fifteen-tab exploration costs fifteen requests.
+ *
+ * A board with no `period_start` has no window to roll — that is the all-time
+ * board's own shape — so it is never stale here. One that carries a start we
+ * cannot read is: refetching costs a request, and painting a window we cannot
+ * identify under a tab that names one is the thing being ruled out.
+ */
+function isStaleBoard(board, nowMs) {
+  const period = board?.period;
+  if (period === "all" || board?.period_start == null || !PERIODS.some((p) => p.id === period)) {
+    return false;
+  }
+  return Date.parse(board.period_start) !== periodStartMs(period, nowMs);
 }
 
 /** Medal for the top three; plain rank number after that. */
@@ -217,7 +256,7 @@ export function mountLeaderboard(host, initial = {}) {
     tbody.innerHTML = rows;
     statusEl.textContent =
       rows === ""
-        ? emptyMessage(board.period)
+        ? emptyMessage(board.difficulty, board.period)
         : boardSummary(board.difficulty, board.period, entries.length);
   }
 
@@ -226,7 +265,7 @@ export function mountLeaderboard(host, initial = {}) {
     const ticket = ++currentSelection;
     const key = boardKey(difficulty, period);
     const cached = cache.get(key);
-    if (cached) {
+    if (cached && !isStaleBoard(cached, Date.now())) {
       paint(cached);
       return;
     }
@@ -293,7 +332,9 @@ export const _internals = {
   titleCase,
   windowCaption,
   emptyMessage,
+  boardLabel,
   boardSummary,
+  isStaleBoard,
   rankLabel,
   renderRows,
   escapeHtml,

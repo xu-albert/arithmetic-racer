@@ -21,7 +21,7 @@ import {
 } from "./leaderboard.js";
 import { freshState } from "../../server/room.js";
 import { computePoints, computePpm } from "../race-score.js";
-import { periodStartMs } from "../leaderboard-period.js";
+import { periodStartMs } from "../../public/src/leaderboard-period.js";
 
 // --- helpers ---------------------------------------------------------------
 
