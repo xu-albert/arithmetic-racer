@@ -400,8 +400,6 @@ describe("POST /api/race-result — validation", () => {
   });
 });
 
-// TODO(integrator): once auth.js is wired, replace the readUserId stub in
-// race-result.js with `auth.api.getSession({ headers: request.headers })`
-// and add a test here that creates a session via auth.api.signUpEmail(...)
-// then verifies the resulting race_result row has user_id set to the new
-// user's id (and device_id still recorded).
+// Not covered here: a signed-in POST (a real better-auth session, e.g. via
+// auth.api.signUpEmail) stamping user_id on the row while device_id is still
+// recorded. readUserId in worker/session.js is what resolves the cookie.
