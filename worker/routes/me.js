@@ -2,12 +2,10 @@
 //
 // Contracts: see worker/api-contracts.js (frozen).
 //
-// Auth: handlers that need a user_id read it via the readUserId() stub
-// below. The stub returns null in this phase so the route can be merged
-// before Agent D's auth.js exists. A test-only override (_setTestUserId)
-// lets vitest inject a user_id without a real session. The integrator
-// (Phase 3) replaces both with a call to better-auth and removes the
-// override + its export — see INTEGRATION NOTE markers.
+// Auth: handlers that need a user_id read it via readUserId() in
+// worker/session.js, which resolves the better-auth session cookie. Tests
+// inject a user id through that module's _setTestUserId override instead of
+// signing in for real.
 
 import { db } from "../db.js";
 import { validateUsernameSync } from "../username-validator.js";
