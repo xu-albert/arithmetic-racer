@@ -7,6 +7,7 @@
 
 import { validateAnswer } from './game.js';
 import { scoreBotAt } from './bot-timeline.js';
+import { rankRacers } from './rankings.js';
 
 const PLAYER_ALIAS = 'player';
 
@@ -22,8 +23,9 @@ function displayHandle(rawHandle, isGuest) {
   return isGuest ? `${rawHandle} (Guest)` : rawHandle;
 }
 
-function buildRacers(players, youAre) {
-  return players.map((p) => ({
+// One wire player → one local racer, in the shape ui.js and rankings.js read.
+function toRacer(p, youAre) {
+  return {
     id: aliasId(p.id, youAre),
     handle: displayHandle(p.handle, !!p.isGuest),
     isBot: !!p.isBot,
@@ -32,12 +34,17 @@ function buildRacers(players, youAre) {
     finishMs: p.finishMs ?? null,
     dropped: !!p.dropped,
     dnf: !!p.dnf,
-  }));
+  };
+}
+
+function buildRacers(players, youAre) {
+  return players.map((p) => toRacer(p, youAre));
 }
 
 export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQuit }) {
   const raceLength = initialState.raceLength;
-  let racers = buildRacers(initialState.players, youAre);
+  // Mutated in place and never reassigned: ui.js keeps a reference to it.
+  const racers = buildRacers(initialState.players, youAre);
   let sequence = initialState.problemSequence ?? [];
   const listeners = new Set();
   let stopped = false;
@@ -82,15 +89,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   }
 
   function getRankings() {
-    const tier = (r) => (r.dropped || r.dnf ? 3 : r.finishMs != null ? 1 : 2);
-    return [...racers].sort((a, b) => {
-      const ta = tier(a);
-      const tb = tier(b);
-      if (ta !== tb) return ta - tb;
-      if (ta === 1) return a.finishMs - b.finishMs;
-      if (ta === 2) return b.score - a.score;
-      return 0;
-    });
+    return rankRacers(racers);
   }
 
   const unsubscribe = roomClient.on((msg) => {
@@ -110,16 +109,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
             existing.dropped = !!p.dropped;
             existing.dnf = !!p.dnf;
           } else {
-            racers.push({
-              id: aliased,
-              handle: displayHandle(p.handle, !!p.isGuest),
-              isBot: !!p.isBot,
-              tier: p.tier ?? null,
-              score: p.score ?? 0,
-              finishMs: p.finishMs ?? null,
-              dropped: !!p.dropped,
-              dnf: !!p.dnf,
-            });
+            racers.push(toRacer(p, youAre));
           }
         }
         if (msg.state.problemSequence?.length) sequence = msg.state.problemSequence;

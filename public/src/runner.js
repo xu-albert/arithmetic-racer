@@ -12,6 +12,7 @@
 
 import { generateSequence, validateAnswer } from './game.js';
 import { nextBotDelay } from './bot.js';
+import { rankRacers } from './rankings.js';
 
 export const RACE_LENGTH = 10;
 export const COUNTDOWN_SECONDS = 3;
@@ -132,17 +133,7 @@ export function createRunner({ difficulty, seed, player, bots = [], length = RAC
   }
 
   function getRankings() {
-    // Tiers: finished (1) ranks above still-racing (2) ranks above dropped/dnf (3).
-    // Within finished: faster finishMs first. Within still-racing: higher score first.
-    const tier = (r) => (r.dropped || r.dnf ? 3 : r.finishMs != null ? 1 : 2);
-    return [...racers].sort((a, b) => {
-      const ta = tier(a);
-      const tb = tier(b);
-      if (ta !== tb) return ta - tb;
-      if (ta === 1) return a.finishMs - b.finishMs;
-      if (ta === 2) return b.score - a.score;
-      return 0;
-    });
+    return rankRacers(racers);
   }
 
   function finishRace() {
