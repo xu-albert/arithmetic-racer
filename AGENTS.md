@@ -183,22 +183,57 @@ games. Anything aggregating them must `GROUP BY difficulty`. Rationale and formu
 
 ## Public views of `race_results` share two rules
 
-Any endpoint that shows race results to somebody other than their owner — a feed, a board,
-anything new of that shape — has to settle both of these, and the answers are already
-written down:
+`race_results` holds two populations that look identical in the table and are not
+interchangeable. A row with `room_id IS NOT NULL` was *counted by the server*: the Durable
+Object validated each answer against its own problem sequence and stamped `finishMs` from
+its own clock. A row with `room_id IS NULL` is *self-reported* — `POST /api/race-result`
+stores what the browser sent, bounded only by `worker/plausibility.js`.
+
+So any endpoint that shows race results to somebody other than their owner — a feed, a
+board, anything new of that shape — has to settle both of these, and the answers are
+already written down:
 
 - **Eligibility.** `room_id IS NOT NULL AND suspect = 0 AND finished = 1 AND
-  finish_time_ms > 0`. Solo/Quickplay rows are self-reported by the browser; room rows are
-  counted by the Durable Object. Only the second kind belongs in a public claim. The
-  reasoning in full, including where an *activity* feed legitimately diverges from a
-  *ranking* (anonymous racers), is the header comment of
-  `worker/routes/recent-finishes.js`.
+  finish_time_ms > 0`. Only server-counted rows belong in a public claim. Anything
+  *comparative* (the leaderboards; anything ranking racers against each other later) must
+  additionally join `"user".username` rather than listing anonymous rows — `device_id` is a
+  private identifier that never goes on the wire. Private, self-directed views (the profile
+  screen, admin) deliberately do not filter at all: your own history should include your own
+  solo races. The reasoning in full, including where an *activity* feed legitimately diverges
+  from a *ranking* (anonymous racers), is the header comment of
+  `worker/routes/recent-finishes.js`; `worker/routes/leaderboard.js` carries the ranking side
+  of the argument, and `public/src/leaderboard-period.js` owns the UTC calendar windows every
+  board uses — it sits under `public/` because the lobby needs it too and only that import
+  direction resolves (see its header).
 - **Reading `points` can 500 the page.** The column arrives in migration 0009, migrations
   are applied by hand while the Worker deploys from a push, so a live build can be one
   migration ahead of the database. Wrap the read and fall back to selecting `NULL` via
   `isMissingColumnError` (`worker/db.js`); PPM is derivable from older columns, so only
   points need the fallback. `worker/routes/recent-finishes.js` is the worked example, and
   its test drops the column to prove the fallback.
+
+Provenance is not the only axis. A rate is only comparable against races of the
+same length, and length is caller-chosen: Quick Match is fixed at ten problems but
+a private-room host may set anything in [5, 50] (`server/room.js`), which
+`room-stats.js` writes to `problems_total`. Five problems in 2.5s is 120 PPM
+without anyone going faster, so a public ranking must also filter
+`problems_total = 10` — the standard race, which is `freshState().raceLength` in
+`server/room.js`. That is the constant to keep in step: it is what every
+board-eligible row's `problems_total` is copied from, and a leaderboard test
+asserts the two are equal so a drift empties every board loudly rather than
+silently. (`RACE_LENGTH` in `public/src/runner.js` is the *solo* race — same
+number, but those rows never reach a board.) Same reasoning as the difficulty
+silo, different column.
+
+Both of those columns — and the `finished` flag under them — are stamped by
+`buildRaceResultPayload` from `state.lastRace`, the snapshot `finishRace()` pins
+of the race that just ran, never from live `difficulty`/`raceLength`. `finished`
+is a configurable state and a D1 insert is a subrequest rather than a storage
+operation, so the input gate stays open across the per-player insert loop and a
+host's `set-config` or `rematch` lands in the middle of it. Every payload is
+therefore built before the first insert. Anything new that writes a race row
+belongs on the same side of that line; `server/room-config.test.js` drives both
+interleavings.
 
 ## Maintaining this file
 

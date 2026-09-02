@@ -142,3 +142,38 @@ Automated coverage: `worker/routes/recent-finishes.test.js` (eligibility, suspec
 | F7 | Block `/api/recent-finishes` in DevTools, reload | The whole section is hidden; the lobby is otherwise unaffected and nothing throws |
 | F8 | After F7, unblock the request and wait for the next poll (~20s) | The section comes back with rows — a strip hidden by a failed load is recoverable, not gone for the page session |
 | F9 | Sit on the lobby with a screen reader running | The strip is announced when a finish appears or a label ticks over, not on every 5s redraw |
+
+## Lobby leaderboards
+
+Automated coverage: `worker/routes/leaderboard.test.js` (eligibility, silo, ranking, period
+boundaries), `public/src/leaderboard-period.test.js` (UTC windows), and
+`public/src/leaderboard.test.js` (row rendering and escaping, plus the mount-order rules — clearing
+the table before a cache-miss fetch, the live-region summary, and dropping a cached board whose UTC
+window has rolled). What follows is the part the automated suite cannot see: that the boards reach
+the lobby correctly.
+
+Seed local D1 first (the endpoint reads only what `migrations/` defines, so apply them to the
+local database before `npx wrangler dev` — the same `wrangler d1 execute … --local` invocation as
+the query above, with `--file=migrations/<file>.sql` in place of `--command`).
+
+```bash
+curl -s "http://localhost:8787/api/leaderboard?difficulty=medium&period=day"
+```
+
+| # | Scenario | Expected |
+|---|---|---|
+| L1 | Load `/` with no `?room=` | Leaderboards card appears under **Solo vs Bots**; **Medium** and **All-time** tabs are selected |
+| L2 | Click each difficulty tab | Board reloads for that tier alone; a racer fast on Easy never shows on the Hard board |
+| L3 | Click each period tab | Caption under the tabs reads `Since <date> UTC.` for the four bounded windows, and `Every race, since the beginning.` for All-time |
+| L4 | Finish a **standard 10-problem** room race while signed in, then navigate to `/` with **no** `?room=` | Your username appears on the matching difficulty's board (may need a period tab that covers now). Allow up to the `s-maxage` window (30s) — under `wrangler dev` the Miniflare Cache API *is* functional, so the board you get may predate your race |
+| L5 | Finish a **Solo vs Bots** race while signed in | Nothing changes on any board — solo results are never eligible |
+| L6 | Finish a **standard 10-problem** room race while signed out, then navigate to `/` with **no** `?room=` | Nothing changes — anonymous races are never listed. (The length matters: at any other length the row is ineligible anyway, so the row would pass without testing the anonymous rule) |
+| L7 | Load `/?room=<slug>` directly | No leaderboard request is issued (Network tab); the card is not mounted on the room route |
+| L8 | Board with no qualifying races | Empty-state line explains how to qualify; no empty table shell or spinner left behind |
+| L9 | Create a private room, set the race length to something other than 10 (5 is the minimum), finish it while signed in, then navigate to `/` | Nothing appears on any board. PPM is not comparable across race lengths, so only the standard 10-problem race is ranked — the blurb on the card says so |
+
+L4 and L6 say *navigate to `/`* rather than "click Play again" on purpose. Entering a room
+sets `?room=` (`enterRoom` does a `replaceState`), and the leaderboard is deliberately not
+mounted on that route — so after a **private** room race Play again returns to `lobby-room`,
+where there is no board to look at. (After a Quick Match it does reach `/`, because that
+room is one-shot; the instruction is written to be right for both.)

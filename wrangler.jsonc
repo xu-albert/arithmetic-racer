@@ -49,9 +49,10 @@
     { "binding": "MATCHMAKING_LIMITS", "id": "11bbfc11f5504dab944ebc4d69bb91f0" },
     { "binding": "CONTACT_LIMITS", "id": "11bbfc11f5504dab944ebc4d69bb91f0" }
   ],
-  // Rate limiting for POST /api/race-result. `period` accepts only 10 or 60,
-  // and counters are per-colo — so these are floors on what a distributed
-  // client can send, not global ceilings.
+  // Rate limiting for the public routes — POST /api/race-result and, further
+  // down, GET /api/leaderboard. `period` accepts only 10 or 60, and counters
+  // are per-colo — so these are floors on what a distributed client can send,
+  // not global ceilings.
   //
   // 6/min/device: a race is 10 problems (RACE_LENGTH) and the game's own
   // human-speed model peaks at 35 problems/min, so an easy-mode cycle runs
@@ -77,6 +78,31 @@
       "name": "RACE_RESULT_IP_LIMIT",
       "namespace_id": "1002",
       "simple": { "limit": 60, "period": 60 }
+    },
+    // Backstop on the public boards. GET /api/leaderboard is unauthenticated
+    // and the all-time board scans race_results.
+    //
+    // Sized against the false positive, not against the script. A scripted
+    // sweep is 3 difficulties x 5 periods x 50 limits = 750 queries it can
+    // issue as fast as the network allows; no per-minute ceiling in this range
+    // changes that outcome. This limiter is the rate bound and MAX_LIMIT is the
+    // size bound — do not credit the response cache with either, because on a
+    // workers.dev deployment it may store nothing at all (see CACHE_CONTROL in
+    // worker/routes/leaderboard.js). What a ceiling CAN do is deny a real group
+    // on the lobby's first screen, and that is the direction worth avoiding.
+    //
+    // The arithmetic: one lobby mount is 1 request, and the client caches per
+    // mount, so a racer who flips through every tab spends 15 — one per
+    // difficulty/period pair — and then stops. 900/min is 60 of those full
+    // sweeps: exactly a NAT'd classroom of 30 each exhausting all 15 tabs
+    // twice inside the same minute. As with the limiter above, IP-only keying
+    // reads that classroom as one client, which is why the ceiling sits this
+    // far above one person's worst case. Counters are per-colo, so this is a
+    // floor on what a distributed caller can send, not a global cap.
+    {
+      "name": "LEADERBOARD_IP_LIMIT",
+      "namespace_id": "1003",
+      "simple": { "limit": 900, "period": 60 }
     }
   ],
   // obscenity ships a broken ESM wrapper at dist/index.mjs (does
@@ -139,6 +165,11 @@
           "name": "RACE_RESULT_IP_LIMIT",
           "namespace_id": "2002",
           "simple": { "limit": 60, "period": 60 }
+        },
+        {
+          "name": "LEADERBOARD_IP_LIMIT",
+          "namespace_id": "2003",
+          "simple": { "limit": 900, "period": 60 }
         }
       ],
       "alias": {

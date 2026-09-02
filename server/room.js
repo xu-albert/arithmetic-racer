@@ -9,7 +9,8 @@ import { logError, KINDS } from '../worker/logger.js';
 import { buildRaceResultPayload } from './room-stats.js';
 import { createSocketLimiter } from './socket-limit.js';
 
-// Mirrors public/src/runner.js values; private rooms use 20 by default.
+// Mirrors public/src/runner.js values. The default race length is not here —
+// it is `raceLength` in freshState() below, which the leaderboards filter on.
 export const COUNTDOWN_SECONDS = 3;
 export const IDLE_CLEANUP_MS = 5 * 60 * 1000;
 export const RECONNECT_GRACE_MS = 30 * 1000;
@@ -80,10 +81,12 @@ export function freshState(id) {
     difficulty: 'medium',
     raceLength: 10,
     state: 'lobby',
-    // raceLength of the most recently finished race. The live `raceLength` can
-    // move while results are still on screen (the host may reconfigure between
-    // races), so the finished scoreboard reads its denominator from here.
-    lastRaceLength: null,
+    // What the most recently finished race actually was: its difficulty and
+    // its raceLength. Both live fields can move while that race's results are
+    // still on screen and still being written (the host may reconfigure
+    // between races), so the finished scoreboard reads its denominator here
+    // and every persisted row reads its tier and length here.
+    lastRace: null,
     players: [],
     problemSequence: [],
     raceStartedAt: null,
@@ -691,9 +694,10 @@ export class RaceRoom extends Server {
     }
     this.state.state = 'finished';
     this.state.graceDeadline = null;
-    // Pin the denominator the scoreboard should use, before the host is free
-    // to change raceLength for the next race.
-    this.state.lastRaceLength = this.state.raceLength;
+    // Pin what this race was, before the host is free to reconfigure for the
+    // next one. Taken before the `finish` broadcast, so nothing a client sends
+    // in reply to it can reach the room first.
+    this.state.lastRace = { difficulty: this.state.difficulty, raceLength: this.state.raceLength };
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
@@ -701,6 +705,11 @@ export class RaceRoom extends Server {
   }
 
   async persistRaceResults() {
+    // Every payload is built before the first insert. A D1 insert is a
+    // subrequest, not a storage operation, so the input gate stays open across
+    // it and a `set-config` or `rematch` is delivered mid-loop; a payload read
+    // from live state after that point would describe a different race.
+    const pending = [];
     for (const p of this.state.players) {
       if (!p.deviceId) {
         // Defensive: shouldn't happen since the client always sends deviceId
@@ -708,10 +717,13 @@ export class RaceRoom extends Server {
         logError(KINDS.RACE_RESULT_DB, 'skipping player with no deviceId', { roomId: this.name, playerId: p.id, phase: 'precheck' });
         continue;
       }
+      pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
+    }
+    for (const { playerId, payload } of pending) {
       try {
-        await insertRaceResult(this.env, buildRaceResultPayload(p, this.state));
+        await insertRaceResult(this.env, payload);
       } catch (e) {
-        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: p.id, phase: 'insert' });
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'insert' });
       }
     }
   }

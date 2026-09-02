@@ -6,10 +6,17 @@
 // `auth-changed` to re-fetch when the user signs in/out or renames.
 //
 // Pure helpers (fmtMs, headlinePpm, fmtPct, etc.) are exported via the
-// `_internals` object for unit testing — see profile.test.js.
+// `_internals` object for unit testing — see profile.test.js. That object also
+// re-exports the shared formatters from race-format.js, so a test does not
+// have to know which module a formatter ended up in.
 
 import { getMe, setUsername } from "./stats-api.js";
 import { validateUsernameSync } from "./username-validator-client.js";
+// PPM / points / "3d ago" must read the same here and on the lobby
+// leaderboard, so they live in one module rather than two copies. The escaper
+// is there for the same reason, and matters more: both screens interpolate a
+// username off the wire into innerHTML.
+import { fmtPpm, fmtPoints, fmtRelative, escapeHtml } from "./race-format.js";
 
 // ---------- pure helpers ----------
 
@@ -29,46 +36,10 @@ function fmtAvgMs(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/**
- * Format problems-per-minute — the headline speed number. One decimal, because
- * PPM ranges roughly 10–40 here and whole numbers would hide real improvement.
- */
-function fmtPpm(ppm) {
-  if (ppm == null || !Number.isFinite(ppm)) return "—";
-  return ppm.toFixed(1);
-}
-
-/**
- * Format a race score. Points are stored unrounded; rounding is display-only.
- * One decimal, because a single race lands around 0.4–5 points and whole
- * numbers would both collapse the column and stop the rows adding up to the
- * tier total. Grouping separators keep large tier totals readable.
- */
-function fmtPoints(points) {
-  if (points == null || !Number.isFinite(points)) return "—";
-  return points.toLocaleString(undefined, {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  });
-}
-
 /** Format a 0..100 percentage with no decimals. */
 function fmtPct(p) {
   if (p == null) return "—";
   return `${Math.round(p)}%`;
-}
-
-/** Coarse "h ago" / "d ago" relative timestamp. */
-function fmtRelative(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso).getTime();
-  if (!Number.isFinite(d)) return "—";
-  const diff = Date.now() - d;
-  const h = Math.round(diff / 3_600_000);
-  if (h < 1) return "just now";
-  if (h < 24) return `${h}h ago`;
-  const days = Math.round(h / 24);
-  return `${days}d ago`;
 }
 
 /** Format an ISO date as a short locale date — used for "Racing Since". */
@@ -498,17 +469,6 @@ export function mountProfile(host) {
       refresh();
     }
   });
-}
-
-// ---------- helpers ----------
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 // ---------- test exports ----------

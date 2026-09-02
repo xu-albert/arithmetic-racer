@@ -5,10 +5,16 @@
 /**
  * Build the insertRaceResult payload for one player at race-end.
  * `player` is a Player from RoomState.players (post-finishRace).
- * `state` is RoomState (only id, difficulty, raceLength are read).
+ * `state` is RoomState (only id and the race pin below are read).
+ *
+ * Tier and length come from `state.lastRace`, the snapshot finishRace() pins
+ * of the race that just ran — never from the live `difficulty`/`raceLength`,
+ * which the host is free to change the moment the race is over. The fallback
+ * is for state persisted before that pin existed.
  */
 export function buildRaceResultPayload(player, state) {
-  const finished = player.score >= state.raceLength && !player.dropped && !player.dnf;
+  const race = state.lastRace ?? state;
+  const finished = player.score >= race.raceLength && !player.dropped && !player.dnf;
   const finishTime = finished ? player.finishMs : null;
   const attempts = player.attempts ?? 0;
   const correct = player.score;
@@ -17,10 +23,10 @@ export function buildRaceResultPayload(player, state) {
   return {
     user_id: player.userId ?? null,
     device_id: player.deviceId,
-    difficulty: state.difficulty,
+    difficulty: race.difficulty,
     finished,
     finish_time_ms: finishTime,
-    problems_total: state.raceLength,
+    problems_total: race.raceLength,
     problems_correct: correct,
     problems_attempted: attempts,
     avg_time_per_problem_ms: avgPerProblem,

@@ -88,3 +88,20 @@ test('null userId yields null user_id in payload', () => {
   const out = buildRaceResultPayload(p, makeState());
   assert.equal(out.user_id, null);
 });
+
+test('the pinned race, not live config, decides tier and length', () => {
+  // The host reconfigured the room the moment the race ended; the row is still
+  // the race that ran. The two public boards key off exactly these columns.
+  const p = makePlayer({ score: 5, attempts: 5, finishMs: 20000 });
+  const state = makeState({
+    difficulty: 'hard',
+    raceLength: 12,
+    lastRace: { difficulty: 'easy', raceLength: 5 },
+  });
+  const out = buildRaceResultPayload(p, state);
+  assert.equal(out.difficulty, 'easy');
+  assert.equal(out.problems_total, 5);
+  // Length also decides who counts as a finisher: 5 of 5, not 5 of 12.
+  assert.equal(out.finished, true);
+  assert.equal(out.finish_time_ms, 20000);
+});

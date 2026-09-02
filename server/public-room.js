@@ -222,6 +222,10 @@ export class PublicRaceRoom extends RaceRoom {
 
     this.state.state = 'finished';
     this.state.graceDeadline = null;
+    // Same pin as the base room: what this race actually was, taken before the
+    // `finish` broadcast. Config is locked here, but persistResults reads the
+    // pin like every other writer rather than trusting live state.
+    this.state.lastRace = { difficulty: this.state.difficulty, raceLength: this.state.raceLength };
     const rankings = rankPlayers(this.state.players);
     // Mirror the base RaceRoom: strip identity (deviceId/userId, and the
     // racerId reconnect secret) plus server-only counters before the rankings
@@ -249,14 +253,20 @@ export class PublicRaceRoom extends RaceRoom {
     // the shared buildRaceResultPayload helper. attempts/longestStreak are
     // tracked by the base RaceRoom on each answer, so accuracy_pct here is
     // genuine — no more 0/100 approximation.
+    // Built up front for the reason the base room does it: finishRace strips
+    // bots and schedules cleanup right after kicking this off, and an insert is
+    // a subrequest the room keeps taking messages across.
+    const pending = [];
     for (const p of this.state.players) {
       if (p.isBot) continue;
       if (!p.deviceId) continue;
-      const payload = buildRaceResultPayload(p, this.state);
+      pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
+    }
+    for (const { playerId, payload } of pending) {
       try {
         await insertRaceResult(this.env, payload);
       } catch (e) {
-        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: p.id, phase: 'insert' });
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'insert' });
       }
     }
   }

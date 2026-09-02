@@ -7,7 +7,7 @@
 // but 'lobby', so the room's difficulty was effectively frozen after the first
 // race and the host's only escape was to abandon the room.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 
 function makeConn(label) {
@@ -38,10 +38,10 @@ async function withRoom(conns, fn) {
   });
 }
 
-async function join(room, conn, handle) {
+async function join(room, conn, handle, deviceId = crypto.randomUUID()) {
   const playerId = crypto.randomUUID();
   await room.handleHello(conn, {
-    type: "hello", playerId, handle, deviceId: crypto.randomUUID(),
+    type: "hello", playerId, handle, deviceId,
   });
   return playerId;
 }
@@ -51,6 +51,25 @@ async function runCountdown(room) {
   for (let i = 0; i < 8 && room.state.state === "countdown"; i++) {
     room.state.countdownAt = Date.now() - 1;
     await room.onAlarm();
+  }
+}
+
+/** One correct answer from `conn`. Returns the handler's pending promise. */
+function answerOnce(room, conn) {
+  const player = room.playerFor(conn);
+  const problem = room.state.problemSequence[player.score];
+  return room.handleAnswer(conn, { type: "answer", value: String(problem.answer) });
+}
+
+/**
+ * Race everyone to the finish except `last`, who is left one answer short —
+ * so the race ends exactly when the caller decides to send it.
+ */
+async function raceToBrink(room, conns, last) {
+  const len = room.state.raceLength;
+  for (const conn of conns) {
+    const target = conn === last ? len - 1 : len;
+    while (room.playerFor(conn).score < target) await answerOnce(room, conn);
   }
 }
 
@@ -157,10 +176,10 @@ describe("private room — changing difficulty after a race (the reported bug)",
     const guest = makeConn("guest");
     await withRoom([host, guest], async (room) => {
       await playOneRace(room, host, guest); // raceLength 5
-      expect(room.state.lastRaceLength).toBe(5);
+      expect(room.state.lastRace).toMatchObject({ difficulty: "hard", raceLength: 5 });
 
-      await room.handleSetConfig(host, { type: "set-config", difficulty: "hard", raceLength: 40 });
-      expect(room.state.lastRaceLength).toBe(5);
+      await room.handleSetConfig(host, { type: "set-config", difficulty: "easy", raceLength: 40 });
+      expect(room.state.lastRace).toMatchObject({ difficulty: "hard", raceLength: 5 });
       expect(room.state.raceLength).toBe(40);
     });
   });
@@ -238,6 +257,87 @@ describe("private room — config permissions are unchanged elsewhere", () => {
       }
       expect(room.state.difficulty).toBe("hard");
       expect(room.state.raceLength).toBe(5);
+    });
+  });
+});
+
+// The race that just ran owns every row written for it. `finished` is a
+// configurable state and a D1 insert is a subrequest, not a storage operation,
+// so the input gate stays open across the per-player insert loop: whatever the
+// host sends the instant they see `finish` lands in the middle of it. The
+// public boards filter on `difficulty` and `problems_total`, so a row restamped
+// there is a clean, eligible result attributed to a race nobody ran.
+describe("private room — results describe the race that ran, not the next one", () => {
+  beforeEach(async () => {
+    await env.DB.exec("DELETE FROM race_results");
+  });
+
+  async function rowsByDevice() {
+    const { results } = await env.DB
+      .prepare("SELECT * FROM race_results WHERE device_id IN ('dev-host', 'dev-guest')")
+      .all();
+    return Object.fromEntries(results.map((r) => [r.device_id, r]));
+  }
+
+  /** Two players one answer away from ending an easy 5-problem race. */
+  async function raceToBrink5(room, host, guest) {
+    await join(room, host, "HostGuy", "dev-host");
+    await join(room, guest, "FriendBob", "dev-guest");
+    await room.handleSetConfig(host, { type: "set-config", difficulty: "easy", raceLength: 5 });
+    await room.handleStartRace(host);
+    await runCountdown(room);
+    await raceToBrink(room, [host, guest], guest);
+  }
+
+  it("a set-config delivered mid-persist cannot restamp rows with the next race's config", async () => {
+    const host = makeConn("host");
+    const guest = makeConn("guest");
+    await withRoom([host, guest], async (room) => {
+      await raceToBrink5(room, host, guest);
+
+      // The guest's last answer ends the race: finishRace broadcasts `finish`
+      // and then writes one row per player. The host's client reacts to that
+      // broadcast by dialling in the next race while the loop is still going.
+      const persisting = answerOnce(room, guest);
+      await room.handleSetConfig(host, { type: "set-config", difficulty: "hard", raceLength: 12 });
+      await persisting;
+
+      expect(room.state.difficulty).toBe("hard");
+      expect(room.state.raceLength).toBe(12);
+
+      const rows = await rowsByDevice();
+      expect(Object.keys(rows).sort()).toEqual(["dev-guest", "dev-host"]);
+      for (const [device, row] of Object.entries(rows)) {
+        expect(row.difficulty, device).toBe("easy");
+        expect(row.problems_total, device).toBe(5);
+        expect(row.finished, device).toBe(1);
+      }
+    });
+  });
+
+  it("a rematch delivered mid-persist cannot blank the rows still being written", async () => {
+    const host = makeConn("host");
+    const guest = makeConn("guest");
+    await withRoom([host, guest], async (room) => {
+      await raceToBrink5(room, host, guest);
+
+      // Same window, the other button on the same screen: Race Again resets
+      // every player's score and finish time for the next race.
+      const persisting = answerOnce(room, guest);
+      await room.handleRematch(host);
+      await persisting;
+
+      expect(room.state.state).toBe("lobby");
+      expect(room.state.players.every((p) => p.score === 0)).toBe(true);
+
+      const rows = await rowsByDevice();
+      expect(Object.keys(rows).sort()).toEqual(["dev-guest", "dev-host"]);
+      for (const [device, row] of Object.entries(rows)) {
+        expect(row.finished, device).toBe(1);
+        expect(row.problems_correct, device).toBe(5);
+        expect(row.problems_total, device).toBe(5);
+        expect(row.finish_time_ms, device).not.toBeNull();
+      }
     });
   });
 });
