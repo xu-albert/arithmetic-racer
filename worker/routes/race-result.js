@@ -4,10 +4,10 @@
 // anonymous clients (no session cookie) and logged-in users; the handler
 // decides whether to set user_id by reading the session.
 //
-// This handler does NOT run the anon -> registered claim flow. That logic
-// is owned by Agent D and runs once at signup (see worker/auth.js when
-// it lands). Per-race inserts simply record device_id alongside an
-// optional user_id; the claim job rewrites user_id later.
+// This handler does NOT run the anon -> registered claim flow. That is
+// runClaim in worker/auth.js, run once at email/password signup. Per-race
+// inserts simply record device_id alongside an optional user_id; the claim
+// job rewrites user_id later.
 //
 // Contract: see worker/api-contracts.js (frozen).
 
@@ -132,8 +132,7 @@ export async function handleRaceResult(request, env) {
     );
   }
 
-  // `claimed` is always false here; the field exists in the response shape
-  // so the contract stays stable when Agent D's signup flow returns the
-  // same shape with a true value after running the claim job.
+  // `claimed` is always false here: this handler never runs the claim. The
+  // field stays because the frozen contract (worker/api-contracts.js) has it.
   return Response.json({ id, claimed: false });
 }

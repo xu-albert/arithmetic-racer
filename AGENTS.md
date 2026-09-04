@@ -114,6 +114,13 @@ which runner claims it — see `vitest.config.js` `include`/`exclude` and
 `docs/testing.md`. Each Worker test file gets its own ephemeral D1, built from
 `migrations/` — see below.
 
+The client race runners are tested under `node:test`'s `mock.timers`
+(`public/src/runner.test.js`, `remote-runner.test.js`). One trap: `tick(ms)`
+fires only the timers already due when it is called, not a timer a callback
+chains after itself, so a countdown or bot schedule has to be walked one tick
+at a time. `requestAnimationFrame` does not exist under Node; the remote-runner
+test installs a queue-and-flush shim on `globalThis` for the bot ticker.
+
 ## `public/` has no build step
 
 Static assets are served byte-for-byte by wrangler's ASSETS binding, so there is

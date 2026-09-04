@@ -2,8 +2,8 @@
 // better-auth, with a test override so unit tests can inject a user without
 // going through a real signup/sign-in dance.
 //
-// Both worker/routes/race-result.js and worker/routes/me.js import readUserId
-// from here. Test files import _setTestUserId to inject a known user id.
+// Route handlers and the Worker entry import readUserId from here. Test files
+// import _setTestUserId to inject a known user id.
 
 import { getAuth } from "./auth.js";
 
@@ -30,12 +30,4 @@ export async function readUserId(request, env) {
 
   const session = await _auth.api.getSession({ headers: request.headers });
   return session?.user?.id ?? null;
-}
-
-/**
- * Test-only helper: drop the cached auth instance so a fresh env can be
- * picked up between test files.
- */
-export function _resetAuth() {
-  _auth = null;
 }

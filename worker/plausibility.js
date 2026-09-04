@@ -5,10 +5,10 @@
 // tells whoever sent it precisely where the threshold sits. Suspect rows are
 // persisted normally; leaderboards filter on `suspect = 0`.
 //
-// This is integrity, not cost control. Rate limiting is the thing that stops a
-// script hammering D1; these bounds only decide whether a stored result is
-// allowed to count. Keeping the two separate is what makes each number
-// obvious — see docs/superpowers/TODO.md.
+// This is integrity, not cost control. Rate limiting (worker/rate-limit.js) is
+// the thing that stops a script hammering D1; these bounds only decide whether
+// a stored result is allowed to count. Keeping the two separate is what makes
+// each number obvious.
 
 /**
  * Floor on time-per-problem. A race is 10 problems (RACE_LENGTH in
