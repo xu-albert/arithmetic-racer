@@ -269,7 +269,7 @@ npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, 
 | R3a | Two players racing; one clicks **Quit race** mid-race | Two rows; quitter has `finished = 0`, `finish_time_ms = NULL` |
 | R3b | Two players racing; one closes their tab and waits past the 30s reconnect grace | Two rows; the disconnected player has `finished = 0`, `finish_time_ms = NULL` (covers the `removePlayer` path, distinct from R3a's `handleQuit` path — this is regression #11 in §4, currently UNGUARDED by an automated test) |
 | R4 | One logged-in + one anon, both finish | Two rows; logged-in player's row has `user_id` set, anon has `user_id NULL` |
-| R5 | After R2, the logged-in player visits Profile | Their Recent Races list includes the just-finished room race |
+| R5 | After R2, the logged-in player visits Profile | Their **Race History** table includes the just-finished room race |
 | R6 | Solo Quickplay race (regression check) | One row written via the route; `room_id = NULL`; existing solo stats behavior unchanged |
 | R7 | Any finished race (solo or room) | Row has non-NULL `points`; a quit race has `points NULL` |
 | R8 | After R7, the logged-in player visits Profile | Headline shows a PPM figure for that difficulty only — the other two tiers are unchanged — and the race's row shows its own PPM and Points |
