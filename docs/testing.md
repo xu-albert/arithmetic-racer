@@ -325,6 +325,28 @@ mounted on that route — so after a **private** room race Play again returns to
 where there is no board to look at. (After a Quick Match it does reach `/`, because that
 room is one-shot; the instruction is written to be right for both.)
 
+### Profile race history
+
+Automated coverage: `worker/routes/me.test.js` ("GET /api/me/races": empty, exactly one page,
+a short last page, the `before` cursor and its rejections, the difficulty filter with and without
+matches, and that `/api/me`'s `recent` is still the first ten-row page) and
+`public/src/profile.test.js` (row rendering and escaping, the per-filter empty line, and the
+client-side cursor derived from `recent`). What follows is the part the suite cannot see: that
+the table on the profile pages and filters.
+
+Sign in and finish more than ten races first, across at least two difficulties. Any mode
+counts — the history is the racer's own log, so solo races are listed, unlike the leaderboards.
+
+| # | Scenario | Expected |
+|---|---|---|
+| H1 | Open **Profile** from the header dropdown | **Race History** lists the newest ten races, newest first, with **All** pressed; a **Load older races** button sits under the table when you have more than ten (Network tab: one `/api/me` request, no `/api/me/races`) |
+| H2 | Click **Load older races** | Up to 20 older races append below the existing rows with no duplicate or skipped `Race #`; the button disappears once `#1` is on screen |
+| H3 | Click a difficulty filter | Table shows that tier only, newest first; the `Race #` column keeps each race's original number, so gaps are expected |
+| H4 | Filter to a difficulty you have never raced | Table empties and the line reads `No <difficulty> races yet.`; no **Load older races** button |
+| H5 | Click **All** | The full history comes back, newest first |
+| H6 | Finish a race, then reopen the profile | The new race is `#N+1` at the top; every older number is unchanged |
+| H7 | Sign out while the profile is open | Table clears to the empty line; **Load older races** is hidden |
+
 ## 7. Performance and load
 
 No formal performance budgets or automated load tests exist today. What's actually measured:

@@ -21,6 +21,9 @@ const {
   findAgg,
   errorText,
   escapeHtml,
+  renderRaceRows,
+  historyEmptyMessage,
+  olderRacesCursor,
 } = _internals;
 
 // ---------- fmtMs ----------
@@ -219,4 +222,65 @@ test("errorText maps known codes", () => {
 
 test("escapeHtml escapes the usual suspects", () => {
   assert.equal(escapeHtml(`<a href="x">&'</a>`), "&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;");
+});
+
+// ---------- race history ----------
+
+const RACE = {
+  race_seq: 7,
+  difficulty: "medium",
+  finish_time_ms: 48100,
+  accuracy_pct: 92.4,
+  avg_time_per_problem_ms: 2400,
+  points: 5.25,
+  ppm: 24.94,
+  played_at: new Date().toISOString(),
+};
+
+test("renderRaceRows renders one row per race with the formatted cells", () => {
+  const html = renderRaceRows([RACE]);
+  assert.equal((html.match(/<tr>/g) || []).length, 1);
+  assert.match(html, /<td>#7<\/td>/);
+  assert.match(html, /<td>Medium<\/td>/);
+  assert.match(html, /<td>0:48\.1<\/td>/);
+  assert.match(html, /<td>24\.9<\/td>/);
+  assert.match(html, /<td>5\.3<\/td>/);
+  assert.match(html, /<td>92%<\/td>/);
+  assert.match(html, /<td>2\.4s<\/td>/);
+  assert.match(html, /<td>just now<\/td>/);
+});
+
+test("renderRaceRows shows DNF and dashes for a quit race", () => {
+  const html = renderRaceRows([
+    { ...RACE, finish_time_ms: null, points: null, ppm: null },
+  ]);
+  assert.match(html, /<td>DNF<\/td>/);
+  // PPM and points columns both fall back to the em dash.
+  assert.equal((html.match(/<td>—<\/td>/g) || []).length, 2);
+});
+
+test("renderRaceRows is empty for no rows and escapes what it interpolates", () => {
+  assert.equal(renderRaceRows([]), "");
+  assert.equal(renderRaceRows(undefined), "");
+  const html = renderRaceRows([{ ...RACE, difficulty: "<b>x" }]);
+  assert.ok(!html.includes("<b>"));
+  assert.match(html, /&lt;b&gt;x/);
+});
+
+test("historyEmptyMessage names the filtered tier, or the generic line for all", () => {
+  assert.equal(historyEmptyMessage(null), "Race a few times and your stats will show up here.");
+  assert.equal(historyEmptyMessage("hard"), "No hard races yet.");
+});
+
+test("olderRacesCursor is the oldest race_seq on the page, or null at race #1", () => {
+  // /api/me's `recent` is the newest ten of a dense 1-based counter: a page
+  // whose oldest row is #1 has nothing older, any other page does.
+  assert.equal(olderRacesCursor([]), null);
+  assert.equal(olderRacesCursor(undefined), null);
+  const seqs = (list) => list.map((race_seq) => ({ race_seq }));
+  assert.equal(olderRacesCursor(seqs([5, 4, 3, 2, 1])), null);
+  assert.equal(olderRacesCursor(seqs([12, 11, 10, 9, 8, 7, 6, 5, 4, 3])), 3);
+  // Defensive: it finds the minimum rather than trusting the ordering.
+  assert.equal(olderRacesCursor(seqs([3, 9, 4])), 3);
+  assert.equal(olderRacesCursor([{ race_seq: "nope" }]), null);
 });
