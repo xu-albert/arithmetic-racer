@@ -78,6 +78,37 @@
  */
 
 /**
+ * GET /api/me/races?difficulty=…&before=…&limit=…   (requires session cookie)
+ *
+ * ADDITIVE: the account's full race history, paged. /api/me's `recent` is
+ * this endpoint's first page at limit 10 with no filter, and is unchanged.
+ *
+ * Ordering is newest-first by `race_seq`, the same 1-based per-user counter
+ * every RaceListItem carries. It is numbered over ALL of the user's races
+ * before `difficulty` narrows the list, so a race keeps its number under any
+ * filter; two races stamped in the same millisecond are ordered by row id.
+ *
+ * Pagination is a keyset cursor on that counter: `before=N` returns races
+ * numbered strictly below N. A page's `next_cursor` is the race_seq of its
+ * oldest row when an older page exists, else null — pass it straight back as
+ * `before`. `limit` is the page size: default 20, max 100, and an unreadable
+ * value falls back to the default rather than erroring (as /api/leaderboard
+ * does). `difficulty` absent or empty means every tier.
+ *
+ * Response (200): RaceHistoryResponse
+ * Response (400): { error: 'invalid_difficulty' | 'invalid_cursor' }
+ *   `invalid_cursor`: `before` was present but not a positive integer.
+ * Response (401): if no session.
+ *
+ * @typedef {Object} RaceHistoryResponse
+ * @property {Difficulty|null} difficulty  the filter applied; null = all
+ * @property {number} limit                the page size actually applied
+ * @property {RaceListItem[]} races        newest first, at most `limit`
+ * @property {number|null} next_cursor     race_seq to pass as `before` for the
+ *   next older page; null when this page reached the user's first race
+ */
+
+/**
  * GET /api/leaderboard?difficulty=…&period=…&limit=…   (no auth)
  *
  * ADDITIVE: a new endpoint, added after the freeze. Nothing above it changed —

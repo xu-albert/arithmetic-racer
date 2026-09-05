@@ -10,7 +10,7 @@
 // re-exports the shared formatters from race-format.js, so a test does not
 // have to know which module a formatter ended up in.
 
-import { getMe, setUsername } from "./stats-api.js";
+import { getMe, getRaceHistory, setUsername } from "./stats-api.js";
 import { validateUsernameSync } from "./username-validator-client.js";
 // PPM / points / "3d ago" must read the same here and on the lobby
 // leaderboard, so they live in one module rather than two copies. The escaper
@@ -125,6 +125,70 @@ function findAgg(aggregates, difficulty) {
   return aggregates.find((a) => a?.difficulty === difficulty) ?? null;
 }
 
+/** "easy" → "Easy". */
+function titleCase(s) {
+  if (!s) return "";
+  return s[0].toUpperCase() + s.slice(1);
+}
+
+/** The three tiers, in the order every other picker on the site lists them. */
+const DIFFICULTIES = ["easy", "medium", "hard"];
+
+/**
+ * Render the race-history table body for one list of RaceListItems.
+ *
+ * Takes the parsed rows rather than the fetch so it can be tested without a
+ * DOM — every cell is escaped, because a row arrives over the wire.
+ */
+function renderRaceRows(races) {
+  if (!Array.isArray(races) || races.length === 0) return "";
+  return races
+    .map((r) => {
+      const finish = r.finish_time_ms == null ? "DNF" : fmtMs(r.finish_time_ms);
+      const diff = r.difficulty ? titleCase(r.difficulty) : "—";
+      return `<tr>
+          <td>#${escapeHtml(String(r.race_seq ?? "—"))}</td>
+          <td>${escapeHtml(diff)}</td>
+          <td>${escapeHtml(finish)}</td>
+          <td>${escapeHtml(fmtPpm(r.ppm))}</td>
+          <td>${escapeHtml(fmtPoints(r.points))}</td>
+          <td>${escapeHtml(fmtPct(r.accuracy_pct))}</td>
+          <td>${escapeHtml(fmtAvgMs(r.avg_time_per_problem_ms))}</td>
+          <td>${escapeHtml(fmtRelative(r.played_at))}</td>
+        </tr>`;
+    })
+    .join("");
+}
+
+/** Empty-state copy for the history table, worded for the filter in force. */
+function historyEmptyMessage(difficulty) {
+  if (!difficulty) return "Race a few times and your stats will show up here.";
+  return `No ${difficulty} races yet.`;
+}
+
+/**
+ * The `before` cursor for the page after `rows`, when `rows` is the unfiltered
+ * newest-first list /api/me hands over as `recent`.
+ *
+ * race_seq is a dense counter from 1 over every race the account owns, so a
+ * page whose oldest row is #1 has nothing older and any other page's oldest
+ * row is exactly the cursor GET /api/me/races wants next. That is what lets
+ * the profile open on a single request and still know whether to offer "Load
+ * older races". A *filtered* page gets no such shortcut — the rows between
+ * two matching ones are invisible here — and uses the server's `next_cursor`.
+ *
+ * @returns {number|null}
+ */
+function olderRacesCursor(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  let oldest = Infinity;
+  for (const r of rows) {
+    const seq = Number(r?.race_seq);
+    if (Number.isFinite(seq) && seq < oldest) oldest = seq;
+  }
+  return Number.isFinite(oldest) && oldest > 1 ? oldest : null;
+}
+
 function errorText(code) {
   switch (code) {
     case "taken":
@@ -198,8 +262,21 @@ const PROFILE_HTML = `
       </div>
     </section>
 
+    <!-- The filter is a toggle-button group, like the lobby leaderboard's
+         tabs: aria-pressed marks the selection. A history filter is the one
+         place the three tiers legitimately share a list — this is the racer's
+         own log, not a ranking, so "All" is the default. -->
     <section class="profile__races">
-      <h3>Latest Race Results</h3>
+      <div class="profile__races-head">
+        <h3>Race History</h3>
+        <div class="profile__filter" role="group" aria-label="Filter races by difficulty">
+          <button type="button" class="profile__filter-btn" data-history-difficulty="" aria-pressed="true">All</button>
+          ${DIFFICULTIES.map(
+            (d) =>
+              `<button type="button" class="profile__filter-btn" data-history-difficulty="${d}" aria-pressed="false">${titleCase(d)}</button>`
+          ).join("")}
+        </div>
+      </div>
       <div class="profile__table-wrap">
         <table class="profile__table">
           <thead>
@@ -211,6 +288,8 @@ const PROFILE_HTML = `
         </table>
       </div>
       <p class="profile__empty" id="profile-empty" hidden>Race a few times and your stats will show up here.</p>
+      <p class="profile__history-status" id="profile-history-status" aria-live="polite"></p>
+      <button type="button" class="profile__more" id="profile-more" hidden>Load older races</button>
     </section>
   </div>
 
@@ -278,8 +357,7 @@ export function mountProfile(host) {
     $("#t-finish").textContent = "—";
     $("#p-since").textContent = "—";
     $("#p-email-2").textContent = "—";
-    $("#profile-races-tbody").innerHTML = "";
-    $("#profile-empty").hidden = false;
+    showRecent([]);
   }
 
   function render(me) {
@@ -309,31 +387,92 @@ export function mountProfile(host) {
     $("#t-acc").textContent = fmtPct(computeOverallAccuracy(aggs));
     $("#t-finish").textContent = fmtPct(computeFinishRate(aggs));
 
-    // ---- recent races table ----
-    const tbody = $("#profile-races-tbody");
-    const recent = Array.isArray(me.recent) ? me.recent : [];
-    if (recent.length === 0) {
-      tbody.innerHTML = "";
-      $("#profile-empty").hidden = false;
-    } else {
-      $("#profile-empty").hidden = true;
-      const rows = recent.map((r) => {
-        const finish = r.finish_time_ms == null ? "DNF" : fmtMs(r.finish_time_ms);
-        const diff = r.difficulty
-          ? r.difficulty[0].toUpperCase() + r.difficulty.slice(1)
-          : "—";
-        return `<tr>
-          <td>#${escapeHtml(String(r.race_seq ?? "—"))}</td>
-          <td>${escapeHtml(diff)}</td>
-          <td>${escapeHtml(finish)}</td>
-          <td>${escapeHtml(fmtPpm(r.ppm))}</td>
-          <td>${escapeHtml(fmtPoints(r.points))}</td>
-          <td>${escapeHtml(fmtPct(r.accuracy_pct))}</td>
-          <td>${escapeHtml(fmtAvgMs(r.avg_time_per_problem_ms))}</td>
-          <td>${escapeHtml(fmtRelative(r.played_at))}</td>
-        </tr>`;
+    // ---- race history ----
+    // `recent` is the first unfiltered page and comes free with /api/me. If a
+    // filter is in force (this is a re-render after a rename), the filtered
+    // page is re-fetched instead so the table keeps saying what the pressed
+    // button says.
+    if (history.difficulty) loadHistory({ reset: true });
+    else showRecent(Array.isArray(me.recent) ? me.recent : []);
+  }
+
+  // ---- race history ----
+  // One page-set of GET /api/me/races: `rows` accumulates as the racer loads
+  // older pages, `nextCursor` is the server's word on whether older races
+  // exist (null = this is the end), `difficulty` is the filter (null = every
+  // tier). The endpoint is only hit on a filter change or "Load older races";
+  // opening the profile still costs the one /api/me request it always did.
+  const history = { difficulty: null, rows: [], nextCursor: null };
+  // Counts selections, not responses: a slower page must not land under a
+  // filter pressed after it was requested.
+  let historyTicket = 0;
+  const historyTbody = $("#profile-races-tbody");
+  const historyEmpty = $("#profile-empty");
+  const historyStatus = $("#profile-history-status");
+  const moreBtn = $("#profile-more");
+
+  function syncFilter() {
+    for (const btn of host.querySelectorAll("[data-history-difficulty]")) {
+      const pressed = (btn.dataset.historyDifficulty || null) === history.difficulty;
+      btn.setAttribute("aria-pressed", pressed ? "true" : "false");
+    }
+  }
+
+  function paintHistory() {
+    syncFilter();
+    historyTbody.innerHTML = renderRaceRows(history.rows);
+    historyEmpty.textContent = historyEmptyMessage(history.difficulty);
+    historyEmpty.hidden = history.rows.length > 0;
+    historyStatus.textContent = "";
+    moreBtn.hidden = history.nextCursor == null;
+    moreBtn.disabled = false;
+  }
+
+  /** Show /api/me's `recent` as the unfiltered first page. */
+  function showRecent(recent) {
+    ++historyTicket; // drop any filtered page still in flight
+    history.difficulty = null;
+    history.rows = recent;
+    history.nextCursor = olderRacesCursor(recent);
+    paintHistory();
+  }
+
+  /**
+   * Fetch a page. `reset` starts over from the newest race under the current
+   * filter; otherwise the next older page is appended below what is shown.
+   */
+  async function loadHistory({ reset }) {
+    const ticket = ++historyTicket;
+    if (reset) {
+      // Blank the table before the request rather than leave one tier's rows
+      // under another tier's pressed button; the empty line waits for the
+      // answer so it cannot flash "No hard races yet" over a loading page.
+      syncFilter();
+      history.rows = [];
+      history.nextCursor = null;
+      historyTbody.innerHTML = "";
+      historyEmpty.hidden = true;
+      moreBtn.hidden = true;
+    }
+    historyStatus.textContent = "Loading…";
+    moreBtn.disabled = true;
+    try {
+      const page = await getRaceHistory({
+        difficulty: history.difficulty,
+        before: reset ? null : history.nextCursor,
       });
-      tbody.innerHTML = rows.join("");
+      if (ticket !== historyTicket) return;
+      const races = Array.isArray(page?.races) ? page.races : [];
+      history.rows = reset ? races : history.rows.concat(races);
+      history.nextCursor = page?.next_cursor ?? null;
+      paintHistory();
+    } catch (err) {
+      if (ticket !== historyTicket) return;
+      // Best-effort, like every other read on this screen: what is already
+      // on the table stays, and the racer is told this page is missing.
+      console.error("profile: race history failed", err);
+      historyStatus.textContent = "Couldn't load race history. Try again in a moment.";
+      moreBtn.disabled = false;
     }
   }
 
@@ -441,6 +580,18 @@ export function mountProfile(host) {
       doSave();
       return;
     }
+    const filterBtn = t.closest("[data-history-difficulty]");
+    if (filterBtn) {
+      e.preventDefault();
+      history.difficulty = filterBtn.dataset.historyDifficulty || null;
+      loadHistory({ reset: true });
+      return;
+    }
+    if (t.id === "profile-more") {
+      e.preventDefault();
+      loadHistory({ reset: false });
+      return;
+    }
     // Click outside the rename card closes the overlay.
     if (t === overlay) {
       closeRename();
@@ -489,4 +640,7 @@ export const _internals = {
   findAgg,
   errorText,
   escapeHtml,
+  renderRaceRows,
+  historyEmptyMessage,
+  olderRacesCursor,
 };

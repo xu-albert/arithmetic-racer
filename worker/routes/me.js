@@ -101,28 +101,61 @@ export async function handleGetMe(request, env) {
     };
   });
 
-  // race_seq is a 1-based per-user counter that mirrors the chronological
-  // order in which the user played each race. We compute it via a window
-  // function over ALL of the user's races, then take the most recent 10.
-  const { results: recentRows } = await db(env)
-    .prepare(
-      `WITH ordered AS (
-         SELECT difficulty, finish_time_ms, accuracy_pct,
-                avg_time_per_problem_ms, played_at, points,
-                CASE WHEN finished = 1 AND finish_time_ms > 0
-                     THEN problems_correct * 60000.0 / finish_time_ms END AS ppm,
-                ROW_NUMBER() OVER (ORDER BY played_at ASC) AS race_seq
-           FROM race_results
-          WHERE user_id = ?
-       )
-       SELECT * FROM ordered
-        ORDER BY played_at DESC
-        LIMIT 10`
-    )
-    .bind(userId)
-    .all();
+  // `recent` is the first page of the race history, unchanged since the
+  // contract froze: the newest ten across every difficulty. A client that
+  // wants more pages, or one tier, walks GET /api/me/races (handleGetMyRaces).
+  const { races: recent } = await fetchRaceHistory(env, userId, { limit: RECENT_LIMIT });
 
-  const recent = (recentRows ?? []).map((r) => ({
+  return Response.json({
+    username: userRow.username ?? "",
+    email: userRow.email,
+    created_at: toIso(userRow.createdAt),
+    aggregates,
+    recent,
+  });
+}
+
+// ── Race history ────────────────────────────────────────────────────────────
+//
+// GET /api/me/races is the account's full race history, paged newest-first,
+// optionally narrowed to one difficulty. It is a sibling of /api/me rather
+// than a query string on it because /api/me's shape is frozen (see
+// worker/api-contracts.js) and because the profile fetches the two at
+// different times: aggregates once on open, history again on every filter
+// change or "load older" click. Re-running the aggregate GROUP BY to page a
+// table would be paying for numbers the screen already has.
+//
+// The cursor is a race_seq. race_seq is a 1-based per-user counter that
+// mirrors the chronological order in which the user played each race — the
+// same ROW_NUMBER() window /api/me has always used for `recent`. It is
+// computed over ALL of the user's races before any filter applies, so race #5
+// is still race #5 when only medium races are listed, and `before=N` means
+// "races older than the one numbered N" regardless of filter. The counter is
+// dense, so the client also knows a page whose oldest row is #1 has nothing
+// older — the server still says so explicitly in `next_cursor`.
+//
+// ORDER BY inside the window carries an `id` tiebreak. One multiplayer race
+// persists every player in the same tick, and a solo result can land on the
+// same millisecond; without the tiebreak ROW_NUMBER() may number two such rows
+// differently on two queries, and a keyset cursor over a number that moves
+// skips or repeats a row. The client's "Load older" is exactly that cursor.
+//
+// The cost model is the one the old `recent` query already had: the window
+// function reads every row the user owns via idx_race_results_user_played
+// (a few thousand at the very most), then the filter and LIMIT apply. `limit`
+// therefore bounds the response, not the read, and its ceiling is a UI
+// sanity bound rather than a D1 billing one.
+
+/** Rows per page when the caller does not ask for a size. */
+const HISTORY_DEFAULT_LIMIT = 20;
+/** Hard ceiling on rows per page. */
+const HISTORY_MAX_LIMIT = 100;
+/** /api/me's `recent`: the newest ten, as the frozen contract says. */
+const RECENT_LIMIT = 10;
+
+/** A race_results row from the `ordered` CTE, in RaceListItem shape. */
+function raceListItem(r) {
+  return {
     race_seq: Number(r.race_seq),
     difficulty: r.difficulty,
     finish_time_ms: r.finish_time_ms == null ? null : Number(r.finish_time_ms),
@@ -132,15 +165,109 @@ export async function handleGetMe(request, env) {
     points: r.points == null ? null : Number(r.points),
     ppm: r.ppm == null ? null : Number(r.ppm),
     played_at: toIso(r.played_at),
-  }));
+  };
+}
 
-  return Response.json({
-    username: userRow.username ?? "",
-    email: userRow.email,
-    created_at: toIso(userRow.createdAt),
-    aggregates,
-    recent,
-  });
+/**
+ * One page of a user's races, newest first.
+ *
+ * Reads `limit + 1` rows so `next_cursor` can say whether an older page exists
+ * without a second COUNT query; the probe row is never returned.
+ *
+ * @param {object} env
+ * @param {string} userId
+ * @param {{difficulty?: string|null, before?: number|null, limit: number}} page
+ *   `difficulty` narrows to one tier (null = every tier); `before` is a
+ *   race_seq and only races numbered strictly below it are returned.
+ * @returns {Promise<{races: object[], next_cursor: number|null}>}
+ */
+async function fetchRaceHistory(env, userId, { difficulty = null, before = null, limit }) {
+  const where = [];
+  const binds = [userId];
+  if (difficulty != null) {
+    where.push("difficulty = ?");
+    binds.push(difficulty);
+  }
+  if (before != null) {
+    where.push("race_seq < ?");
+    binds.push(before);
+  }
+  binds.push(limit + 1);
+
+  const { results } = await db(env)
+    .prepare(
+      `WITH ordered AS (
+         SELECT difficulty, finish_time_ms, accuracy_pct,
+                avg_time_per_problem_ms, played_at, points,
+                CASE WHEN finished = 1 AND finish_time_ms > 0
+                     THEN problems_correct * 60000.0 / finish_time_ms END AS ppm,
+                ROW_NUMBER() OVER (ORDER BY played_at ASC, id ASC) AS race_seq
+           FROM race_results
+          WHERE user_id = ?
+       )
+       SELECT * FROM ordered
+        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+        ORDER BY race_seq DESC
+        LIMIT ?`
+    )
+    .bind(...binds)
+    .all();
+
+  const rows = results ?? [];
+  const races = rows.slice(0, limit).map(raceListItem);
+  const hasOlder = rows.length > limit;
+  return {
+    races,
+    next_cursor: hasOlder ? races[races.length - 1].race_seq : null,
+  };
+}
+
+/**
+ * Parse `?before=`. Absent means "from the newest race". Anything else must
+ * be a positive integer written plainly — a cursor is something the client
+ * copied from `next_cursor`, so a value that does not look like one is a bug
+ * on the caller's side and gets a 400, unlike the forgiving `?limit=`.
+ *
+ * @returns {number|null|undefined} null when absent, undefined when invalid.
+ */
+function parseBefore(raw) {
+  if (raw == null) return null;
+  if (!/^[1-9]\d*$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) ? n : undefined;
+}
+
+/**
+ * Parse `?limit=`. Anything unreadable falls back to the default rather than
+ * 400-ing — the same posture as /api/leaderboard: a page size is a view
+ * preference, not a claim about which rows exist.
+ */
+function parseHistoryLimit(raw) {
+  if (raw == null || raw === "") return HISTORY_DEFAULT_LIMIT;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return HISTORY_DEFAULT_LIMIT;
+  return Math.min(n, HISTORY_MAX_LIMIT);
+}
+
+export async function handleGetMyRaces(request, env) {
+  const userId = await readUserId(request, env);
+  if (!userId) return new Response("unauthorized", { status: 401 });
+
+  const url = new URL(request.url);
+  // `?difficulty=` (present but empty) reads as "no filter", so a client can
+  // bind the parameter unconditionally to an "All" control.
+  const difficulty = url.searchParams.get("difficulty") || null;
+  if (difficulty != null && !DIFFICULTIES.includes(difficulty)) {
+    return Response.json({ error: "invalid_difficulty" }, { status: 400 });
+  }
+  const before = parseBefore(url.searchParams.get("before"));
+  if (before === undefined) {
+    return Response.json({ error: "invalid_cursor" }, { status: 400 });
+  }
+  const limit = parseHistoryLimit(url.searchParams.get("limit"));
+
+  const page = await fetchRaceHistory(env, userId, { difficulty, before, limit });
+  return Response.json({ difficulty, limit, ...page });
 }
 
 export async function handlePostUsername(request, env) {

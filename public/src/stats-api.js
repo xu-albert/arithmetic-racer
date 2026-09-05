@@ -20,6 +20,26 @@ export async function getMe() {
   return res.json();
 }
 
+/**
+ * One page of the signed-in racer's history, newest first. Contract:
+ * GET /api/me/races in worker/api-contracts.js. `before` is the previous
+ * page's `next_cursor`; omit it for the newest page. Returns null on 401,
+ * like getMe, so a signed-out profile degrades the same way everywhere.
+ *
+ * @param {{difficulty?: string|null, before?: number|null, limit?: number}} opts
+ */
+export async function getRaceHistory({ difficulty = null, before = null, limit } = {}) {
+  const params = new URLSearchParams();
+  if (difficulty) params.set("difficulty", difficulty);
+  if (before != null) params.set("before", String(before));
+  if (limit != null) params.set("limit", String(limit));
+  const qs = params.toString();
+  const res = await fetch(`/api/me/races${qs ? `?${qs}` : ""}`, { credentials: "include" });
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`me/races ${res.status}`);
+  return res.json();
+}
+
 export async function setUsername(username) {
   const res = await fetch("/api/me/username", {
     method: "POST",

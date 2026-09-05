@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import {
   handleGetMe,
+  handleGetMyRaces,
   handlePostUsername,
   handleByDevice,
 } from "./me.js";
@@ -571,3 +572,203 @@ describe("GET /api/stats/by-device/:device_id", () => {
   });
 });
 
+
+// --- GET /api/me/races ------------------------------------------------------
+
+describe("GET /api/me/races", () => {
+  const t0 = 1_700_000_000_000;
+
+  /** Seed `n` finished races for u1, oldest first, cycling through `difficulties`. */
+  async function seedHistory(n, difficulties = ["easy"]) {
+    for (let i = 0; i < n; i++) {
+      await seedRace(env, {
+        user_id: "u1",
+        difficulty: difficulties[i % difficulties.length],
+        finished: 1,
+        finish_time_ms: 20000 + i,
+        played_at: t0 + i,
+      });
+    }
+  }
+
+  async function getRaces(query = "") {
+    const res = await handleGetMyRaces(makeRequest(`http://x/api/me/races${query}`), env);
+    return { status: res.status, body: await res.json().catch(() => null) };
+  }
+
+  const seqs = (body) => body.races.map((r) => r.race_seq);
+
+  it("returns 401 when there is no session", async () => {
+    const res = await handleGetMyRaces(makeRequest("http://x/api/me/races"), env);
+    expect(res.status).toBe(401);
+  });
+
+  describe("signed in", () => {
+    beforeEach(async () => {
+      await seedUser(env, { id: "u1", email: "u1@example.com", username: "Alice" });
+      _setTestUserId("u1");
+    });
+
+    it("returns an empty page with no cursor for a user with no races", async () => {
+      const { status, body } = await getRaces();
+      expect(status).toBe(200);
+      expect(body).toEqual({ difficulty: null, limit: 20, races: [], next_cursor: null });
+    });
+
+    it("fits exactly one page in one response and reports no further page", async () => {
+      await seedHistory(20);
+      const { body } = await getRaces();
+      expect(body.races).toHaveLength(20);
+      expect(seqs(body)[0]).toBe(20);
+      expect(seqs(body)[19]).toBe(1);
+      // A page that lands exactly on the last row must not advertise an
+      // empty page after it.
+      expect(body.next_cursor).toBeNull();
+    });
+
+    it("pages newest-first through `before`, ending on a short last page", async () => {
+      await seedHistory(25);
+
+      const first = (await getRaces()).body;
+      expect(seqs(first)).toEqual(Array.from({ length: 20 }, (_, i) => 25 - i));
+      // The cursor is the oldest race on the page: pass it back as `before`.
+      expect(first.next_cursor).toBe(6);
+
+      const second = (await getRaces(`?before=${first.next_cursor}`)).body;
+      expect(seqs(second)).toEqual([5, 4, 3, 2, 1]);
+      expect(second.next_cursor).toBeNull();
+
+      // Nothing is shared between the two pages and nothing fell through.
+      const all = [...seqs(first), ...seqs(second)];
+      expect(new Set(all).size).toBe(25);
+    });
+
+    it("rows carry the same fields as /api/me's `recent`", async () => {
+      await seedHistory(1);
+      const { body } = await getRaces();
+      const me = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+      expect(body.races).toEqual(me.recent);
+      expect(Object.keys(body.races[0]).sort()).toEqual(
+        [
+          "accuracy_pct",
+          "avg_time_per_problem_ms",
+          "difficulty",
+          "finish_time_ms",
+          "played_at",
+          "points",
+          "ppm",
+          "race_seq",
+        ].sort()
+      );
+    });
+
+    it("/api/me `recent` is exactly the first ten-row page, unchanged", async () => {
+      await seedHistory(12, ["easy", "medium", "hard"]);
+      const me = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+      const { body } = await getRaces("?limit=10");
+      expect(me.recent).toEqual(body.races);
+      expect(me.recent).toHaveLength(10);
+    });
+
+    it("rejects a cursor that is not a positive integer", async () => {
+      await seedHistory(3);
+      for (const bad of ["abc", "0", "-1", "1.5", "1e2", " 2", ""]) {
+        const { status, body } = await getRaces(`?before=${encodeURIComponent(bad)}`);
+        expect(status, `before=${JSON.stringify(bad)}`).toBe(400);
+        expect(body).toEqual({ error: "invalid_cursor" });
+      }
+    });
+
+    it("a cursor past the oldest race yields an empty page, not an error", async () => {
+      await seedHistory(3);
+      const { status, body } = await getRaces("?before=1");
+      expect(status).toBe(200);
+      expect(body.races).toEqual([]);
+      expect(body.next_cursor).toBeNull();
+    });
+
+    it("filters by difficulty while keeping each race's global race_seq", async () => {
+      // seq 1 easy, 2 medium, 3 hard, 4 easy, 5 medium, 6 hard, 7 easy.
+      await seedHistory(7, ["easy", "medium", "hard"]);
+
+      const { status, body } = await getRaces("?difficulty=medium");
+      expect(status).toBe(200);
+      expect(body.difficulty).toBe("medium");
+      expect(body.races.every((r) => r.difficulty === "medium")).toBe(true);
+      // Race #5 is still race #5 when you look at medium alone: the counter
+      // is the user's whole history, not a per-difficulty one.
+      expect(seqs(body)).toEqual([5, 2]);
+      expect(body.next_cursor).toBeNull();
+    });
+
+    it("paginates within a difficulty filter", async () => {
+      // 9 hard races interleaved with others: hard is seq 3, 6, 9, ..., 27.
+      await seedHistory(27, ["easy", "medium", "hard"]);
+
+      const first = (await getRaces("?difficulty=hard&limit=4")).body;
+      expect(seqs(first)).toEqual([27, 24, 21, 18]);
+      expect(first.next_cursor).toBe(18);
+
+      const second = (await getRaces(`?difficulty=hard&limit=4&before=${first.next_cursor}`)).body;
+      expect(seqs(second)).toEqual([15, 12, 9, 6]);
+      expect(second.next_cursor).toBe(6);
+
+      const third = (await getRaces(`?difficulty=hard&limit=4&before=${second.next_cursor}`)).body;
+      expect(seqs(third)).toEqual([3]);
+      expect(third.next_cursor).toBeNull();
+    });
+
+    it("returns an empty page when the filter matches nothing", async () => {
+      await seedHistory(5, ["easy", "medium"]);
+      const { status, body } = await getRaces("?difficulty=hard");
+      expect(status).toBe(200);
+      expect(body).toEqual({ difficulty: "hard", limit: 20, races: [], next_cursor: null });
+    });
+
+    it("rejects an unknown difficulty", async () => {
+      const { status, body } = await getRaces("?difficulty=extreme");
+      expect(status).toBe(400);
+      expect(body).toEqual({ error: "invalid_difficulty" });
+    });
+
+    it("treats an empty difficulty as no filter", async () => {
+      await seedHistory(2, ["easy", "hard"]);
+      const { body } = await getRaces("?difficulty=");
+      expect(body.difficulty).toBeNull();
+      expect(body.races).toHaveLength(2);
+    });
+
+    it("clamps `limit` to [1, 100] and falls back to 20 when unreadable", async () => {
+      await seedHistory(3);
+      expect((await getRaces("?limit=2")).body.races).toHaveLength(2);
+      expect((await getRaces("?limit=2")).body.limit).toBe(2);
+      expect((await getRaces("?limit=abc")).body.limit).toBe(20);
+      expect((await getRaces("?limit=0")).body.limit).toBe(20);
+      expect((await getRaces("?limit=5000")).body.limit).toBe(100);
+    });
+
+    it("never lists another user's races", async () => {
+      await seedUser(env, { id: "u2", email: "u2@example.com", username: "Bob" });
+      await seedRace(env, { user_id: "u2", difficulty: "easy", finished: 1, played_at: t0 + 50 });
+      await seedHistory(2);
+      const { body } = await getRaces();
+      expect(seqs(body)).toEqual([2, 1]);
+    });
+
+    it("orders races stamped in the same millisecond by id, so race_seq is stable", async () => {
+      // One multiplayer race persists every player in the same tick, and a
+      // solo race can land on the same clock value. Without a tiebreak
+      // ROW_NUMBER() is free to swap them between two queries, and a cursor
+      // of `race_seq < n` would then skip or repeat a row.
+      await seedRace(env, { id: "b-race", user_id: "u1", difficulty: "easy", finished: 1, played_at: t0 });
+      await seedRace(env, { id: "a-race", user_id: "u1", difficulty: "hard", finished: 1, played_at: t0 });
+      const { body } = await getRaces();
+      expect(body.races.map((r) => [r.race_seq, r.difficulty])).toEqual([
+        [2, "easy"], // b-race
+        [1, "hard"], // a-race
+      ]);
+      const me = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+      expect(me.recent).toEqual(body.races);
+    });
+  });
+});

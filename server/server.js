@@ -12,7 +12,7 @@
 import { routePartykitRequest } from "partyserver";
 import { generateRoomId } from "./room-id.js";
 import { handleRaceResult } from "../worker/routes/race-result.js";
-import { handleGetMe, handlePostUsername, handleByDevice } from "../worker/routes/me.js";
+import { handleGetMe, handleGetMyRaces, handlePostUsername, handleByDevice } from "../worker/routes/me.js";
 import { getAuth } from "../worker/auth.js";
 import { readUserId } from "../worker/session.js";
 import { handleMatchmakeJoin } from "../worker/routes/matchmake.js";
@@ -51,6 +51,9 @@ export default {
     }
     if (pathname === "/api/me" && request.method === "GET") {
       return handleGetMe(request, env);
+    }
+    if (pathname === "/api/me/races" && request.method === "GET") {
+      return handleGetMyRaces(request, env);
     }
     if (pathname === "/api/me/username" && request.method === "POST") {
       return handlePostUsername(request, env);
