@@ -16,7 +16,13 @@ export async function insertRaceResult(env, payload) {
   // Assessed here rather than in the route so every writer is covered — the
   // solo POST and the RaceRoom DO both land on this function, and a bound that
   // only one path applies is a bound with a hole in it.
-  const { suspect, reason } = assessPlausibility(payload);
+  //
+  // A room's captcha (server/captcha.js) may override the passive assessment:
+  // failing or timing out the challenge stores the row as suspect with a
+  // captcha_* reason so leaderboards and feeds exclude it. Passing stores
+  // normally — the passive bounds still apply, so a sub-200ms/problem time
+  // that passes the captcha is still flagged impossibly_fast.
+  const { suspect, reason } = payload.plausibility_override ?? assessPlausibility(payload);
 
   // Scored here for the same reason. It is stored rather than derived at read
   // time so the formula can change without silently rewriting what past races

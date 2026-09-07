@@ -36,6 +36,9 @@ export default defineConfig({
     exclude: [
       "**/node_modules/**",
       "server/room-stats.test.js",
+      // Pure helpers run under node:test (see the test script in package.json);
+      // vitest would load them with the wrong runner.
+      "server/captcha.test.js",
     ],
   },
 });

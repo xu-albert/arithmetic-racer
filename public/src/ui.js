@@ -15,6 +15,22 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   const bugReportLink = document.querySelector('#hud .bug-report-link');
   const playerRacer = runner.racers.find((r) => r.id === 'player');
 
+  // Server-side verification (superhuman pace): created here so no index.html
+  // change is needed; lives on the race screen so the answer input stays in
+  // context. The problems are the server's, the input is the race's.
+  const captchaBanner = document.createElement('div');
+  captchaBanner.id = 'captcha-banner';
+  captchaBanner.className = 'hidden';
+  captchaBanner.setAttribute('role', 'status');
+  const captchaText = document.createElement('div');
+  captchaText.className = 'captcha-text';
+  const captchaProblem = document.createElement('div');
+  captchaProblem.className = 'captcha-problem';
+  const captchaCountdown = document.createElement('div');
+  captchaCountdown.className = 'captcha-countdown';
+  captchaBanner.append(captchaText, captchaProblem, captchaCountdown);
+  screens.race.appendChild(captchaBanner);
+
   track.innerHTML = '';
   const carEls = new Map();
   const laneEls = new Map();
@@ -76,8 +92,83 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   function onSubmit() {
     const raw = input.value;
     if (!raw.trim()) return;
+    if (captcha) {
+      // Verification mode: answers go to the captcha handler, not the race.
+      runner.submitCaptchaAnswer(raw);
+      input.value = '';
+      advanceCaptcha();
+      return;
+    }
     runner.submitAnswer(raw);
     input.value = '';
+  }
+
+  // ---- server-side verification (captcha) ---------------------------------
+  // The server holds a superhuman-paced result until these problems are
+  // answered. `captcha` is non-null while a challenge is on screen; the server
+  // remains the grader and the sole source of the outcome.
+  let captcha = null; // { problems, i, perProblemMs, countdownTimer }
+  let resultsTimer = null;
+
+  function startCaptchaCountdown() {
+    if (!captcha) return;
+    let secondsLeft = Math.round(captcha.perProblemMs / 1000);
+    captchaCountdown.textContent = `${secondsLeft}s`;
+    captcha.countdownTimer = setInterval(() => {
+      secondsLeft -= 1;
+      if (secondsLeft <= 0) {
+        // The server settles the timeout on its own clock; stop counting.
+        clearInterval(captcha.countdownTimer);
+        captchaCountdown.textContent = '';
+        return;
+      }
+      captchaCountdown.textContent = `${secondsLeft}s`;
+    }, 1000);
+  }
+
+  function showCaptcha(data) {
+    // Hold the results screen until verification settles.
+    if (resultsTimer) { clearTimeout(resultsTimer); resultsTimer = null; }
+    captcha = { problems: data.problems, i: 0, perProblemMs: data.perProblemMs, countdownTimer: null };
+    captchaText.textContent = `That pace was superhuman — solve ${data.problems.length} quick problems to verify your race.`;
+    captchaProblem.textContent = data.problems[0].problem;
+    captchaBanner.classList.remove('hidden');
+    input.disabled = false;
+    input.value = '';
+    input.focus();
+    startCaptchaCountdown();
+  }
+
+  function advanceCaptcha() {
+    captcha.i += 1;
+    if (captcha.i < captcha.problems.length) {
+      captchaProblem.textContent = captcha.problems[captcha.i].problem;
+      clearInterval(captcha.countdownTimer);
+      startCaptchaCountdown();
+    } else {
+      captchaProblem.textContent = 'Checking…';
+      captchaCountdown.textContent = '';
+      clearInterval(captcha.countdownTimer);
+    }
+  }
+
+  function settleCaptcha(data) {
+    if (!captcha) return;
+    clearInterval(captcha.countdownTimer);
+    captcha = null;
+    input.disabled = true;
+    captchaProblem.textContent = '';
+    captchaCountdown.textContent = '';
+    captchaText.textContent = data.verified
+      ? 'Verified — your race counts.'
+      : data.reason === 'timeout'
+        ? 'Verification timed out — this race won\'t appear on leaderboards.'
+        : 'Verification failed — this race won\'t appear on leaderboards.';
+    resultsTimer = setTimeout(() => {
+      captchaBanner.classList.add('hidden');
+      screens.race.classList.add('hidden');
+      screens.results.classList.remove('hidden');
+    }, 2500);
   }
 
   function ordinalSuffix(n) {
@@ -191,14 +282,20 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     } else if (event === 'finish') {
       input.disabled = true;
       renderPodium();
-      setTimeout(() => {
+      resultsTimer = setTimeout(() => {
         screens.race.classList.add('hidden');
         screens.results.classList.remove('hidden');
       }, 800);
+    } else if (event === 'captcha') {
+      showCaptcha(data);
+    } else if (event === 'captcha-result') {
+      settleCaptcha(data);
     }
   });
 
   return () => {
+    if (resultsTimer) clearTimeout(resultsTimer);
+    if (captcha?.countdownTimer) clearInterval(captcha.countdownTimer);
     input.removeEventListener('keydown', onKey);
     quitBtn.removeEventListener('click', onQuit);
     bugReportLink?.removeEventListener('click', restoreAnswerFocus);

@@ -24,6 +24,34 @@ export const MIN_MS_PER_PROBLEM = 200;
 /** Half an hour. Beyond this the tab was left open, not raced. */
 export const MAX_RACE_MS = 30 * 60_000;
 
+// Active verification (server/captcha.js). The passive floor above stays as it
+// is — the captain chose active verification over tighter passive bounds. When
+// a server-timed race finishes faster than a human can plausibly sustain, the
+// room issues a short arithmetic captcha before recording the result; failing
+// or ignoring it stores the row as suspect (unverified), never a ban.
+//
+// Threshold evidence (data/ar-cheat-benchmarks/report.md): the best documented
+// human on a comparable game is the Zetamac world record at 638 ms/problem —
+// and Zetamac auto-submits, one keystroke cheaper per problem than this game.
+// A racer who sustains under 500 ms/problem over a whole 10-problem race is
+// past every documented human rate on the harder input mechanic, so they get
+// asked to prove it. The consequence is a 3-question check, not a flag, so the
+// trigger can sit far tighter than a reject threshold could.
+export const CAPTCHA_TRIGGER_MS_PER_PROBLEM = 500;
+
+// How many fresh problems a triggered racer must answer. Small enough to be
+// over in seconds, large enough that a script replaying race answers (which is
+// what this catches — a human-speed thinker does not need it) cannot luck
+// through.
+export const CAPTCHA_PROBLEM_COUNT = 3;
+
+// Time budget per captcha problem. The lab production-paradigm means for typing
+// an answer plus Enter are ~1.7s (easy operands) to ~2.6s (hard) — see the
+// benchmarks report §2.2 — so 4s is generous for a genuinely human solver and
+// useless for automation that cannot do arithmetic. The challenge deadline is
+// count × this.
+export const CAPTCHA_MS_PER_PROBLEM = 4000;
+
 /**
  * @param {{finished: boolean, finish_time_ms: number|null, problems_total: number}} race
  * @returns {{suspect: 0|1, reason: string|null}}

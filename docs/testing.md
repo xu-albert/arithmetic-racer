@@ -283,6 +283,26 @@ npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, 
 | R7 | Any finished race (solo or room) | Row has non-NULL `points`; a quit race has `points NULL` |
 | R8 | After R7, the logged-in player visits Profile | Headline shows a PPM figure for that difficulty only — the other two tiers are unchanged — and the race's row shows its own PPM and Points |
 
+### Superhuman-pace verification (captcha)
+
+A room race finished faster than `CAPTCHA_TRIGGER_MS_PER_PROBLEM` (500 ms/problem — see `worker/plausibility.js` for the evidence) is held: the server sends that one client a `captcha` message with 3 fresh problems (no answers on the wire), reusing the race answer input. Pass → the row records normally; wrong answer or the ~12s deadline → the row records with `suspect = 1` / `captcha_failed` | `captcha_timeout` and is excluded from leaderboards and the lobby strip. Never a ban. Automated coverage: `server/captcha.test.js`, `server/room-captcha.test.js`, `worker/routes/captcha-exclusion.test.js`.
+
+Triggering one by hand is easiest with the WS probe above, answering all 10 problems within a couple of seconds of `race-start` (paste the answers from the `race-start` sequence — you are simulating a bot, after all):
+
+- Two probe clients in a fresh room, both `hello`, host `start-race` → at `race-start`, immediately send all 10 correct answers for one client → expect a targeted `captcha` message on that socket only, `problems` entries carrying `problem` and no `answer`.
+- Answer the 3 problems correctly (`captcha-answer`) → `captcha-result {verified: true}`; D1 row for that device has `suspect = 0` and appears in `/api/leaderboard` (for a canonical 10-problem race) and `/api/recent-finishes`.
+- Repeat, but answer one captcha problem wrong → `captcha-result {verified: false, reason: "captcha_failed"}`; D1 row has `suspect = 1`, `suspect_reason = "captcha_failed"`, and the row is absent from both surfaces.
+- Repeat, but send nothing after the `captcha` message → after ~12s expect `captcha-result {verified: false, reason: "captcha_timeout"}` and the `captcha_timeout` row.
+- While a challenge is pending, send `captcha-answer` from the *other* client → nothing happens (no result message, the challenge is unaffected).
+
+| # | Scenario | Expected |
+|---|---|---|
+| C1 | A human-paced race (≥5s for 10 problems) | No `captcha` message; rows write immediately as before |
+| C2 | The captcha banner is showing and the tab disconnects, then reconnects | The banner re-offers the remaining problems on the new socket (same deadline) |
+| C3 | Host hits Race Again while a challenge is pending | Pending challenges settle as `captcha_timeout` rows before the room resets |
+| C4 | DevTools → Network, during the banner | No broadcast `state` message contains `captchaChallenges` or any captcha answer |
+| C5 | The challenged player finishes verification | The results screen appears after the one-line verification message; the finish podium was visible throughout |
+
 ### Lobby "who's racing" strip
 
 Automated coverage: `worker/routes/recent-finishes.test.js` (eligibility, suspect exclusion, ordering, limit, the missing-`points` fallback, and that the route is actually mounted) and `public/src/recent-finishes.test.js` (relative-time labels, Guest labelling, poll gating). What is left to check by hand is the browser behavior.

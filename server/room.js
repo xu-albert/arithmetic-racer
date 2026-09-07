@@ -4,9 +4,13 @@ import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/ga
 import { isConfigurableState } from '../public/src/room-config-rules.js';
 import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE } from '../public/src/room-expiry.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
+import { CAPTCHA_PROBLEM_COUNT, CAPTCHA_MS_PER_PROBLEM } from '../worker/plausibility.js';
 import { containsProfanity } from '../worker/username-validator.js';
 import { logError, KINDS } from '../worker/logger.js';
 import { buildRaceResultPayload } from './room-stats.js';
+import {
+  needsCaptchaTrigger, newCaptchaSeed, captchaProblems, captchaWireProblems, captchaDeadline,
+} from './captcha.js';
 import { createSocketLimiter } from './socket-limit.js';
 
 // Mirrors public/src/runner.js values. The default race length is not here —
@@ -55,6 +59,7 @@ const MESSAGE_HANDLERS = new Map([
   ['set-config', (room, conn, msg) => room.handleSetConfig(conn, msg)],
   ['start-race', (room, conn) => room.handleStartRace(conn)],
   ['answer', (room, conn, msg) => room.handleAnswer(conn, msg)],
+  ['captcha-answer', (room, conn, msg) => room.handleCaptchaAnswer(conn, msg)],
   ['quit', (room, conn) => room.handleQuit(conn)],
   ['rematch', (room, conn) => room.handleRematch(conn)],
 ]);
@@ -100,6 +105,12 @@ export function freshState(id) {
     // Counter behind the ephemeral broadcast ids handed out by nextBroadcastId.
     nextPid: 1,
     disconnectDeadlines: {}, // broadcast id -> deadline ms (Task 9 reconnection grace)
+    // Active-verification challenges, keyed by broadcast id: superhuman-paced
+    // finishes wait here until the racer answers, fails, or times out, and the
+    // challenge holds a snapshot of the result row until then. Server-only:
+    // stripped from publicState() like every other secret — the wire carries
+    // only the problem strings, and those only to the challenged seat.
+    captchaChallenges: {},
   };
 }
 
@@ -154,6 +165,10 @@ export function resetForRace(state) {
   state.graceDeadline = null;
   state.countdownN = null;
   state.countdownAt = null;
+  // Any challenge still pending belonged to the race that just ended; callers
+  // resolve pending challenges (as timeouts) before resetting, so this is
+  // defense in depth against a new race inheriting a stale gate.
+  state.captchaChallenges = {};
 }
 
 function isValidDeviceId(s) {
@@ -413,6 +428,15 @@ export class RaceRoom extends Server {
       mutated = true;
     }
 
+    // Captcha verification deadlines. A challenge that reaches its deadline
+    // records as timed-out; the player is told in the captcha-result message.
+    for (const [pid, ch] of Object.entries(this.state.captchaChallenges ?? {})) {
+      if (ch.deadline <= now) {
+        await this.resolveCaptchaChallenge(pid, 'timeout');
+        mutated = true;
+      }
+    }
+
     // Grace deadline removed — each player finishes at their own pace.
 
     // Idle cleanup.
@@ -480,6 +504,11 @@ export class RaceRoom extends Server {
       connection.send(JSON.stringify({
         type: 'hello-ack', playerId: existing.id, handle: existing.handle,
       }));
+      // A challenge can be pending across a disconnect (the race ended, the
+      // socket dropped before the captcha was answered). The new socket would
+      // otherwise never learn about it and the race would silently record as
+      // unverified at the deadline — re-offer the remaining problems.
+      this.offerCaptcha(existing);
       await this.persist();
       this.broadcastState();
       await this.scheduleNextAlarm();
@@ -644,6 +673,37 @@ export class RaceRoom extends Server {
     }
   }
 
+  /**
+   * Grade one captcha answer from the challenged seat. The challenge is keyed
+   * to the seat (resolved through playerFor, so presenting someone else's
+   * broadcast id is not enough), single-use, and silently ignored when nothing
+   * is pending — a wrong guess must not learn whether a challenge exists.
+   */
+  async handleCaptchaAnswer(connection, msg) {
+    const player = this.playerFor(connection);
+    if (!player) return;
+    const challenge = this.state.captchaChallenges?.[player.id];
+    if (!challenge) return;
+
+    if (Date.now() > challenge.deadline) {
+      await this.resolveCaptchaChallenge(player.id, 'timeout');
+      return;
+    }
+
+    const race = this.state.lastRace ?? this.state;
+    const problems = captchaProblems(challenge.seed, race.difficulty, challenge.count);
+    if (validateAnswer(problems[challenge.index], msg.value)) {
+      challenge.index += 1;
+      if (challenge.index >= challenge.count) {
+        await this.resolveCaptchaChallenge(player.id, 'pass');
+        return;
+      }
+      await this.persist();
+    } else {
+      await this.resolveCaptchaChallenge(player.id, 'failed');
+    }
+  }
+
   async handleQuit(connection) {
     const player = this.playerFor(connection);
     if (!player) return;
@@ -678,6 +738,12 @@ export class RaceRoom extends Server {
     if (!player.isCreator) return this.sendError(connection, 'NOT_CREATOR', 'Only the host can rematch');
     if (this.state.state !== 'finished') return this.sendError(connection, 'BAD_STATE', 'Race not finished');
 
+    // A rematch discards the finished race's pending verifications: record
+    // them as timed-out so no result is ever silently dropped.
+    for (const pid of Object.keys(this.state.captchaChallenges ?? {})) {
+      await this.resolveCaptchaChallenge(pid, 'timeout');
+    }
+
     resetForRace(this.state);
     this.state.state = 'lobby';
     await this.persist();
@@ -701,7 +767,102 @@ export class RaceRoom extends Server {
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
+    // Offer verifications before persisting so persistRaceResults can hold the
+    // challenged rows until they resolve.
+    this.issueCaptchaChallenges();
     await this.persistRaceResults();
+  }
+
+  /**
+   * TypeRacer-style active verification, chosen over tighter passive bounds:
+   * any human (not bot) whose server-timed finish is faster than a plausible
+   * sustained human rate must answer a few fresh arithmetic problems before
+   * the result is recorded. Server-authoritative by construction — the seed is
+   * drawn here, the problems are regenerated to grade, and only the problem
+   * strings reach the client. Single-use: resolveCaptchaChallenge deletes the
+   * challenge, so a graded set can never be replayed.
+   */
+  issueCaptchaChallenges() {
+    const race = this.state.lastRace ?? this.state;
+    for (const p of this.state.players) {
+      if (p.isBot || !p.deviceId) continue;
+      if (!needsCaptchaTrigger(p.finishMs, race.raceLength)) continue;
+      const challenge = {
+        playerId: p.id,
+        seed: newCaptchaSeed(),
+        count: CAPTCHA_PROBLEM_COUNT,
+        index: 0,
+        deadline: captchaDeadline(Date.now()),
+        // Snapshot the result row now: the build-before-insert rule from
+        // persistRaceResults applies equally to a row that inserts later —
+        // a rematch must not be able to rewrite a held payload.
+        payload: buildRaceResultPayload(p, this.state),
+      };
+      (this.state.captchaChallenges ??= {})[p.id] = challenge;
+      this.offerCaptcha(p, challenge);
+    }
+  }
+
+  /** Send a seat its pending challenge (or the remainder of one, on resend). */
+  offerCaptcha(player, challenge = this.state.captchaChallenges?.[player.id]) {
+    if (!challenge) return;
+    const race = this.state.lastRace ?? this.state;
+    const remaining = captchaProblems(challenge.seed, race.difficulty, challenge.count)
+      .slice(challenge.index);
+    this.sendToSeat(player, JSON.stringify({
+      type: 'captcha',
+      problems: captchaWireProblems(remaining),
+      perProblemMs: CAPTCHA_MS_PER_PROBLEM,
+      deadlineMs: challenge.deadline,
+    }));
+  }
+
+  /**
+   * Settle a challenge. 'pass' records the held row normally (the passive
+   * plausibility bounds still apply to it); 'failed'/'timeout' records it as
+   * suspect with a captcha_* reason, which is what excludes it from
+   * leaderboards and recent-finishes. Never a ban — the player keeps the row
+   * in their own history.
+   */
+  async resolveCaptchaChallenge(playerId, outcome) {
+    const challenge = this.state.captchaChallenges?.[playerId];
+    if (!challenge) return;
+    delete this.state.captchaChallenges[playerId];
+
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (outcome === 'pass') {
+      this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: true }));
+      try {
+        await insertRaceResult(this.env, challenge.payload);
+      } catch (e) {
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'captcha_pass_insert' });
+      }
+    } else {
+      const reason = outcome === 'timeout' ? 'captcha_timeout' : 'captcha_failed';
+      this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: false, reason }));
+      try {
+        await insertRaceResult(this.env, {
+          ...challenge.payload,
+          plausibility_override: { suspect: 1, reason },
+        });
+      } catch (e) {
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'captcha_fail_insert' });
+      }
+    }
+    await this.persist();
+    await this.scheduleNextAlarm();
+  }
+
+  /** Send one message to the socket currently holding a seat, if it is live. */
+  sendToSeat(player, raw) {
+    if (!player?.connId) return;
+    const conn = this.getConnections().find((c) => c.id === player.connId);
+    if (!conn) return;
+    try {
+      conn.send(raw);
+    } catch {
+      /* socket gone; the deadline still settles the challenge */
+    }
   }
 
   async persistRaceResults() {
@@ -715,6 +876,11 @@ export class RaceRoom extends Server {
         // Defensive: shouldn't happen since the client always sends deviceId
         // in `hello`, but skip rather than violate the NOT NULL constraint.
         logError(KINDS.RACE_RESULT_DB, 'skipping player with no deviceId', { roomId: this.name, playerId: p.id, phase: 'precheck' });
+        continue;
+      }
+      if (this.state.captchaChallenges?.[p.id]) {
+        // Held for active verification: the snapshot taken at issue time is
+        // inserted by resolveCaptchaChallenge once the challenge settles.
         continue;
       }
       pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
@@ -733,6 +899,10 @@ export class RaceRoom extends Server {
     if (idx < 0) return false;
     const player = this.state.players[idx];
     delete this.state.disconnectDeadlines[playerId];
+
+    // Leaving with a verification pending settles it as a timeout — the row is
+    // recorded unverified rather than dropped on the floor.
+    await this.resolveCaptchaChallenge(playerId, 'timeout');
 
     // Mid-race: keep the player in state.players so finishRace persists their
     // DNF row. Mark dropped (idempotent) and re-check allDone. Cleanup happens
@@ -790,8 +960,10 @@ export class RaceRoom extends Server {
   }
 
   publicState() {
-    // Strip server-only Player fields (attempts/streak counters, identity).
-    return { ...this.state, players: this.state.players.map(publicPlayer) };
+    // Strip server-only Player fields (attempts/streak counters, identity) and
+    // the captcha table (seeds, answers, held result rows) before broadcasting.
+    const { captchaChallenges, ...rest } = this.state;
+    return { ...rest, players: this.state.players.map(publicPlayer) };
   }
 
   broadcastState() {
@@ -895,6 +1067,7 @@ export class RaceRoom extends Server {
     if (this.state.countdownAt != null) candidates.push(this.state.countdownAt);
     if (this.state.idleCleanupAt != null) candidates.push(this.state.idleCleanupAt);
     for (const dl of Object.values(this.state.disconnectDeadlines)) candidates.push(dl);
+    for (const ch of Object.values(this.state.captchaChallenges ?? {})) candidates.push(ch.deadline);
     for (const dl of this.extraAlarmDeadlines()) if (dl != null) candidates.push(dl);
     // Re-derived from lastActivityAt on every call, so each bump of the idle
     // clock pushes the winddown alarm out with it.

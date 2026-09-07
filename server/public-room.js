@@ -232,6 +232,10 @@ export class PublicRaceRoom extends RaceRoom {
     // reach the other players in the room.
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
+    // Same active-verification gate as the base room, before persistence.
+    this.issueCaptchaChallenges();
+    this.persist().catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, phase: 'captcha_persist' }));
+
     // Fire-and-forget — DB error must not block the WS broadcast.
     this.persistResults().catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, phase: 'persist_results' }));
 
@@ -260,6 +264,7 @@ export class PublicRaceRoom extends RaceRoom {
     for (const p of this.state.players) {
       if (p.isBot) continue;
       if (!p.deviceId) continue;
+      if (this.state.captchaChallenges?.[p.id]) continue; // held for verification
       pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
     }
     for (const { playerId, payload } of pending) {
@@ -292,6 +297,8 @@ export class PublicRaceRoom extends RaceRoom {
   async removePlayer(playerId) {
     const idx = this.state.players.findIndex((p) => p.id === playerId);
     if (idx < 0) return false;
+
+    await this.resolveCaptchaChallenge(playerId, 'timeout');
 
     this.state.players.splice(idx, 1);
     delete this.state.disconnectDeadlines[playerId];

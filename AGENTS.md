@@ -111,8 +111,10 @@ When changing dependencies:
 tests) and then `vitest run` (Worker routes and Durable Objects, against real
 bindings via `@cloudflare/vitest-pool-workers`). A test file's directory decides
 which runner claims it — see `vitest.config.js` `include`/`exclude` and
-`docs/testing.md`. Each Worker test file gets its own ephemeral D1, built from
-`migrations/` — see below.
+`docs/testing.md`; pure-helper files under `server/` (`room-stats.test.js`,
+`captcha.test.js`) are claimed by `node --test` via the explicit list in
+`package.json` and must stay in vitest's `exclude`. Each Worker test file gets
+its own ephemeral D1, built from `migrations/` — see below.
 
 The client race runners are tested under `node:test`'s `mock.timers`
 (`public/src/runner.test.js`, `remote-runner.test.js`). One trap: `tick(ms)`
@@ -120,6 +122,40 @@ fires only the timers already due when it is called, not a timer a callback
 chains after itself, so a countdown or bot schedule has to be walked one tick
 at a time. `requestAnimationFrame` does not exist under Node; the remote-runner
 test installs a queue-and-flush shim on `globalThis` for the bot ticker.
+
+Room tests answer with zero typing delay, which finishes races in single-digit
+milliseconds — under the captcha trigger (below). Suites that assert on
+persisted rows backdate `state.raceStartedAt` after the countdown to a
+human pace (`server/room-captcha.test.js`, `server/room-config.test.js` show
+the pattern).
+
+## Active verification: the superhuman-pace captcha
+
+The captain's chosen anti-cheat direction is active verification, not tighter
+passive bounds: the flat 200 ms floor stays, and a server-timed finish faster
+than `CAPTCHA_TRIGGER_MS_PER_PROBLEM` (500 ms/problem; evidence in the constant's
+comment in `worker/plausibility.js`) makes the room hold that player's row and
+offer 3 fresh arithmetic problems (`CAPTCHA_MS_PER_PROBLEM` each) via a targeted
+`captcha` message. Pass → the row inserts normally; wrong answer or deadline →
+`insertRaceResult` receives a `plausibility_override` storing
+`suspect=1`/`captcha_*`, which excludes the row from leaderboards and
+recent-finishes through the existing `suspect = 0` predicates. Never a ban.
+
+Invariants that are easy to break:
+
+- Answers never leave the DO: the challenge stores a seed; problems regenerate
+  from it for grading (`server/captcha.js`). The `captcha` wire message carries
+  `problem` strings only — unlike `race-start`, which ships the full sequence.
+- `state.captchaChallenges` is server-only: `publicState()` strips it like the
+  player fields. A held row's payload snapshot lives inside the challenge, so
+  the build-before-insert rule is preserved across the hold.
+- A challenge is keyed to its seat (resolved through `playerFor`) and
+  single-use (`resolveCaptchaChallenge` deletes it). Every exit path settles
+  it: the alarm deadline in `onAlarm`/`scheduleNextAlarm`, `removePlayer` in
+  both room classes, and `handleRematch` — an unsettled challenge would
+  silently drop a result.
+- Bots never verify: `issueCaptchaChallenges` skips them, which matters because
+  quickmatch bot timelines can sit inside the trigger zone.
 
 ## `public/` has no build step
 
