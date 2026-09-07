@@ -449,7 +449,7 @@ gap this plan surfaces (§11 P0).
 npx wrangler deploy --env=""
 ```
 
-This deploys to the `arithmetic-racer` Worker, live at `https://arithmetic-racer.albertwxu.workers.dev`. A separate preview Worker and D1 database (`arithmetic-racer-preview`) is configured under `env.preview` in `wrangler.jsonc`; its schema has to stay in lockstep with production — see [`migrations/README.md`](../migrations/README.md).
+This deploys to the `arithmetic-racer` Worker, live at `https://arithmetic-racer.albertwxu.workers.dev`. The `arithmetic-racer-preview` Worker is connected in Cloudflare Workers Builds and deploys every branch (`wrangler deploy --env preview`); its dedicated D1 database and the rest of `env.preview` are configured in `wrangler.jsonc`. Its schema must stay in lockstep with production — see [`migrations/README.md`](../migrations/README.md).
 
 #### Why `.nvmrc` pins Node 22
 
