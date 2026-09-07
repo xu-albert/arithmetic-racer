@@ -121,8 +121,8 @@
         "directory": "./public",
         "binding": "ASSETS"
       },
-      // Named envs do not inherit top-level observability — it must be repeated
-      // here or preview deploys silently ship without logging.
+      // As of wrangler 4.88, observability is inherited from the top level;
+      // this block is repeated only for explicitness.
       "observability": {
         "enabled": true,
         "head_sampling_rate": 1
