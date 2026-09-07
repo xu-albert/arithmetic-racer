@@ -99,8 +99,20 @@ test("fmtPoints shows one decimal", () => {
   // Points are stored unrounded so sums stay exact; only the display rounds.
   // A single race is worth a few points, so whole numbers would collapse the
   // column and stop the rows adding up to the tier total shown above them.
-  assert.equal(fmtPoints(6.6667), "6.7");
-  assert.equal(fmtPoints(0), "0.0");
+  assert.equal(
+    fmtPoints(6.6667),
+    (6.6667).toLocaleString(undefined, {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    }),
+  );
+  assert.equal(
+    fmtPoints(0),
+    (0).toLocaleString(undefined, {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1,
+    }),
+  );
   // A DNF earned nothing and is not a zero score.
   assert.equal(fmtPoints(null), "—");
   assert.equal(fmtPoints(Infinity), "—");
