@@ -185,21 +185,30 @@ Same-browser tabs share storage and look like the same player to the server.
 
 ### Quick Match (public room) manual section
 
-Covers the queued item: bot-backfill disclosure copy, the lobby entry point, and the
-public-room flow. Automated coverage that exists today: `server/public-room.test.js`
-(secrecy — see regression #1/#13 in §4), `server/lobby-router.test.js` (routing into a
-public room), `worker/routes/matchmake.test.js` + `matchmake-e2e.test.js` (matchmaking).
-What's left to check by hand:
+Covers the queued item: the **Find a Match** entry point, the auto-start deadline, bot
+backfill of empty lanes, the "Searching…" pill, and the bot-disclosure hint — plus a
+two-browser probe for humans landing in the same match. Automated coverage that exists
+today: `server/public-room.test.js` (secrecy — see regression #1/#13 in §4),
+`public/src/auto-start.test.js` (the deadline math in isolation), `server/lobby-router.test.js`
+(routing into a public room), `worker/routes/matchmake.test.js` + `matchmake-e2e.test.js`
+(matchmaking). What's left to check by hand:
 
 | # | Step | Expected |
 |---|---|---|
-| Q1 | On `/`, click **Quick Match** (distinct from **Quickplay** and **Create Private Room**) | Matched into a public room; URL reflects the room, but the slug is hidden from the UI (per c0f9a4c, "hide room slug") |
-| Q2 | Room has fewer than 5 human players when the race would otherwise be too small | Bots backfill the remaining lanes | |
-| Q3 | Bot-backfilled lanes | Carry the `(Guest)` badge, same as a human guest — the badge encodes "no account," not "human," so this is not a privacy leak (see `AGENTS.md`/§8) | |
-| Q4 | Somewhere in the pre-race or lobby copy | Bot backfill is explicitly disclosed in the game copy (regression #4, f0dd57e) — confirm the disclosure text is present and legible, not just present in a tooltip nobody opens | |
-| Q5 | Race finishes in a Quick Match room | Row(s) written to `race_results` with `room_id` set (see §6 D1 checks below); eligible for recent-finishes/leaderboards per `AGENTS.md`'s eligibility rules | |
-| Q6 | Leave a Quick Match room idle for the same window that expires a private room | **No** room-expired screen — public rooms never wind down (`AGENTS.md` "Room lifecycle"; regression #2). Confirm by leaving the tab open past `PRIVATE_ROOM_IDLE_MS` (or a temporarily-lowered value under `wrangler dev`) | |
-| Q7 | Two separate Quick Match attempts from two browsers around the same time | Neither can see or guess the other's private-room-style invite link — there isn't one; matchmaking is server-driven | |
+| Q1 | On `/`, under **Find a Match**, pick a difficulty radio and click **Find Match** (`#btn-find-match`, distinct from **Quickplay** and **Create Private Room**) | Button disables and `#match-status` reads `Searching…` while the request is in flight; on success the tab navigates to `/?room=<slug>&mode=public&difficulty=<diff>` — the slug is in the URL but never shown in the UI (per c0f9a4c, "hide room slug") |
+| Q2 | Land in the Quick Match lobby (`isPublic` mode) | Header reads **Quick Match**, not the room slug; there is no **Start Race** or **Invite** button — races auto-start, there is nothing to invite a link into |
+| Q3 | Watch the lobby with only you present | A **Searching… 1 / 6 humans** pill sits where the start button would be in a private room (`lobby.js`'s `searchingPill`, counts only `!p.isBot` players) |
+| Q4 | You are the first human in an otherwise-empty room | Auto-start deadline is set 5s out (`LONE_TIMEOUT_MS`); if nobody else joins, the race auto-starts alone (backfilled to 6 with bots) roughly 5s after you land in the lobby |
+| Q5 | A second human joins before that 5s elapses | The deadline resets to 5s from the *second* join (`GATHER_WINDOW_MS`) — confirm the race does not fire at the original ~5s mark, giving the pair a fresh gather window |
+| Q6 | 3rd/4th/5th humans join during the gather window | Deadline is unchanged by each of these joins — only the 1st and 2nd joins move it (`computeAutoStartDeadline` in `public/src/auto-start.js`) |
+| Q7 | A 6th human joins (`MAX_PLAYERS`) | Race starts immediately, no waiting out the remaining gather window |
+| Q8 | Room has fewer than 6 human players when the auto-start deadline fires | Bots backfill every remaining lane (`runAutoStart` in `server/public-room.js`) so the race is always full |
+| Q9 | Bot-backfilled lanes, once the race starts | Carry the `(Guest)` badge, same as a human guest — the badge encodes "no account," not "human," so this is not a privacy leak (see `AGENTS.md`/§8) |
+| Q10 | Read the lobby hint text while in the `lobby` state (public mode) | Reads exactly `Any lane no human takes gets a practice bot.` — the bot-disclosure hint (regression #4, f0dd57e); confirm it's legible body copy, not hidden in a tooltip |
+| Q11 | Two browsers (or one regular + one incognito) both click **Find Match** with the same difficulty within a few seconds of each other | Both land in the *same* room (`?room=` matches in both tabs' URLs); each sees the other in the player list, both counted in the `Searching… 2 / 6 humans` pill, and the shared auto-start deadline follows Q4/Q5 above |
+| Q12 | Race finishes in a Quick Match room | Row(s) written to `race_results` with `room_id` set (see §6 D1 checks below); eligible for recent-finishes/leaderboards per `AGENTS.md`'s eligibility rules |
+| Q13 | Leave a Quick Match room idle for the same window that expires a private room | **No** room-expired screen — public rooms never wind down (`AGENTS.md` "Room lifecycle"; regression #2). Confirm by leaving the tab open past `PRIVATE_ROOM_IDLE_MS` (or a temporarily-lowered value under `wrangler dev`) |
+| Q14 | Two separate Quick Match attempts from two browsers, far enough apart (or at different difficulties) that they land in different rooms | Neither can see or guess the other's private-room-style invite link — there isn't one; matchmaking is server-driven |
 
 ### Multiplayer two-browser smoke
 
