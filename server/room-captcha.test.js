@@ -23,11 +23,29 @@ function makeConn(label) {
   };
 }
 
+/**
+ * What `getConnections()` actually hands back under `hibernate: true`: a plain
+ * `[Symbol.iterator]`/`next` object (partyserver's HibernatingConnectionIterator),
+ * which — unlike an array or a generator — carries none of Iterator.prototype's
+ * helpers. Stubbing an array here is what let array-only code pass in CI and
+ * throw in production.
+ */
+function connectionIterator(conns) {
+  let i = 0;
+  const it = {
+    [Symbol.iterator]() { return it; },
+    next() {
+      return i < conns.length ? { done: false, value: conns[i++] } : { done: true, value: undefined };
+    },
+  };
+  return it;
+}
+
 async function withRoom(conns, fn) {
   const stub = env.RaceRoom.get(env.RaceRoom.idFromName("cap-" + crypto.randomUUID()));
   return runInDurableObject(stub, async (room) => {
     if (!room.state) await room.onStart();
-    room.getConnections = () => conns;
+    room.getConnections = () => connectionIterator(conns);
     room.broadcast = (s) => { for (const c of conns) c.send(s); };
     return fn(room);
   });
@@ -392,7 +410,7 @@ describe("public quickmatch room", () => {
     const stub = env.PublicRaceRoom.get(env.PublicRaceRoom.idFromName("m-cap-" + crypto.randomUUID()));
     await runInDurableObject(stub, async (room) => {
       if (!room.state) await room.onStart();
-      room.getConnections = () => conns;
+      room.getConnections = () => connectionIterator(conns);
       room.broadcast = (s) => { for (const c of conns) c.send(s); };
 
       await room.handleHello(conns[0], {

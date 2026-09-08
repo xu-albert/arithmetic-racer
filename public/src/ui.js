@@ -110,20 +110,25 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   let captcha = null; // { problems, i, endsAt, countdownTimer }
   let resultsTimer = null;
 
+  // Slack past the deadline before the client gives up on a verdict, so a
+  // server message already in flight still wins.
+  const VERDICT_GRACE_MS = 2000;
+
   // One clock for the whole challenge, not one per problem: the server budgets
   // the set as a single deadline and settles the timeout against it, so a
   // per-problem countdown would keep promising time the server no longer has.
+  // The same clock is the client's only way out of the banner — see
+  // settleUnconfirmed.
   function startCaptchaCountdown() {
     if (!captcha) return;
     const render = () => {
-      const secondsLeft = Math.ceil((captcha.endsAt - Date.now()) / 1000);
-      if (secondsLeft <= 0) {
-        // The server settles the timeout on its own clock; stop counting.
-        clearInterval(captcha.countdownTimer);
-        captchaCountdown.textContent = '';
+      const msLeft = captcha.endsAt - Date.now();
+      if (msLeft <= -VERDICT_GRACE_MS) {
+        settleUnconfirmed();
         return;
       }
-      captchaCountdown.textContent = `${secondsLeft}s`;
+      const answered = captcha.i >= captcha.problems.length;
+      captchaCountdown.textContent = answered || msLeft <= 0 ? '' : `${Math.ceil(msLeft / 1000)}s`;
     };
     render();
     captcha.countdownTimer = setInterval(render, 1000);
@@ -136,6 +141,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     // reconnect), so put the race screen back rather than painting into a
     // hidden subtree.
     if (resultsTimer) { clearTimeout(resultsTimer); resultsTimer = null; }
+    if (captcha) clearInterval(captcha.countdownTimer);
     screens.results.classList.add('hidden');
     screens.race.classList.remove('hidden');
     captcha = { problems: data.problems, i: 0, endsAt: Date.now() + data.remainingMs, countdownTimer: null };
@@ -153,26 +159,45 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     if (captcha.i < captcha.problems.length) {
       captchaProblem.textContent = captcha.problems[captcha.i].problem;
     } else {
+      // The countdown keeps running behind "Checking…": it is what settles the
+      // banner if the verdict never arrives.
       captchaProblem.textContent = 'Checking…';
       captchaCountdown.textContent = '';
-      clearInterval(captcha.countdownTimer);
     }
   }
 
-  function settleCaptcha(data) {
+  // The server is the only grader, and its verdict rides one socket. If that
+  // socket was down when the verdict was sent, nothing else will ever arrive,
+  // so the client closes its own banner rather than trapping the player behind
+  // an input the server has stopped listening to. It says only what it knows:
+  // the outcome is recorded server-side either way, and claiming a pass or a
+  // failure here would be a guess.
+  function settleUnconfirmed() {
+    settleCaptcha('Verification couldn\'t be confirmed for this race.');
+  }
+
+  function verdictText(data) {
+    if (data.verified) return 'Verified — your race counts.';
+    return data.reason === 'captcha_timeout'
+      ? 'Verification timed out — this race won\'t appear on leaderboards.'
+      : 'Verification failed — this race won\'t appear on leaderboards.';
+  }
+
+  // First settle wins: a verdict that lands after the client gave up must not
+  // re-arm the reveal or re-show a screen the room has moved on from.
+  function settleCaptcha(text) {
     if (!captcha) return;
     clearInterval(captcha.countdownTimer);
     captcha = null;
     input.disabled = true;
     captchaProblem.textContent = '';
     captchaCountdown.textContent = '';
-    captchaText.textContent = data.verified
-      ? 'Verified — your race counts.'
-      : data.reason === 'timeout'
-        ? 'Verification timed out — this race won\'t appear on leaderboards.'
-        : 'Verification failed — this race won\'t appear on leaderboards.';
+    captchaText.textContent = text;
     resultsTimer = setTimeout(() => {
       captchaBanner.classList.add('hidden');
+      // Something else may own the screen by now — a rematch settles pending
+      // challenges and then sends the room back to its lobby.
+      if (screens.race.classList.contains('hidden')) return;
       screens.race.classList.add('hidden');
       screens.results.classList.remove('hidden');
     }, 2500);
@@ -296,13 +321,14 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     } else if (event === 'captcha') {
       showCaptcha(data);
     } else if (event === 'captcha-result') {
-      settleCaptcha(data);
+      settleCaptcha(verdictText(data));
     }
   });
 
   return () => {
     if (resultsTimer) clearTimeout(resultsTimer);
     if (captcha?.countdownTimer) clearInterval(captcha.countdownTimer);
+    captchaBanner.remove();
     input.removeEventListener('keydown', onKey);
     quitBtn.removeEventListener('click', onQuit);
     bugReportLink?.removeEventListener('click', restoreAnswerFocus);

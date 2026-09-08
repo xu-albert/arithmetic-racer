@@ -493,7 +493,9 @@ describe('server captcha verification', () => {
     const client = fakeRoomClient();
     const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
     const events = record(runner);
-    client.receive({ type: 'captcha-result', verified: false, reason: 'timeout' });
-    assert.deepEqual(events, [{ event: 'captcha-result', data: { verified: false, reason: 'timeout' } }]);
+    // `captcha_timeout` is the string the server actually emits — it is what
+    // lands in the row's suspect_reason, and the UI branches on it.
+    client.receive({ type: 'captcha-result', verified: false, reason: 'captcha_timeout' });
+    assert.deepEqual(events, [{ event: 'captcha-result', data: { verified: false, reason: 'captcha_timeout' } }]);
   });
 });

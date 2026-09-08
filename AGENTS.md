@@ -123,6 +123,11 @@ chains after itself, so a countdown or bot schedule has to be walked one tick
 at a time. `requestAnimationFrame` does not exist under Node; the remote-runner
 test installs a queue-and-flush shim on `globalThis` for the bot ticker.
 
+`getConnections()` is an **iterator**, not an array — partyserver walks the
+hibernating sockets lazily — so array methods on it throw at runtime. Room test
+stubs must return one (`conns[Symbol.iterator]()`); a stub that hands back the
+array itself makes `.find`/`.filter` look fine in CI and break in production.
+
 Room tests answer with zero typing delay, which finishes races in single-digit
 milliseconds — under the captcha trigger (below) whenever the race is the
 standard ten problems. Suites that assert on persisted rows from a ten-problem

@@ -855,15 +855,22 @@ export class RaceRoom extends Server {
     await this.scheduleNextAlarm();
   }
 
-  /** Send one message to the socket currently holding a seat, if it is live. */
+  /**
+   * Send one message to the socket currently holding a seat, if it is live.
+   * getConnections() is an iterator, not an array — under `hibernate: true`
+   * partyserver hands back a lazy walk over the hibernating sockets — so this
+   * iterates like every other reader of it.
+   */
   sendToSeat(player, raw) {
     if (!player?.connId) return;
-    const conn = this.getConnections().find((c) => c.id === player.connId);
-    if (!conn) return;
-    try {
-      conn.send(raw);
-    } catch {
-      /* socket gone; the deadline still settles the challenge */
+    for (const conn of this.getConnections()) {
+      if (conn.id !== player.connId) continue;
+      try {
+        conn.send(raw);
+      } catch {
+        /* socket gone; the deadline still settles the challenge */
+      }
+      return;
     }
   }
 
