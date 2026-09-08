@@ -25,9 +25,15 @@ test('needsCaptchaTrigger fires below the per-problem trigger over the whole rac
   assert.equal(needsCaptchaTrigger(10 * CAPTCHA_TRIGGER_MS_PER_PROBLEM + 1, 10), false);
 });
 
-test('needsCaptchaTrigger scales with race length', () => {
-  assert.equal(needsCaptchaTrigger(5 * CAPTCHA_TRIGGER_MS_PER_PROBLEM - 1, 5), true);
-  assert.equal(needsCaptchaTrigger(5 * CAPTCHA_TRIGGER_MS_PER_PROBLEM, 5), false);
+test('needsCaptchaTrigger fires only for the standard race length', () => {
+  // The 500ms/problem evidence is a rate over a full ten-problem set, and ten
+  // is the only length a board ranks. A five-problem easy room finished in 2.4s
+  // is a fast human, not a script, and is never challenged.
+  assert.equal(needsCaptchaTrigger(5 * CAPTCHA_TRIGGER_MS_PER_PROBLEM - 1, 5), false);
+  assert.equal(needsCaptchaTrigger(1, 5), false);
+  assert.equal(needsCaptchaTrigger(1, 20), false);
+  assert.equal(needsCaptchaTrigger(1, 50), false);
+  assert.equal(needsCaptchaTrigger(1, 10), true);
 });
 
 test('needsCaptchaTrigger ignores junk and degenerate races', () => {

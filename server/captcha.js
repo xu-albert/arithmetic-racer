@@ -13,18 +13,27 @@ import {
   CAPTCHA_PROBLEM_COUNT,
   CAPTCHA_MS_PER_PROBLEM,
 } from '../worker/plausibility.js';
-import { makeRng, generateProblem } from '../public/src/game.js';
+import { CANONICAL_RACE_LENGTH } from '../worker/routes/leaderboard.js';
+import { generateSequence } from '../public/src/game.js';
 
 /**
  * True when a finished race's sustained pace is faster than a plausible human
  * rate — see CAPTCHA_TRIGGER_MS_PER_PROBLEM for the number and its evidence.
  * Only meaningful for server-timed finishes (room races); a client-asserted
  * solo time must never earn a "verified" badge.
+ *
+ * Scoped to the standard race length and no other. The evidence behind the
+ * threshold is a per-problem rate over a full ten-problem set, and ten is also
+ * the only length a public board ranks (CANONICAL_RACE_LENGTH), so it is the
+ * only length where beating the rate is worth anything. A five-problem easy
+ * room is five single-digit +/- problems that a fast human really can finish
+ * inside 2.5s; challenging them would be a false accusation with nothing at
+ * stake behind it.
  */
 export function needsCaptchaTrigger(finishMs, problemsTotal) {
-  return typeof finishMs === 'number' && Number.isFinite(finishMs) && finishMs >= 0
-    && problemsTotal > 0
-    && finishMs < problemsTotal * CAPTCHA_TRIGGER_MS_PER_PROBLEM;
+  return problemsTotal === CANONICAL_RACE_LENGTH
+    && typeof finishMs === 'number' && Number.isFinite(finishMs) && finishMs >= 0
+    && finishMs < CANONICAL_RACE_LENGTH * CAPTCHA_TRIGGER_MS_PER_PROBLEM;
 }
 
 /** Unpredictable per-challenge seed; the problem set is derived from it. */
@@ -32,22 +41,9 @@ export function newCaptchaSeed() {
   return crypto.getRandomValues(new Uint32Array(1))[0] >>> 0;
 }
 
-// Consecutive duplicates read like a bug (easy's operand space is tiny), same
-// rule as generateSequence in game.js — and equally deterministic per seed.
-const MAX_REROLLS = 10;
-
 /** Deterministic problem set for a seed; regenerable after DO hibernation. */
 export function captchaProblems(seed, difficulty, count = CAPTCHA_PROBLEM_COUNT) {
-  const rng = makeRng(seed);
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    let next = generateProblem(difficulty, rng);
-    for (let attempt = 0; attempt < MAX_REROLLS && i > 0 && next.problem === out[i - 1].problem; attempt++) {
-      next = generateProblem(difficulty, rng);
-    }
-    out.push(next);
-  }
-  return out;
+  return generateSequence(difficulty, count, seed);
 }
 
 /**

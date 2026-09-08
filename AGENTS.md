@@ -124,10 +124,10 @@ at a time. `requestAnimationFrame` does not exist under Node; the remote-runner
 test installs a queue-and-flush shim on `globalThis` for the bot ticker.
 
 Room tests answer with zero typing delay, which finishes races in single-digit
-milliseconds — under the captcha trigger (below). Suites that assert on
-persisted rows backdate `state.raceStartedAt` after the countdown to a
-human pace (`server/room-captcha.test.js`, `server/room-config.test.js` show
-the pattern).
+milliseconds — under the captcha trigger (below) whenever the race is the
+standard ten problems. Suites that assert on persisted rows from a ten-problem
+race backdate `state.raceStartedAt` after the countdown to a human pace
+(`server/room-captcha.test.js` shows the pattern).
 
 ## Active verification: the superhuman-pace captcha
 
@@ -136,7 +136,10 @@ passive bounds: the flat 200 ms floor stays, and a server-timed finish faster
 than `CAPTCHA_TRIGGER_MS_PER_PROBLEM` (500 ms/problem; evidence in the constant's
 comment in `worker/plausibility.js`) makes the room hold that player's row and
 offer 3 fresh arithmetic problems (`CAPTCHA_MS_PER_PROBLEM` each) via a targeted
-`captcha` message. Pass → the row inserts normally; wrong answer or deadline →
+`captcha` message. Only the standard ten-problem race is ever challenged —
+`needsCaptchaTrigger` gates on `CANONICAL_RACE_LENGTH`, because that rate is
+what the evidence covers and what a leaderboard ranks; a five-problem private
+room is fast for honest reasons and has no board to reach. Pass → the row inserts normally; wrong answer or deadline →
 `insertRaceResult` receives a `plausibility_override` storing
 `suspect=1`/`captcha_*`, which excludes the row from leaderboards and
 recent-finishes through the existing `suspect = 0` predicates. Never a ban.
@@ -156,6 +159,9 @@ Invariants that are easy to break:
   silently drop a result.
 - Bots never verify: `issueCaptchaChallenges` skips them, which matters because
   quickmatch bot timelines can sit inside the trigger zone.
+- The `captcha` message carries `remainingMs`, not the absolute deadline: the
+  client's clock is not the DO's, and a re-offer after a reconnect has to show
+  what is left of the original budget rather than restarting it.
 
 ## `public/` has no build step
 

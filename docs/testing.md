@@ -285,7 +285,7 @@ npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, 
 
 ### Superhuman-pace verification (captcha)
 
-A room race finished faster than `CAPTCHA_TRIGGER_MS_PER_PROBLEM` (500 ms/problem — see `worker/plausibility.js` for the evidence) is held: the server sends that one client a `captcha` message with 3 fresh problems (no answers on the wire), reusing the race answer input. Pass → the row records normally; wrong answer or the ~12s deadline → the row records with `suspect = 1` / `captcha_failed` | `captcha_timeout` and is excluded from leaderboards and the lobby strip. Never a ban. Automated coverage: `server/captcha.test.js`, `server/room-captcha.test.js`, `worker/routes/captcha-exclusion.test.js`.
+A standard ten-problem room race finished faster than `CAPTCHA_TRIGGER_MS_PER_PROBLEM` (500 ms/problem — see `worker/plausibility.js` for the evidence; other race lengths are never challenged) is held: the server sends that one client a `captcha` message with 3 fresh problems (no answers on the wire), reusing the race answer input. Pass → the row records normally; wrong answer or the ~12s deadline → the row records with `suspect = 1` / `captcha_failed` | `captcha_timeout` and is excluded from leaderboards and the lobby strip. Never a ban. Automated coverage: `server/captcha.test.js`, `server/room-captcha.test.js`, `worker/routes/captcha-exclusion.test.js`.
 
 Triggering one by hand is easiest with the WS probe above, answering all 10 problems within a couple of seconds of `race-start` (paste the answers from the `race-start` sequence — you are simulating a bot, after all):
 
@@ -298,6 +298,7 @@ Triggering one by hand is easiest with the WS probe above, answering all 10 prob
 | # | Scenario | Expected |
 |---|---|---|
 | C1 | A human-paced race (≥5s for 10 problems) | No `captcha` message; rows write immediately as before |
+| C1b | A private room set to 5 problems, finished as fast as you can | No `captcha` message — the trigger is scoped to the standard 10-problem race |
 | C2 | The captcha banner is showing and the tab disconnects, then reconnects | The banner re-offers the remaining problems on the new socket (same deadline) |
 | C3 | Host hits Race Again while a challenge is pending | Pending challenges settle as `captcha_timeout` rows before the room resets |
 | C4 | DevTools → Network, during the banner | No broadcast `state` message contains `captchaChallenges` or any captcha answer |

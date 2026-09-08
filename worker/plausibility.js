@@ -30,13 +30,19 @@ export const MAX_RACE_MS = 30 * 60_000;
 // room issues a short arithmetic captcha before recording the result; failing
 // or ignoring it stores the row as suspect (unverified), never a ban.
 //
-// Threshold evidence (data/ar-cheat-benchmarks/report.md): the best documented
-// human on a comparable game is the Zetamac world record at 638 ms/problem —
-// and Zetamac auto-submits, one keystroke cheaper per problem than this game.
-// A racer who sustains under 500 ms/problem over a whole 10-problem race is
-// past every documented human rate on the harder input mechanic, so they get
+// Threshold evidence: the best documented human on a comparable game is the
+// Zetamac mixed-operation world record, which works out to roughly
+// 638 ms/problem — and Zetamac auto-submits, one keystroke cheaper per problem
+// than this game. A racer who sustains under 500 ms/problem over a whole
+// 10-problem race is past that rate on the harder input mechanic, so they get
 // asked to prove it. The consequence is a 3-question check, not a flag, so the
 // trigger can sit far tighter than a reject threshold could.
+//
+// That evidence is a rate over a full ten-problem set, so the trigger applies
+// to exactly that race — needsCaptchaTrigger (server/captcha.js) gates on
+// CANONICAL_RACE_LENGTH. A private room set to five easy problems is both
+// outside the evidence and outside every leaderboard, so there is nothing to
+// verify there.
 export const CAPTCHA_TRIGGER_MS_PER_PROBLEM = 500;
 
 // How many fresh problems a triggered racer must answer. Small enough to be
@@ -45,11 +51,10 @@ export const CAPTCHA_TRIGGER_MS_PER_PROBLEM = 500;
 // through.
 export const CAPTCHA_PROBLEM_COUNT = 3;
 
-// Time budget per captcha problem. The lab production-paradigm means for typing
-// an answer plus Enter are ~1.7s (easy operands) to ~2.6s (hard) — see the
-// benchmarks report §2.2 — so 4s is generous for a genuinely human solver and
-// useless for automation that cannot do arithmetic. The challenge deadline is
-// count × this.
+// Time budget per captcha problem. Reading a problem, typing an answer and
+// hitting Enter runs ~1.7s (easy operands) to ~2.6s (hard), so 4s is generous
+// for a genuinely human solver and useless for automation that cannot do
+// arithmetic. The challenge deadline is count × this.
 export const CAPTCHA_MS_PER_PROBLEM = 4000;
 
 /**

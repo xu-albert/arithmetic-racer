@@ -4,7 +4,7 @@ import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/ga
 import { isConfigurableState } from '../public/src/room-config-rules.js';
 import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE } from '../public/src/room-expiry.js';
 import { insertRaceResult } from '../worker/race-result-store.js';
-import { CAPTCHA_PROBLEM_COUNT, CAPTCHA_MS_PER_PROBLEM } from '../worker/plausibility.js';
+import { CAPTCHA_PROBLEM_COUNT } from '../worker/plausibility.js';
 import { containsProfanity } from '../worker/username-validator.js';
 import { logError, KINDS } from '../worker/logger.js';
 import { buildRaceResultPayload } from './room-stats.js';
@@ -812,8 +812,10 @@ export class RaceRoom extends Server {
     this.sendToSeat(player, JSON.stringify({
       type: 'captcha',
       problems: captchaWireProblems(remaining),
-      perProblemMs: CAPTCHA_MS_PER_PROBLEM,
-      deadlineMs: challenge.deadline,
+      // Relative, not the absolute deadline: the client's clock may be minutes
+      // off the DO's, and a re-offer after a reconnect has to show what is
+      // actually left rather than a fresh budget.
+      remainingMs: Math.max(0, challenge.deadline - Date.now()),
     }));
   }
 
@@ -895,13 +897,14 @@ export class RaceRoom extends Server {
   }
 
   async removePlayer(playerId) {
-    const idx = this.state.players.findIndex((p) => p.id === playerId);
-    if (idx < 0) return false;
-    const player = this.state.players[idx];
+    const player = this.state.players.find((p) => p.id === playerId);
+    if (!player) return false;
     delete this.state.disconnectDeadlines[playerId];
 
     // Leaving with a verification pending settles it as a timeout — the row is
-    // recorded unverified rather than dropped on the floor.
+    // recorded unverified rather than dropped on the floor. That insert is a
+    // subrequest, so the room keeps taking messages across it and the roster
+    // can move underneath us: every index below is derived after the await.
     await this.resolveCaptchaChallenge(playerId, 'timeout');
 
     // Mid-race: keep the player in state.players so finishRace persists their
@@ -918,6 +921,8 @@ export class RaceRoom extends Server {
     }
 
     // Non-racing (lobby / countdown / finished): actually remove.
+    const idx = this.state.players.indexOf(player);
+    if (idx < 0) return false;
     const wasCreator = player.isCreator;
     this.state.players.splice(idx, 1);
 

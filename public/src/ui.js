@@ -107,15 +107,16 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   // The server holds a superhuman-paced result until these problems are
   // answered. `captcha` is non-null while a challenge is on screen; the server
   // remains the grader and the sole source of the outcome.
-  let captcha = null; // { problems, i, perProblemMs, countdownTimer }
+  let captcha = null; // { problems, i, endsAt, countdownTimer }
   let resultsTimer = null;
 
+  // One clock for the whole challenge, not one per problem: the server budgets
+  // the set as a single deadline and settles the timeout against it, so a
+  // per-problem countdown would keep promising time the server no longer has.
   function startCaptchaCountdown() {
     if (!captcha) return;
-    let secondsLeft = Math.round(captcha.perProblemMs / 1000);
-    captchaCountdown.textContent = `${secondsLeft}s`;
-    captcha.countdownTimer = setInterval(() => {
-      secondsLeft -= 1;
+    const render = () => {
+      const secondsLeft = Math.ceil((captcha.endsAt - Date.now()) / 1000);
       if (secondsLeft <= 0) {
         // The server settles the timeout on its own clock; stop counting.
         clearInterval(captcha.countdownTimer);
@@ -123,13 +124,21 @@ export function attachRaceUI({ runner, raceLength, screens }) {
         return;
       }
       captchaCountdown.textContent = `${secondsLeft}s`;
-    }, 1000);
+    };
+    render();
+    captcha.countdownTimer = setInterval(render, 1000);
   }
 
   function showCaptcha(data) {
-    // Hold the results screen until verification settles.
+    // Hold the results screen until verification settles. A challenge can also
+    // arrive after the results screen has already swapped in (the socket
+    // dropped before the `captcha` message and the server re-offered it on
+    // reconnect), so put the race screen back rather than painting into a
+    // hidden subtree.
     if (resultsTimer) { clearTimeout(resultsTimer); resultsTimer = null; }
-    captcha = { problems: data.problems, i: 0, perProblemMs: data.perProblemMs, countdownTimer: null };
+    screens.results.classList.add('hidden');
+    screens.race.classList.remove('hidden');
+    captcha = { problems: data.problems, i: 0, endsAt: Date.now() + data.remainingMs, countdownTimer: null };
     captchaText.textContent = `That pace was superhuman — solve ${data.problems.length} quick problems to verify your race.`;
     captchaProblem.textContent = data.problems[0].problem;
     captchaBanner.classList.remove('hidden');
@@ -143,8 +152,6 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     captcha.i += 1;
     if (captcha.i < captcha.problems.length) {
       captchaProblem.textContent = captcha.problems[captcha.i].problem;
-      clearInterval(captcha.countdownTimer);
-      startCaptchaCountdown();
     } else {
       captchaProblem.textContent = 'Checking…';
       captchaCountdown.textContent = '';

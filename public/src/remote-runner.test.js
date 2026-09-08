@@ -471,13 +471,13 @@ describe('server captcha verification', () => {
     client.receive({
       type: 'captcha',
       problems: [{ problem: '7 × 8' }, { problem: '9 + 4' }, { problem: '12 ÷ 3' }],
-      perProblemMs: 4000,
+      remainingMs: 12000,
     });
     assert.deepEqual(events, [{
       event: 'captcha',
       data: {
         problems: [{ problem: '7 × 8' }, { problem: '9 + 4' }, { problem: '12 ÷ 3' }],
-        perProblemMs: 4000,
+        remainingMs: 12000,
       },
     }]);
   });

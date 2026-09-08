@@ -281,6 +281,33 @@ describe("private room — grading and consequences", () => {
     });
   });
 
+  it("removes the departing seat even if the roster shifts during the held insert", async () => {
+    const b = makeConn("b");
+    const a = makeConn("a");
+    const c = makeConn("c");
+    await withRoom([b, a, c], async (room) => {
+      await join(room, b, "Bee");
+      await join(room, a, "Ay");
+      await join(room, c, "Cee");
+      const [bId, aId, cId] = room.state.players.map((p) => p.id);
+
+      // Settling a challenge awaits a D1 insert. That is a subrequest, so the
+      // room keeps taking messages across it — model the interleaving by
+      // having another player leave while A's timeout is still in flight.
+      const settle = room.resolveCaptchaChallenge.bind(room);
+      room.resolveCaptchaChallenge = async (pid, outcome) => {
+        await settle(pid, outcome);
+        if (pid !== aId) return;
+        room.resolveCaptchaChallenge = settle;
+        await room.removePlayer(bId);
+      };
+
+      await room.removePlayer(aId);
+
+      expect(room.state.players.map((p) => p.id)).toEqual([cId]);
+    });
+  });
+
   it("rematch settles pending challenges as timeouts before resetting", async () => {
     const host = makeConn("host");
     const guest = makeConn("guest");
@@ -343,12 +370,18 @@ describe("private room — isolation", () => {
       const host2 = makeConn("host-2");
       conns.push(host2);
       const hostRacerId = room.playerFor(host).racerId;
+      // Most of the budget is already spent by the time the socket comes back.
+      challenge.deadline = Date.now() + 2000;
       await room.handleHello(host2, { type: "hello", playerId: hostRacerId, handle: "Host" });
 
       const msg = host2.lastOf("captcha");
       expect(msg).toBeTruthy();
       expect(msg.problems).toHaveLength(challenge.count - 1);
       for (const p of msg.problems) expect(Object.keys(p)).toEqual(["problem"]);
+      // The clock the client shows is what is left of the server's deadline —
+      // a re-offer must not hand back a full fresh budget.
+      expect(msg.remainingMs).toBeGreaterThan(0);
+      expect(msg.remainingMs).toBeLessThanOrEqual(2000);
     });
   });
 });

@@ -206,7 +206,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       case 'captcha': {
         // Server-side verification: the pace was superhuman and the result is
         // held until these are answered. Problems arrive without answers.
-        emit('captcha', { problems: msg.problems, perProblemMs: msg.perProblemMs });
+        emit('captcha', { problems: msg.problems, remainingMs: msg.remainingMs });
         break;
       }
       case 'captcha-result': {

@@ -286,11 +286,6 @@ describe("private room — results describe the race that ran, not the next one"
     await room.handleSetConfig(host, { type: "set-config", difficulty: "easy", raceLength: 5 });
     await room.handleStartRace(host);
     await runCountdown(room);
-    // Answers below run with no typing delay, which would finish in single-digit
-    // milliseconds — fast enough to trip the captcha trigger and hold the rows
-    // this suite asserts on. Backdate the clock so the pace is human-plausible
-    // (1s/problem; the captcha behavior itself is covered in room-captcha.test.js).
-    room.state.raceStartedAt = Date.now() - 5000;
     await raceToBrink(room, [host, guest], guest);
   }
 
