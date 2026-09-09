@@ -12,7 +12,9 @@
 // A row reaches a board only if all of these hold:
 //
 //   room_id IS NOT NULL   — the race happened in a Durable Object.
-//   suspect = 0           — plausibility bounds cleared (worker/plausibility.js).
+//   suspect = 0           — not flagged: the passive bounds cleared and, if the
+//                           room asked for active verification, it passed
+//                           (worker/plausibility.js, server/captcha.js).
 //   user_id IS NOT NULL   — and the account has a username to display.
 //   finished = 1 AND finish_time_ms > 0 — there is a rate to rank.
 //   problems_total = 10   — it was the standard race (CANONICAL_RACE_LENGTH).

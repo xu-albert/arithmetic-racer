@@ -21,28 +21,30 @@ under two runners":
 
 - **`node --test`** — pure logic with no Worker runtime: `public/src/*.test.js` (client-side
   modules with no DOM dependency beyond what jsdom-free unit tests need),
-  `server/room-stats.test.js` (pure helper math, explicitly excluded from vitest in
-  `vitest.config.js`), `migrations/*.test.js` (schema/backfill replay against in-memory
-  SQLite), and `scripts/*.test.mjs` (the schema-drift checker's own logic).
+  the pure-helper files under `server/` (`room-stats.test.js`, `captcha.test.js`),
+  explicitly excluded from vitest in `vitest.config.js` and listed by name in the `test`
+  script, `migrations/*.test.js` (schema/backfill replay against in-memory SQLite), and
+  `scripts/*.test.mjs` (the schema-drift checker's own logic).
 - **`vitest run`** — everything that needs a real Worker/Durable Object/D1 binding, via
   `@cloudflare/vitest-pool-workers`: `worker/**/*.test.js` (routes) and `server/**/*.test.js`
-  (room logic, minus `room-stats.test.js`). Each test file gets its own ephemeral D1 built
-  from `migrations/` (`worker/test-setup.js`) — see `vitest.config.js` `include`/`exclude`.
+  (room logic, minus the two pure-helper files above). Each test file gets its own
+  ephemeral D1 built from `migrations/` (`worker/test-setup.js`) — see `vitest.config.js`
+  `include`/`exclude`.
 
-There is no browser-driven or full end-to-end layer today (see §5). The pyramid is therefore
-two-tiered in practice:
+There is no browser-driven layer today — the two `*-e2e.test.js` files stop at the
+HTTP/WebSocket/DO boundary (see §5). The pyramid is therefore two-tiered in practice:
 
 ```
         manual/exploratory (§6)        ← browser flows, multiplayer, WS probes
       ────────────────────────────
    vitest: Worker routes + DO logic     ← real D1, real Durable Object, no mocks (§3)
   ──────────────────────────────────
- node --test: pure client + server logic + migrations   ← 265 tests, no I/O
+ node --test: pure client + server logic + migrations   ← no I/O
 ```
 
-768 tests pass today (265 under `node --test`, 503 under `vitest`) — see §12 for the exact
-commands. Both counts move independently; treat a widening gap between "features shipped"
-and "tests added" as the signal to revisit §11.
+Both runners print their own totals; `npm test` (§12) is the authoritative count, not a
+number copied into this file. The two move independently — treat a widening gap between
+"features shipped" and "tests added" as the signal to revisit §11.
 
 ## 2. Unit tests
 
@@ -54,17 +56,17 @@ lint: a stray test file in the wrong directory silently joins the wrong runner (
 
 | Directory | Runner | What's covered |
 | --- | --- | --- |
-| `public/src/*.test.js` | `node --test` | Client logic: `runner.js`/`remote-runner.js` (race loop), `game.js` (problem generation, difficulty), `bot.js`/`bot-timeline.js`, `handles.js`, `header.js`, `profile.js`, `room-config-rules.js`, `room-expiry.js`, `seeded-rng.js`, `username-validator-client.js`, `recent-finishes.js`, `leaderboard.js`, `leaderboard-period.js`, `bug-report-context.js`, `auto-start.js` |
-| `server/*.test.js` (vitest) | `vitest` | Room DO behavior: `room-identity.test.js`, `public-room.test.js`, `room-config.test.js`, `room-handles.test.js`, `room-winddown.test.js`, `lobby-router.test.js`, `socket-limit.test.js` |
-| `server/room-stats.test.js` | `node --test` | Pure PPM/points math, no DO — explicitly carved out of vitest |
+| `public/src/*.test.js` | `node --test` | Client logic: `runner.js`/`remote-runner.js` (race loop), `game.js` (problem generation, difficulty), `bot.js`/`bot-timeline.js`, `handles.js`, `header.js`, `profile.js`, `room-config-rules.js`, `room-expiry.js`, `seeded-rng.js`, `username-validator-client.js`, `recent-finishes.js`, `leaderboard.js`, `leaderboard-period.js`, `bug-report-context.js`, `auto-start.js`, `captcha-session.js` |
+| `server/*.test.js` (vitest) | `vitest` | Room DO behavior: `room-identity.test.js`, `public-room.test.js`, `room-config.test.js`, `room-handles.test.js`, `room-winddown.test.js`, `room-captcha.test.js`, `room-captcha-e2e.test.js`, `lobby-router.test.js`, `socket-limit.test.js` |
+| `server/room-stats.test.js`, `server/captcha.test.js` | `node --test` | Pure PPM/points math and the captcha helpers (trigger rate, seeded problem set, wire projection), no DO — explicitly carved out of vitest |
 | `worker/*.test.js` | `vitest` | Worker-level helpers with D1/binding dependencies: `email.test.js`, `log-throttle.test.js`, `logger.test.js`, `plausibility.test.js`, `race-result-store.test.js`, `race-score.test.js`, `rate-limit.test.js`, `user-agent.test.js`, `username-validator.test.js`, `version.test.js` |
-| `worker/routes/*.test.js` | `vitest` | Route handlers: `admin.test.js`, `contact.test.js`, `leaderboard.test.js`, `matchmake.test.js` + `matchmake-e2e.test.js`, `me.test.js`, `race-result.test.js`, `recent-finishes.test.js` |
+| `worker/routes/*.test.js` | `vitest` | Route handlers: `admin.test.js`, `contact.test.js`, `leaderboard.test.js`, `matchmake.test.js` + `matchmake-e2e.test.js`, `me.test.js`, `race-result.test.js`, `recent-finishes.test.js`, `captcha-exclusion.test.js` |
 | `migrations/*.test.js` | `node --test` | `migrations.test.js` (schema left behind by replaying all files into in-memory SQLite), `points-backfill.test.js` (data-rewrite migration) |
 | `scripts/*.test.mjs` | `node --test` | `check-schema-drift.test.mjs`, `sql-constraints.test.mjs` — the drift checker's own logic |
 
 **How to run:**
 - Everything: `npm test` (see §12).
-- Just the `node --test` layer: `node --test public/src/*.test.js server/room-stats.test.js migrations/*.test.js scripts/*.test.mjs`
+- Just the `node --test` layer: `node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs`
 - Just `vitest`: `npx vitest run`
 - A single file: append its path to either command, e.g. `node --test server/room-stats.test.js` or `npx vitest run server/room-identity.test.js`.
 
@@ -133,13 +135,15 @@ that way past the PR that introduced the fix is the thing this rule exists to pr
 | 14 | Lockfile missing optional platform packages for non-macOS platforms, breaking `npm ci` under npm 11. | 4c3ac03 (`fix(ci): record every platform's optional deps in the lockfile`) | No automated test (this is a `package-lock.json` content fact); guarded by the sanity-check procedure in `AGENTS.md`'s "Dependencies and the lockfile" | UNGUARDED (procedural guard only) |
 | 15 | Post-Quickmatch UI regressions: lobby layout, stale banner, bot names visible when they shouldn't be. | d6e23d0 (#9) | No dedicated test found; likely folded into later `public/src/*.test.js` coverage of the same screens, not isolated by name | UNGUARDED |
 | 16 | Admin dashboard: `createdAt` type mismatch breaking drill-down and the signups window. | 2167f26 | `worker/routes/admin.test.js` | GUARDED |
+| 17 | **Captcha verification lifecycle**: a settled challenge must leave exactly one `race_results` row for that racer — the race-end insert stands down on `player.resultHeld`, never on "a challenge is still open", or a failed/timed-out verification is followed by a second, passively-clean row that reaches the board. Same PR also fixed: settlement authority leaking to other players (a host rematch failing a guest's challenge), the trigger firing on non-canonical race lengths, and `sendToSeat` treating `getConnections()` as an array. Full invariant writeup: `AGENTS.md` "Active verification: the superhuman-pace captcha". | 4bc89c7 (feature) + 01cf662 / 78f5f04 / 999a7c5 / 11a8d26 (`no-mistakes(review)` fixes) | `server/room-captcha.test.js` ("one row per racer per race, whenever the challenge settles"; "the challenge belongs to the racer, not the race"), `server/room-captcha-e2e.test.js`, `worker/routes/captcha-exclusion.test.js` | GUARDED |
 
 ## 5. End-to-end and UI tests
 
 There is no automated browser/E2E layer in this project today — no Playwright, no
-Puppeteer, no headless-Chrome suite. `worker/routes/matchmake-e2e.test.js` is the closest
-thing to an "e2e" test by name, but it is a vitest test exercising the matchmaking route
-end-to-end at the HTTP/DO level, not a browser test.
+Puppeteer, no headless-Chrome suite. The two files named `*-e2e.test.js`
+(`worker/routes/matchmake-e2e.test.js`, `server/room-captcha-e2e.test.js`) are the closest
+thing, but both are vitest tests driving a flow end-to-end at the HTTP/WebSocket/DO level —
+real routing, real sockets, real D1, no browser.
 
 All UI/browser coverage is manual (§6), run against:
 - **Browsers**: any two modern Chromium/Firefox/Safari windows, or one regular + one
@@ -287,7 +291,7 @@ npx wrangler d1 execute arithmetic-racer --local --command="SELECT id, user_id, 
 
 A standard ten-problem room race finished faster than `CAPTCHA_TRIGGER_MS_PER_PROBLEM` (500 ms/problem — see `worker/plausibility.js` for the evidence; other race lengths are never challenged) is held: the server sends that one client a `captcha` message with 3 fresh problems (no answers on the wire) and 12s to answer all three. Pass → the row records normally; wrong answer or the deadline → the row records with `suspect = 1` / `captcha_failed` | `captcha_timeout` and is excluded from leaderboards and the lobby strip. Never a ban.
 
-The challenge belongs to the racer, not the race: it opens the moment *that* racer finishes (so the clock does not start while they wait on a straggler), only their own answers or their own deadline settle it, and the banner is a room-lifetime overlay that survives the results screen and a page reload. Automated coverage: `server/captcha.test.js`, `server/room-captcha.test.js`, `public/src/captcha-session.test.js`, `worker/routes/captcha-exclusion.test.js`.
+The challenge belongs to the racer, not the race: it opens the moment *that* racer finishes (so the clock does not start while they wait on a straggler), only their own answers or their own deadline settle it, and the banner is a room-lifetime overlay that survives the results screen and a page reload. Automated coverage: `server/captcha.test.js`, `server/room-captcha.test.js`, `public/src/captcha-session.test.js`, `worker/routes/captcha-exclusion.test.js`, and `server/room-captcha-e2e.test.js` — the last drives the whole flow over a real WebSocket (`POST /api/rooms` → the partyserver upgrade → the same wire messages the browser sends) and reads the outcome back from D1 and `/api/recent-finishes`, so it also covers the seams the direct-handler suites stub out: partyserver routing and the real `getConnections()` iterator behind `sendToSeat`. It is the automated form of the manual checks below.
 
 Triggering one by hand is easiest with the WS probe above, answering all 10 problems within a couple of seconds of `race-start` (paste the answers from the `race-start` sequence — you are simulating a bot, after all):
 
@@ -464,8 +468,8 @@ and no standing manual checklist — gap (§11).
 **What CI actually runs today, in full:** `schema-drift.yml`, `workflow_dispatch`-only,
 requires `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` secrets that (per the workflow's own
 comments) do not yet exist in this repo, so the workflow currently fails by design if
-triggered. **`npm test` is not wired into any workflow** — the entire automated suite (768
-tests) is a local, pre-push discipline, not a merge gate. This is the largest release-process
+triggered. **`npm test` is not wired into any workflow** — the entire automated suite is a
+local, pre-push discipline, not a merge gate. This is the largest release-process
 gap this plan surfaces (§11 P0).
 
 ### Deploy
@@ -491,7 +495,7 @@ Risk-ordered; effort is rough (S = under an hour, M = a session, L = multi-sessi
 
 | Priority | Gap | Risk if unaddressed | Effort |
 | --- | --- | --- | --- |
-| P0 | `npm test` is not wired into any CI workflow — a red suite can merge to `main` silently. | Any regression (including the 16 cataloged in §4) can ship unnoticed; this is the single biggest gap in the whole plan. | S — add a GitHub Actions workflow running `npm test` on `pull_request` and `push: main`, mirroring `schema-drift.yml`'s Node setup. |
+| P0 | `npm test` is not wired into any CI workflow — a red suite can merge to `main` silently. | Any regression (including every one cataloged in §4) can ship unnoticed; this is the single biggest gap in the whole plan. | S — add a GitHub Actions workflow running `npm test` on `pull_request` and `push: main`, mirroring `schema-drift.yml`'s Node setup. |
 | P1 | No browser-driven E2E suite (Playwright or similar) against `wrangler dev`. | Every UI regression (§4 #4, #12, #13, #15) depends entirely on a human running §6 by hand before release; easy to skip under time pressure. | L — stand up Playwright against `npm run dev`, start with the Quickplay smoke (§6) as the first scripted flow. |
 | P1 | Disconnect-timeout → DNF write path (§4 #11, R3b) has no automated test. | A future refactor of `removePlayer`/reconnect-grace logic could silently stop writing DNF rows and nothing would fail. | M — a `vitest` test in `server/` driving `runInDurableObject` past the 30s reconnect grace, asserting the written row. |
 | P1 | Quick Match bot-backfill disclosure copy (§4 #4) has no automated assertion. | The copy could regress to "undisclosed" again with no test catching it. | S — a `public/src/*.test.js` assertion on the disclosure string being present in the relevant template/module. |
@@ -510,13 +514,13 @@ Single command for the full suite:
 npm test
 ```
 
-This runs `node --test public/src/*.test.js server/room-stats.test.js migrations/*.test.js scripts/*.test.mjs && vitest run --passWithNoTests` — the exact command is the authoritative `test` script in `package.json`. Currently: 265 tests under `node --test`, 503 under `vitest`, 768 total, all passing.
+This runs `node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs && vitest run --passWithNoTests` — the exact command is the authoritative `test` script in `package.json`, and its output is the authoritative test count.
 
 Individual pieces:
 
 ```bash
 # node --test layer only
-node --test public/src/*.test.js server/room-stats.test.js migrations/*.test.js scripts/*.test.mjs
+node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs
 
 # vitest layer only (Worker routes + Durable Object logic, real D1 bindings)
 npx vitest run
