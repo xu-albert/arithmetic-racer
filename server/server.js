@@ -16,7 +16,7 @@ import { handleGetMe, handleGetMyRaces, handlePostUsername, handleByDevice } fro
 import { getAuth } from "../worker/auth.js";
 import { readUserId } from "../worker/session.js";
 import { handleMatchmakeJoin } from "../worker/routes/matchmake.js";
-import { handleAdminIndex, handleAdminUser } from "../worker/routes/admin.js";
+import { handleAdminIndex, handleAdminUser, handleAdminContactHandled } from "../worker/routes/admin.js";
 import { handleContact } from "../worker/routes/contact.js";
 import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 import { handleLeaderboard } from "../worker/routes/leaderboard.js";
@@ -85,6 +85,9 @@ export default {
     // Admin dashboard (operator-only, token-gated)
     if (pathname === "/admin" || pathname === "/admin/") {
       return handleAdminIndex(request, env);
+    }
+    if (pathname.startsWith("/admin/contact/") && pathname.endsWith("/handled") && request.method === "POST") {
+      return handleAdminContactHandled(request, env);
     }
     if (pathname.startsWith("/admin/users/") && request.method === "GET") {
       return handleAdminUser(request, env);

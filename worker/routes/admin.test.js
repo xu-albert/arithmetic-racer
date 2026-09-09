@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vitest";
 import { env } from "cloudflare:test";
-import { timingSafeEqualStrings, handleAdminIndex, html, raw } from "./admin.js";
+import { timingSafeEqualStrings, handleAdminIndex, handleAdminContactHandled, html, raw } from "./admin.js";
 import { KINDS } from "../logger.js";
 
 const CONTACT_MESSAGES_DDL =
@@ -123,6 +123,28 @@ async function dashboardAt(href) {
   );
   return res.text();
 }
+
+describe("admin dashboard — mark contact handled", () => {
+  it("requires the admin token and marks the selected report", async () => {
+    const id = crypto.randomUUID();
+    await insertContact({ id, message: "please investigate" });
+
+    const denied = await handleAdminContactHandled(
+      new Request(`https://x/admin/contact/${id}/handled?token=wrong`),
+      { ...env, ADMIN_TOKEN: "t" }
+    );
+    expect(denied.status).toBe(404);
+    expect((await env.DB.prepare("SELECT handled FROM contact_messages WHERE id = ?").bind(id).first()).handled).toBe(0);
+
+    const response = await handleAdminContactHandled(
+      new Request(`https://x/admin/contact/${id}/handled?token=t&kind=bug`),
+      { ...env, ADMIN_TOKEN: "t" }
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain("kind=bug");
+    expect((await env.DB.prepare("SELECT handled FROM contact_messages WHERE id = ?").bind(id).first()).handled).toBe(1);
+  });
+});
 
 async function seedUser(id, username, createdAtMs) {
   await env.DB.prepare(
