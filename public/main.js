@@ -10,6 +10,7 @@ import { generateHandle } from './src/handles.js';
 import { pickBotTiers } from './src/bot.js';
 import { attachRaceUI } from './src/ui.js';
 import { attachLobby } from './src/lobby.js';
+import { attachCaptchaUI } from './src/captcha-ui.js';
 import { createRemoteRunner } from './src/remote-runner.js';
 import { mountHeader } from './src/header.js';
 import { mountAuthModal } from './src/auth.js';
@@ -114,6 +115,9 @@ const playAgainBtn = document.getElementById('play-again-btn');
 let selectedDifficulty = 'easy';
 let cleanupRace = null;
 let lobbyHandle = null;
+// Attached for the life of the room, not the race: a verification opens at the
+// racer's own finish and has to survive the results screen and a reload.
+let cleanupCaptcha = null;
 // Set only on the lobby route — see the initial-routing block below.
 let leaderboardHandle = null;
 
@@ -196,6 +200,7 @@ function handleRoomRaceStart({ roomClient, initialState, youAre }) {
 // against a room that no longer exists, then offer the two ways out.
 function handleRoomExpired() {
   if (cleanupRace) { cleanupRace(); cleanupRace = null; }
+  if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
   document.getElementById('invite-modal')?.classList.add('hidden');
   showScreen('room-expired');
@@ -206,6 +211,7 @@ function handleRoomExpired() {
 
 function enterRoom(roomId, { mode, difficulty } = {}) {
   if (!mode) history.replaceState(null, '', `/?room=${roomId}`);
+  if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   lobbyHandle = attachLobby({
     roomId,
     screens,
@@ -215,6 +221,7 @@ function enterRoom(roomId, { mode, difficulty } = {}) {
     difficulty,
     deviceId: getOrCreateDeviceId(),
   });
+  cleanupCaptcha = attachCaptchaUI({ client: lobbyHandle.client });
   showScreen('lobby-room');
 }
 

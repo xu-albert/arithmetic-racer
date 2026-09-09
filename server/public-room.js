@@ -232,9 +232,6 @@ export class PublicRaceRoom extends RaceRoom {
     // reach the other players in the room.
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
-    // Same active-verification gate as the base room, before persistence.
-    this.issueCaptchaChallenges();
-
     // Fire-and-forget — DB error must not block the WS broadcast.
     this.persistResults().catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, phase: 'persist_results' }));
 
@@ -263,7 +260,8 @@ export class PublicRaceRoom extends RaceRoom {
     for (const p of this.state.players) {
       if (p.isBot) continue;
       if (!p.deviceId) continue;
-      if (this.state.captchaChallenges?.[p.id]) continue; // held for verification
+      const held = this.state.captchaChallenges?.[p.id];
+      if (held && held.raceStartedAt === this.state.raceStartedAt) continue; // held for verification
       pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
     }
     for (const { playerId, payload } of pending) {
@@ -294,15 +292,9 @@ export class PublicRaceRoom extends RaceRoom {
   }
 
   async removePlayer(playerId) {
-    const player = this.state.players.find((p) => p.id === playerId);
-    if (!player) return false;
-
-    // Settling a challenge awaits a D1 insert, a subrequest the room keeps
-    // taking messages across, so the index is derived after it.
-    await this.resolveCaptchaChallenge(playerId, 'timeout');
-
-    const idx = this.state.players.indexOf(player);
+    const idx = this.state.players.findIndex((p) => p.id === playerId);
     if (idx < 0) return false;
+
     this.state.players.splice(idx, 1);
     delete this.state.disconnectDeadlines[playerId];
     this.broadcast(JSON.stringify({ type: 'player-left', playerId }));

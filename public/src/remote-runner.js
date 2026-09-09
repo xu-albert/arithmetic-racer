@@ -203,16 +203,6 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         emit('finish', { rankings: getRankings() });
         break;
       }
-      case 'captcha': {
-        // Server-side verification: the pace was superhuman and the result is
-        // held until these are answered. Problems arrive without answers.
-        emit('captcha', { problems: msg.problems, remainingMs: msg.remainingMs });
-        break;
-      }
-      case 'captcha-result': {
-        emit('captcha-result', { verified: !!msg.verified, reason: msg.reason ?? null });
-        break;
-      }
     }
   });
 
@@ -245,11 +235,6 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       }
       emit('wrong', { racerId: me.id });
       return { correct: false };
-    },
-    // Captcha answers bypass the optimistic race path entirely: the server
-    // grades them and the client learns the outcome in `captcha-result`.
-    submitCaptchaAnswer(raw) {
-      roomClient.send({ type: 'captcha-answer', value: raw });
     },
     currentProblemFor(racerId) {
       const r = racers.find((x) => x.id === racerId);

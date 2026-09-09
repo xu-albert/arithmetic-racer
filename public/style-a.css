@@ -498,6 +498,25 @@ button[aria-pressed="true"]:hover {
   color: var(--navy);
   line-height: 1.1;
 }
+#captcha-banner .captcha-input {
+  margin-top: 0.7rem;
+  width: 100%;
+  max-width: 9rem;
+  padding: 0.5rem 0.6rem;
+  font-family: var(--font);
+  font-weight: 800;
+  font-size: 1.4rem;
+  text-align: center;
+  color: var(--navy);
+  background: #ffffff;
+  border: 2px solid var(--hairline);
+  border-radius: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+#captcha-banner .captcha-input:focus {
+  outline: none;
+  border-color: var(--yellow);
+}
 #captcha-banner .captcha-countdown {
   margin-top: 0.4rem;
   font-size: 1rem;

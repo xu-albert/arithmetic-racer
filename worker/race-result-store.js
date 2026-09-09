@@ -9,7 +9,7 @@ import { db } from "./db.js";
 import { assessPlausibility } from "./plausibility.js";
 import { computePoints } from "./race-score.js";
 
-export async function insertRaceResult(env, payload) {
+export async function insertRaceResult(env, payload, plausibilityOverride) {
   const id = crypto.randomUUID();
   const playedAt = Date.now();
 
@@ -22,7 +22,12 @@ export async function insertRaceResult(env, payload) {
   // captcha_* reason so leaderboards and feeds exclude it. Passing stores
   // normally — the passive bounds still apply, so a sub-200ms/problem time
   // that passes the captcha is still flagged impossibly_fast.
-  const { suspect, reason } = payload.plausibility_override ?? assessPlausibility(payload);
+  //
+  // It is a separate argument rather than a payload field on purpose: `payload`
+  // is populated from a request body on the solo path, and an override read off
+  // that object would be one `{...body}` away from letting a client clear its
+  // own suspect flag. Only a caller that names it can set it.
+  const { suspect, reason } = plausibilityOverride ?? assessPlausibility(payload);
 
   // Scored here for the same reason. It is stored rather than derived at read
   // time so the formula can change without silently rewriting what past races

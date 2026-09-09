@@ -1,6 +1,6 @@
 // A race that fails (or times out of) server-side captcha verification is
-// recorded with suspect=1 and a captcha_* reason via the store's
-// plausibility_override. These tests pin the consequence from the brief:
+// recorded with suspect=1 and a captcha_* reason via the store's plausibility
+// override argument. These tests pin the consequence from the brief:
 // that row must not appear on leaderboards or in the recent-finishes feed,
 // while a verified (passed) row from the same room does.
 
@@ -75,10 +75,11 @@ beforeEach(async () => {
 describe("captcha-unverified rows vs public surfaces", () => {
   it("a captcha_failed row is stored suspect and excluded from both surfaces", async () => {
     await seedUser({ id: "u-fail", username: "cheater" });
-    const stored = await insertRaceResult(env, {
-      ...basePayload({ user_id: "u-fail" }),
-      plausibility_override: { suspect: 1, reason: "captcha_failed" },
-    });
+    const stored = await insertRaceResult(
+      env,
+      basePayload({ user_id: "u-fail" }),
+      { suspect: 1, reason: "captcha_failed" },
+    );
     expect(stored.suspect).toBe(1);
     expect(stored.suspect_reason).toBe("captcha_failed");
 
@@ -91,10 +92,11 @@ describe("captcha-unverified rows vs public surfaces", () => {
 
   it("a captcha_timeout row is excluded from both surfaces too", async () => {
     await seedUser({ id: "u-slow", username: "idler" });
-    await insertRaceResult(env, {
-      ...basePayload({ user_id: "u-slow" }),
-      plausibility_override: { suspect: 1, reason: "captcha_timeout" },
-    });
+    await insertRaceResult(
+      env,
+      basePayload({ user_id: "u-slow" }),
+      { suspect: 1, reason: "captcha_timeout" },
+    );
 
     expect(await boardRows()).toHaveLength(0);
     expect(await feedRows()).toHaveLength(0);

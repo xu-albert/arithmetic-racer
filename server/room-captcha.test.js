@@ -84,8 +84,8 @@ async function raceToFinish(room, conns) {
  * human pace (~800 ms/problem, no trigger). Leaves the room in 'finished'
  * with a pending challenge for `fast`.
  */
-async function raceWithOneTrigger(room, fast, others) {
-  await room.handleStartRace(fast.conn);
+async function raceWithOneTrigger(room, fast, others, starter = fast.conn) {
+  await room.handleStartRace(starter);
   await runCountdown(room);
   // Slow players first, against a backdated clock that gives them ~800ms/problem.
   room.state.raceStartedAt = Date.now() - 8000;
@@ -104,7 +104,7 @@ function challengeFor(room, conn) {
 
 /** The graded problems for a challenge — same derivation the server grades with. */
 function problemsOf(room, challenge) {
-  return captchaProblems(challenge.seed, room.state.lastRace.difficulty, challenge.count);
+  return captchaProblems(challenge.seed, challenge.difficulty, challenge.count);
 }
 
 async function answerCaptcha(room, conn, challenge, count) {
@@ -125,7 +125,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
 });
 
-describe("private room — captcha trigger at race end", () => {
+describe("private room — the captcha trigger", () => {
   it("challenges only the superhuman-paced player, sends no answers, holds the row", async () => {
     const host = makeConn("host");
     const guest = makeConn("guest");
@@ -193,6 +193,102 @@ describe("private room — captcha trigger at race end", () => {
         expect("captchaChallenges" in stateMsg.state).toBe(false);
         expect(JSON.stringify(stateMsg)).not.toContain("captchaChallenges");
       }
+    });
+  });
+});
+
+describe("private room — the challenge belongs to the racer, not the race", () => {
+  it("challenges a fast racer at their own finish, while the race is still running", async () => {
+    const fast = makeConn("fast");
+    const slow = makeConn("slow");
+    await withRoom([fast, slow], async (room) => {
+      await join(room, fast, "Fast");
+      await join(room, slow, "Slow");
+      await room.handleStartRace(fast);
+      await runCountdown(room);
+
+      room.state.raceStartedAt = Date.now() - 3500;
+      await raceToFinish(room, [fast]);
+
+      // The straggler has not finished, so the race has not ended — and the
+      // challenge is already on its way to the racer who earned it.
+      expect(room.state.state).toBe("racing");
+      const challenge = challengeFor(room, fast);
+      expect(challenge).toBeTruthy();
+      expect(fast.lastOf("captcha")).toBeTruthy();
+      expect(slow.lastOf("captcha")).toBeNull();
+
+      // The budget is anchored to that finish: waiting on a straggler for
+      // another 40 seconds does not spend any of it.
+      const deadline = challenge.deadline;
+      room.state.raceStartedAt = Date.now() - 40000;
+      await raceToFinish(room, [slow]);
+
+      expect(room.state.state).toBe("finished");
+      expect(challengeFor(room, fast).deadline).toBe(deadline);
+      expect(challengeFor(room, slow)).toBeNull();
+    });
+  });
+
+  it("a host rematch does not settle another racer's verification", async () => {
+    const host = makeConn("host");
+    const guest = makeConn("guest");
+    await withRoom([host, guest], async (room) => {
+      await join(room, host, "Host", "dev-host");
+      await join(room, guest, "Guest", "dev-guest");
+      await raceWithOneTrigger(room, { conn: guest }, [host], host);
+
+      const challenge = challengeFor(room, guest);
+      expect(challenge).toBeTruthy();
+      guest.sent.length = 0;
+
+      // Two clicks from the host — Play Again, then Race Again — land well
+      // inside the guest's response window.
+      await room.handleRematch(host);
+
+      expect(room.state.state).toBe("lobby");
+      expect(challengeFor(room, guest)).toBeTruthy();
+      expect(guest.lastOf("captcha-result")).toBeNull();
+      const afterRematch = await rowsForRoom(room);
+      expect(afterRematch.map((r) => r.device_id)).toEqual(["dev-host"]);
+
+      // The guest finishes verifying on their own time and the row counts.
+      await answerCaptcha(room, guest, challenge, challenge.count);
+
+      expect(guest.lastOf("captcha-result")).toMatchObject({ verified: true });
+      const rows = await rowsForRoom(room);
+      const guestRow = rows.find((r) => r.device_id === "dev-guest");
+      expect(guestRow.suspect).toBe(0);
+      expect(guestRow.finished).toBe(1);
+    });
+  });
+
+  it("re-offers a pending challenge to a reloaded tab after the room has reset", async () => {
+    const host = makeConn("host");
+    const guest = makeConn("guest");
+    const conns = [host, guest];
+    await withRoom(conns, async (room) => {
+      await join(room, host, "Host", "dev-host");
+      await join(room, guest, "Guest", "dev-guest");
+      await raceWithOneTrigger(room, { conn: guest }, [host], host);
+
+      const challenge = challengeFor(room, guest);
+      await answerCaptcha(room, guest, challenge, 1);
+      const guestRacerId = room.playerFor(guest).racerId;
+      await room.handleRematch(host);
+      expect(room.state.state).toBe("lobby");
+
+      // A reload, not a socket blip: a brand new connection presenting the
+      // stored racerId, with no race in progress to hand the message to.
+      const guest2 = makeConn("guest-2");
+      conns.push(guest2);
+      await room.handleHello(guest2, { type: "hello", playerId: guestRacerId, handle: "Guest" });
+
+      const msg = guest2.lastOf("captcha");
+      expect(msg).toBeTruthy();
+      expect(msg.problems).toHaveLength(challenge.count - 1);
+      for (const p of msg.problems) expect(Object.keys(p)).toEqual(["problem"]);
+      expect(msg.remainingMs).toBeGreaterThan(0);
     });
   });
 });
@@ -280,72 +376,32 @@ describe("private room — grading and consequences", () => {
     });
   });
 
-  it("a mid-challenge disconnect settles as timeout when the seat is removed", async () => {
+  it("a mid-challenge disconnect leaves the verdict to the challenge's own deadline", async () => {
     const host = makeConn("host");
     const guest = makeConn("guest");
     await withRoom([host, guest], async (room) => {
       await join(room, host, "Host");
       await join(room, guest, "Guest");
       await raceWithOneTrigger(room, { conn: host }, [guest]);
-      expect(challengeFor(room, host)).toBeTruthy();
+      const pid = room.playerFor(host).id;
+      expect(room.state.captchaChallenges[pid]).toBeTruthy();
 
-      await room.removePlayer(room.playerFor(host).id);
+      // Losing the seat is not a verdict — the racer may still be answering on
+      // a socket that is on its way back.
+      await room.removePlayer(pid);
+      expect(room.state.captchaChallenges[pid]).toBeTruthy();
+      expect(await rowsForRoom(room)).toHaveLength(1);
 
-      expect(challengeFor(room, host)).toBeNull();
-      const rows = await rowsForRoom(room);
-      const held = rows.find((r) => r.suspect === 1);
-      expect(held).toBeTruthy();
+      // Their own deadline still settles it, seat or no seat.
+      room.state.captchaChallenges[pid].deadline = Date.now() - 1;
+      await room.onAlarm();
+
+      expect(room.state.captchaChallenges[pid]).toBeUndefined();
+      const held = (await rowsForRoom(room)).find((r) => r.suspect === 1);
       expect(held.suspect_reason).toBe("captcha_timeout");
     });
   });
 
-  it("removes the departing seat even if the roster shifts during the held insert", async () => {
-    const b = makeConn("b");
-    const a = makeConn("a");
-    const c = makeConn("c");
-    await withRoom([b, a, c], async (room) => {
-      await join(room, b, "Bee");
-      await join(room, a, "Ay");
-      await join(room, c, "Cee");
-      const [bId, aId, cId] = room.state.players.map((p) => p.id);
-
-      // Settling a challenge awaits a D1 insert. That is a subrequest, so the
-      // room keeps taking messages across it — model the interleaving by
-      // having another player leave while A's timeout is still in flight.
-      const settle = room.resolveCaptchaChallenge.bind(room);
-      room.resolveCaptchaChallenge = async (pid, outcome) => {
-        await settle(pid, outcome);
-        if (pid !== aId) return;
-        room.resolveCaptchaChallenge = settle;
-        await room.removePlayer(bId);
-      };
-
-      await room.removePlayer(aId);
-
-      expect(room.state.players.map((p) => p.id)).toEqual([cId]);
-    });
-  });
-
-  it("rematch settles pending challenges as timeouts before resetting", async () => {
-    const host = makeConn("host");
-    const guest = makeConn("guest");
-    await withRoom([host, guest], async (room) => {
-      await join(room, host, "Host");
-      await join(room, guest, "Guest");
-      await raceWithOneTrigger(room, { conn: host }, [guest]);
-      expect(challengeFor(room, host)).toBeTruthy();
-
-      await room.handleRematch(host);
-
-      expect(room.state.captchaChallenges).toEqual({});
-      expect(room.state.state).toBe("lobby");
-      const rows = await rowsForRoom(room);
-      expect(rows.some((r) => r.suspect_reason === "captcha_timeout")).toBe(true);
-    });
-  });
-});
-
-describe("private room — isolation", () => {
   it("another player cannot answer, consume, or even probe the challenge", async () => {
     const host = makeConn("host");
     const guest = makeConn("guest");

@@ -105,11 +105,14 @@ export function freshState(id) {
     // Counter behind the ephemeral broadcast ids handed out by nextBroadcastId.
     nextPid: 1,
     disconnectDeadlines: {}, // broadcast id -> deadline ms (Task 9 reconnection grace)
-    // Active-verification challenges, keyed by broadcast id: superhuman-paced
-    // finishes wait here until the racer answers, fails, or times out, and the
-    // challenge holds a snapshot of the result row until then. Server-only:
-    // stripped from publicState() like every other secret — the wire carries
-    // only the problem strings, and those only to the challenged seat.
+    // Active-verification challenges, keyed by broadcast id: a superhuman-paced
+    // finish waits here until that racer answers, fails, or runs out of their
+    // own time, and the challenge holds a snapshot of the result row until
+    // then. Self-contained on purpose — it carries the difficulty it was drawn
+    // at and the race it belongs to, so nothing the room does afterwards can
+    // change what it grades or what it stores. Server-only: stripped from
+    // publicState() like every other secret, and the wire carries only the
+    // problem strings, only to the challenged seat.
     captchaChallenges: {},
   };
 }
@@ -165,10 +168,9 @@ export function resetForRace(state) {
   state.graceDeadline = null;
   state.countdownN = null;
   state.countdownAt = null;
-  // Any challenge still pending belonged to the race that just ended; callers
-  // resolve pending challenges (as timeouts) before resetting, so this is
-  // defense in depth against a new race inheriting a stale gate.
-  state.captchaChallenges = {};
+  // captchaChallenges deliberately survives: a challenge belongs to the racer
+  // who earned it, not to the race, and only their answers or their own
+  // deadline may settle it.
 }
 
 function isValidDeviceId(s) {
@@ -652,6 +654,12 @@ export class RaceRoom extends Server {
         type: 'advance', playerId: player.id, score: player.score, finishMs: player.finishMs,
       }));
 
+      // Verification starts here, at this racer's own finish, not at race end:
+      // the fast racer is by construction the one who then waits longest for
+      // the stragglers, and a challenge that opens after that wait lands on
+      // somebody who has already looked away.
+      if (player.finishMs != null) this.issueCaptchaChallenge(player);
+
       // Race ends only when every non-dropped player has finished. Stragglers
       // get to finish at their own pace; AFK risk accepted by design.
       const allDone = this.isRaceComplete();
@@ -690,8 +698,7 @@ export class RaceRoom extends Server {
       return;
     }
 
-    const race = this.state.lastRace ?? this.state;
-    const problems = captchaProblems(challenge.seed, race.difficulty, challenge.count);
+    const problems = captchaProblems(challenge.seed, challenge.difficulty, challenge.count);
     if (validateAnswer(problems[challenge.index], msg.value)) {
       challenge.index += 1;
       if (challenge.index >= challenge.count) {
@@ -738,12 +745,6 @@ export class RaceRoom extends Server {
     if (!player.isCreator) return this.sendError(connection, 'NOT_CREATOR', 'Only the host can rematch');
     if (this.state.state !== 'finished') return this.sendError(connection, 'BAD_STATE', 'Race not finished');
 
-    // A rematch discards the finished race's pending verifications: record
-    // them as timed-out so no result is ever silently dropped.
-    for (const pid of Object.keys(this.state.captchaChallenges ?? {})) {
-      await this.resolveCaptchaChallenge(pid, 'timeout');
-    }
-
     resetForRace(this.state);
     this.state.state = 'lobby';
     await this.persist();
@@ -767,47 +768,62 @@ export class RaceRoom extends Server {
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
-    // Offer verifications before persisting so persistRaceResults can hold the
-    // challenged rows until they resolve.
-    this.issueCaptchaChallenges();
     await this.persistRaceResults();
   }
 
   /**
    * TypeRacer-style active verification, chosen over tighter passive bounds:
-   * any human (not bot) whose server-timed finish is faster than a plausible
+   * a human (not bot) whose server-timed finish is faster than a plausible
    * sustained human rate must answer a few fresh arithmetic problems before
-   * the result is recorded. Server-authoritative by construction — the seed is
-   * drawn here, the problems are regenerated to grade, and only the problem
-   * strings reach the client. Single-use: resolveCaptchaChallenge deletes the
-   * challenge, so a graded set can never be replayed.
+   * the result is recorded. Called the moment that racer finishes, so the
+   * response budget runs from their finish rather than from an race end they
+   * may be waiting minutes for.
+   *
+   * Server-authoritative by construction — the seed is drawn here, the
+   * problems are regenerated to grade, and only the problem strings reach the
+   * client. Single-use: resolveCaptchaChallenge deletes the challenge, so a
+   * graded set can never be replayed.
+   *
+   * Config cannot change while the room is racing (room-config-rules.js), so
+   * the live difficulty and length ARE this race's, and the challenge keeps
+   * its own copy of both from here on.
    */
-  issueCaptchaChallenges() {
-    const race = this.state.lastRace ?? this.state;
-    for (const p of this.state.players) {
-      if (p.isBot || !p.deviceId) continue;
-      if (!needsCaptchaTrigger(p.finishMs, race.raceLength)) continue;
-      const challenge = {
-        playerId: p.id,
-        seed: newCaptchaSeed(),
-        count: CAPTCHA_PROBLEM_COUNT,
-        index: 0,
-        deadline: captchaDeadline(Date.now()),
-        // Snapshot the result row now: the build-before-insert rule from
-        // persistRaceResults applies equally to a row that inserts later —
-        // a rematch must not be able to rewrite a held payload.
-        payload: buildRaceResultPayload(p, this.state),
-      };
-      (this.state.captchaChallenges ??= {})[p.id] = challenge;
-      this.offerCaptcha(p, challenge);
+  issueCaptchaChallenge(player) {
+    if (player.isBot || !player.deviceId) return;
+    const race = { difficulty: this.state.difficulty, raceLength: this.state.raceLength };
+    if (!needsCaptchaTrigger(player.finishMs, race.raceLength)) return;
+
+    // Racing again without answering abandons the previous challenge, and this
+    // key is about to be overwritten, so settle it rather than lose the row it
+    // holds. Fire-and-forget: the finish path must not suspend on a database
+    // write, and resolveCaptchaChallenge takes the challenge out of state
+    // before it does anything asynchronous.
+    if (this.state.captchaChallenges?.[player.id]) {
+      this.resolveCaptchaChallenge(player.id, 'timeout')
+        .catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: player.id, phase: 'captcha_reissue' }));
     }
+
+    const challenge = {
+      playerId: player.id,
+      raceStartedAt: this.state.raceStartedAt,
+      seed: newCaptchaSeed(),
+      difficulty: race.difficulty,
+      count: CAPTCHA_PROBLEM_COUNT,
+      index: 0,
+      deadline: captchaDeadline(Date.now()),
+      // Snapshot the result row now: the build-before-insert rule from
+      // persistRaceResults applies equally to a row that inserts later — a
+      // reconfigured or restarted room must not rewrite a held payload.
+      payload: buildRaceResultPayload(player, { id: this.state.id, lastRace: race }),
+    };
+    (this.state.captchaChallenges ??= {})[player.id] = challenge;
+    this.offerCaptcha(player, challenge);
   }
 
   /** Send a seat its pending challenge (or the remainder of one, on resend). */
   offerCaptcha(player, challenge = this.state.captchaChallenges?.[player.id]) {
     if (!challenge) return;
-    const race = this.state.lastRace ?? this.state;
-    const remaining = captchaProblems(challenge.seed, race.difficulty, challenge.count)
+    const remaining = captchaProblems(challenge.seed, challenge.difficulty, challenge.count)
       .slice(challenge.index);
     this.sendToSeat(player, JSON.stringify({
       type: 'captcha',
@@ -843,10 +859,7 @@ export class RaceRoom extends Server {
       const reason = outcome === 'timeout' ? 'captcha_timeout' : 'captcha_failed';
       this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: false, reason }));
       try {
-        await insertRaceResult(this.env, {
-          ...challenge.payload,
-          plausibility_override: { suspect: 1, reason },
-        });
+        await insertRaceResult(this.env, challenge.payload, { suspect: 1, reason });
       } catch (e) {
         logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'captcha_fail_insert' });
       }
@@ -887,9 +900,12 @@ export class RaceRoom extends Server {
         logError(KINDS.RACE_RESULT_DB, 'skipping player with no deviceId', { roomId: this.name, playerId: p.id, phase: 'precheck' });
         continue;
       }
-      if (this.state.captchaChallenges?.[p.id]) {
+      const held = this.state.captchaChallenges?.[p.id];
+      if (held && held.raceStartedAt === this.state.raceStartedAt) {
         // Held for active verification: the snapshot taken at issue time is
-        // inserted by resolveCaptchaChallenge once the challenge settles.
+        // inserted by resolveCaptchaChallenge once the challenge settles. A
+        // challenge left over from an earlier race holds an earlier row, so it
+        // must not suppress this one.
         continue;
       }
       pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
@@ -904,15 +920,10 @@ export class RaceRoom extends Server {
   }
 
   async removePlayer(playerId) {
-    const player = this.state.players.find((p) => p.id === playerId);
-    if (!player) return false;
+    const idx = this.state.players.findIndex((p) => p.id === playerId);
+    if (idx < 0) return false;
+    const player = this.state.players[idx];
     delete this.state.disconnectDeadlines[playerId];
-
-    // Leaving with a verification pending settles it as a timeout — the row is
-    // recorded unverified rather than dropped on the floor. That insert is a
-    // subrequest, so the room keeps taking messages across it and the roster
-    // can move underneath us: every index below is derived after the await.
-    await this.resolveCaptchaChallenge(playerId, 'timeout');
 
     // Mid-race: keep the player in state.players so finishRace persists their
     // DNF row. Mark dropped (idempotent) and re-check allDone. Cleanup happens
@@ -928,8 +939,6 @@ export class RaceRoom extends Server {
     }
 
     // Non-racing (lobby / countdown / finished): actually remove.
-    const idx = this.state.players.indexOf(player);
-    if (idx < 0) return false;
     const wasCreator = player.isCreator;
     this.state.players.splice(idx, 1);
 

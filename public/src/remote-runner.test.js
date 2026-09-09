@@ -463,39 +463,3 @@ describe('quit and stop', () => {
   });
 });
 
-describe('server captcha verification', () => {
-  test('a captcha message becomes a captcha event with the problems, answers never included', () => {
-    const client = fakeRoomClient();
-    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
-    const events = record(runner);
-    client.receive({
-      type: 'captcha',
-      problems: [{ problem: '7 × 8' }, { problem: '9 + 4' }, { problem: '12 ÷ 3' }],
-      remainingMs: 12000,
-    });
-    assert.deepEqual(events, [{
-      event: 'captcha',
-      data: {
-        problems: [{ problem: '7 × 8' }, { problem: '9 + 4' }, { problem: '12 ÷ 3' }],
-        remainingMs: 12000,
-      },
-    }]);
-  });
-
-  test('captcha answers are relayed as captcha-answer, not answer', () => {
-    const client = fakeRoomClient();
-    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
-    runner.submitCaptchaAnswer('56');
-    assert.deepEqual(client.sent, [{ type: 'captcha-answer', value: '56' }]);
-  });
-
-  test('a captcha-result becomes a captcha-result event', () => {
-    const client = fakeRoomClient();
-    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
-    const events = record(runner);
-    // `captcha_timeout` is the string the server actually emits — it is what
-    // lands in the row's suspect_reason, and the UI branches on it.
-    client.receive({ type: 'captcha-result', verified: false, reason: 'captcha_timeout' });
-    assert.deepEqual(events, [{ event: 'captcha-result', data: { verified: false, reason: 'captcha_timeout' } }]);
-  });
-});
