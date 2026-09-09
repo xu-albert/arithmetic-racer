@@ -456,6 +456,24 @@ function contactHref(token, kind, cursor = {}) {
   });
 }
 
+export async function handleAdminContactHandled(request, env) {
+  const url = new URL(request.url);
+  const gateResponse = checkAdminToken(url, env);
+  if (gateResponse) return gateResponse;
+
+  const id = url.pathname.slice("/admin/contact/".length, -"/handled".length);
+  if (!id || !url.pathname.endsWith("/handled")) return new Response("Not found", { status: 404 });
+  await env.DB.prepare("UPDATE contact_messages SET handled = 1 WHERE id = ?").bind(id).run();
+
+  const redirect = adminHref("/admin/", {
+    token: url.searchParams.get("token"),
+    kind: url.searchParams.get("kind"),
+    before: url.searchParams.get("before"),
+    beforeId: url.searchParams.get("beforeId"),
+  });
+  return Response.redirect(new URL(redirect, request.url), 303);
+}
+
 function renderContactFilters(activeKind, token, counts, cursor) {
   const link = (kind, label) => {
     const total = counts[kind ?? "all"]?.total ?? 0;
@@ -468,7 +486,7 @@ function renderContactFilters(activeKind, token, counts, cursor) {
   return raw(`<p class="contact-filters">${links.join(" · ")}</p>`);
 }
 
-function renderContactTable(messages, now) {
+function renderContactTable(messages, now, token, cursor) {
   if (!messages.length) return raw(`<p class="empty">No contact messages.</p>`);
   const body = messages
     .map((m) => {
@@ -483,7 +501,7 @@ function renderContactTable(messages, now) {
       <td>${escapeHtml(m.email ?? "—")}</td>
       <td>${m.user_id ? "signed in" : "anonymous"}</td>
       <td class="msg">${escapeHtml(m.message)}${renderContext(m.context, m.device_id)}</td>
-      <td>${m.handled ? "handled" : "open"}</td>
+      <td>${m.handled ? "handled" : raw(`<form method="post" action="${escapeHtml(adminHref(`/admin/contact/${encodeURIComponent(m.id)}/handled`, { token, kind: cursor.kind, before: cursor.before, beforeId: cursor.beforeId }))}"><button type="submit">mark handled</button></form>`).__html}</td>
     </tr>`;
     })
     .join("");
@@ -599,7 +617,7 @@ export async function handleAdminIndex(request, env) {
         ${renderRacesTable(rows, now, token, cursorHref, hasCursor(cursor))}
         <h2>Contact messages${messages.length ? ` (${messages.filter((m) => !m.handled).length} unhandled)` : ""}</h2>
         ${renderContactFilters(contactKind, token, contactCounts, cursor)}
-        ${renderContactTable(messages, now)}
+        ${renderContactTable(messages, now, token, { kind: contactKind, ...cursor })}
       </body>
     </html>
   `;
