@@ -260,8 +260,7 @@ export class PublicRaceRoom extends RaceRoom {
     for (const p of this.state.players) {
       if (p.isBot) continue;
       if (!p.deviceId) continue;
-      const held = this.state.captchaChallenges?.[p.id];
-      if (held && held.raceStartedAt === this.state.raceStartedAt) continue; // held for verification
+      if (p.resultHeld) continue; // active verification owns this row
       pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
     }
     for (const { playerId, payload } of pending) {

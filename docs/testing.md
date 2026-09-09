@@ -307,6 +307,7 @@ Triggering one by hand is easiest with the WS probe above, answering all 10 prob
 | C4 | DevTools → Network, during the banner | No broadcast `state` message contains `captchaChallenges` or any captcha answer |
 | C5 | A fast racer finishes while a slow one is still going | The banner appears immediately, over the race screen, and its countdown does not restart when the race ends |
 | C6 | The challenged player answers all three, then the socket drops before the verdict | The banner clears itself a couple of seconds after the deadline saying verification could not be confirmed — never "failed" |
+| C7 | Verify (or ignore) the captcha while the other racer is still going, then let them finish | Exactly one `race_results` row for the challenged device, carrying the verdict — a second, clean row would be an unverified finish on the board |
 
 ### Lobby "who's racing" strip
 

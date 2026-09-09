@@ -96,6 +96,25 @@ async function raceWithOneTrigger(room, fast, others, starter = fast.conn) {
   expect(room.state.state).toBe("finished");
 }
 
+/**
+ * The ordering the per-racer re-anchor made normal: the fast racer finishes
+ * first and is challenged while a straggler is still going, so the challenge
+ * settles *before* the race ends and finishRace() runs afterwards. Returns a
+ * function that finishes the straggler at a human pace.
+ */
+async function raceFastFirst(room, fast, slow, starter) {
+  await room.handleStartRace(starter);
+  await runCountdown(room);
+  room.state.raceStartedAt = Date.now() - 3500;
+  await raceToFinish(room, [fast]);
+  expect(room.state.state).toBe("racing");
+  return async () => {
+    room.state.raceStartedAt = Date.now() - 30000;
+    await raceToFinish(room, [slow]);
+    expect(room.state.state).toBe("finished");
+  };
+}
+
 function challengeFor(room, conn) {
   const player = room.playerFor(conn);
   if (!player) return null;
@@ -289,6 +308,100 @@ describe("private room — the challenge belongs to the racer, not the race", ()
       expect(msg.problems).toHaveLength(challenge.count - 1);
       for (const p of msg.problems) expect(Object.keys(p)).toEqual(["problem"]);
       expect(msg.remainingMs).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe("private room — one row per racer per race, whenever the challenge settles", () => {
+  it("passing while a straggler is still racing does not write a second row", async () => {
+    const fast = makeConn("fast");
+    const slow = makeConn("slow");
+    await withRoom([fast, slow], async (room) => {
+      await join(room, fast, "Fast", "dev-fast");
+      await join(room, slow, "Slow", "dev-slow");
+      const finishStraggler = await raceFastFirst(room, fast, slow, fast);
+
+      const challenge = challengeFor(room, fast);
+      await answerCaptcha(room, fast, challenge, challenge.count);
+      expect(await rowsForRoom(room)).toHaveLength(1);
+
+      // The race ends much later. The verified row is already written.
+      await finishStraggler();
+
+      const rows = await rowsForRoom(room);
+      expect(rows.filter((r) => r.device_id === "dev-fast")).toHaveLength(1);
+      expect(rows.filter((r) => r.device_id === "dev-slow")).toHaveLength(1);
+      expect(rows.find((r) => r.device_id === "dev-fast").suspect).toBe(0);
+    });
+  });
+
+  it("ignoring the challenge cannot be undone by the race ending later", async () => {
+    const fast = makeConn("fast");
+    const slow = makeConn("slow");
+    await withRoom([fast, slow], async (room) => {
+      await join(room, fast, "Fast", "dev-fast");
+      await join(room, slow, "Slow", "dev-slow");
+      const finishStraggler = await raceFastFirst(room, fast, slow, fast);
+
+      // Answer nothing; the deadline settles it while the race is still on.
+      challengeFor(room, fast).deadline = Date.now() - 1;
+      await room.onAlarm();
+      expect(room.state.state).toBe("racing");
+
+      await finishStraggler();
+
+      // Exactly one row, and it is the unverified one. A second, clean row
+      // here would satisfy every leaderboard predicate and make ignoring the
+      // captcha free for anyone who finishes before their opponent.
+      const mine = (await rowsForRoom(room)).filter((r) => r.device_id === "dev-fast");
+      expect(mine).toHaveLength(1);
+      expect(mine[0].suspect).toBe(1);
+      expect(mine[0].suspect_reason).toBe("captcha_timeout");
+    });
+  });
+
+  it("a wrong answer mid-race is not overwritten by a clean row at race end", async () => {
+    const fast = makeConn("fast");
+    const slow = makeConn("slow");
+    await withRoom([fast, slow], async (room) => {
+      await join(room, fast, "Fast", "dev-fast");
+      await join(room, slow, "Slow", "dev-slow");
+      const finishStraggler = await raceFastFirst(room, fast, slow, fast);
+
+      const challenge = challengeFor(room, fast);
+      const wrong = problemsOf(room, challenge)[0].answer + 1;
+      await room.handleCaptchaAnswer(fast, { type: "captcha-answer", value: String(wrong) });
+
+      await finishStraggler();
+
+      const mine = (await rowsForRoom(room)).filter((r) => r.device_id === "dev-fast");
+      expect(mine).toHaveLength(1);
+      expect(mine[0].suspect).toBe(1);
+      expect(mine[0].suspect_reason).toBe("captcha_failed");
+    });
+  });
+
+  it("a later race persists normally once the held row is behind it", async () => {
+    const fast = makeConn("fast");
+    const slow = makeConn("slow");
+    await withRoom([fast, slow], async (room) => {
+      await join(room, fast, "Fast", "dev-fast");
+      await join(room, slow, "Slow", "dev-slow");
+      const finishStraggler = await raceFastFirst(room, fast, slow, fast);
+      const challenge = challengeFor(room, fast);
+      await answerCaptcha(room, fast, challenge, challenge.count);
+      await finishStraggler();
+
+      // Second race, both at a human pace: nothing is held, so both rows write.
+      await room.handleRematch(fast);
+      await room.handleStartRace(fast);
+      await runCountdown(room);
+      room.state.raceStartedAt = Date.now() - 30000;
+      await raceToFinish(room, [fast, slow]);
+
+      const rows = await rowsForRoom(room);
+      expect(rows.filter((r) => r.device_id === "dev-fast")).toHaveLength(2);
+      expect(rows.filter((r) => r.device_id === "dev-slow")).toHaveLength(2);
     });
   });
 });

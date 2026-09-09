@@ -162,6 +162,7 @@ export function resetForRace(state) {
     p.finishMs = null;
     p.dropped = false;
     p.dnf = false;
+    p.resultHeld = false;
   }
   state.problemSequence = [];
   state.raceStartedAt = null;
@@ -200,7 +201,7 @@ export function publicPlayer(p) {
   // currently holding the seat — server-only bookkeeping for the eviction
   // path. What survives here is `id`, the ephemeral per-room broadcast id
   // (see nextBroadcastId).
-  const { attempts, longestStreak, currentStreak, deviceId, userId, racerId, connId, ...rest } = p;
+  const { attempts, longestStreak, currentStreak, deviceId, userId, racerId, connId, resultHeld, ...rest } = p;
   return { ...rest, isGuest: !userId };
 }
 
@@ -550,6 +551,9 @@ export class RaceRoom extends Server {
       finishMs: null,
       dropped: false,
       dnf: false,
+      // Set when a captcha challenge takes ownership of this race's row; see
+      // issueCaptchaChallenge. Server-only, stripped by publicPlayer.
+      resultHeld: false,
       deviceId: isValidDeviceId(msg.deviceId) ? msg.deviceId : null,
       userId: currentConnState.userId ?? null,
     };
@@ -805,7 +809,6 @@ export class RaceRoom extends Server {
 
     const challenge = {
       playerId: player.id,
-      raceStartedAt: this.state.raceStartedAt,
       seed: newCaptchaSeed(),
       difficulty: race.difficulty,
       count: CAPTCHA_PROBLEM_COUNT,
@@ -817,6 +820,12 @@ export class RaceRoom extends Server {
       payload: buildRaceResultPayload(player, { id: this.state.id, lastRace: race }),
     };
     (this.state.captchaChallenges ??= {})[player.id] = challenge;
+    // This race's row is the challenge's to write from here on, whichever way
+    // it settles. Recorded on the player rather than inferred from the
+    // challenge still being open: a challenge that settles mid-race — now the
+    // normal case, since it opens at this racer's own finish — is deleted long
+    // before finishRace() runs, and the race-end insert must still stand down.
+    player.resultHeld = true;
     this.offerCaptcha(player, challenge);
   }
 
@@ -900,12 +909,11 @@ export class RaceRoom extends Server {
         logError(KINDS.RACE_RESULT_DB, 'skipping player with no deviceId', { roomId: this.name, playerId: p.id, phase: 'precheck' });
         continue;
       }
-      const held = this.state.captchaChallenges?.[p.id];
-      if (held && held.raceStartedAt === this.state.raceStartedAt) {
-        // Held for active verification: the snapshot taken at issue time is
-        // inserted by resolveCaptchaChallenge once the challenge settles. A
-        // challenge left over from an earlier race holds an earlier row, so it
-        // must not suppress this one.
+      if (p.resultHeld) {
+        // Active verification owns this row: the snapshot taken at issue time
+        // is inserted by resolveCaptchaChallenge, whether it passed, failed or
+        // timed out, and inserting here as well would hand a racer who ignored
+        // the challenge a second, clean row.
         continue;
       }
       pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });

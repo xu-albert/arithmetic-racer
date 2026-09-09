@@ -162,12 +162,19 @@ whole shape of the lifecycle, and every part of it follows:
   `removePlayer` and a room reset all leave it alone; `resetForRace` explicitly
   does not clear `captchaChallenges`. A host must not be able to fail a guest's
   verification by clicking Race Again.
-- It is self-contained: the challenge carries the `difficulty` it was drawn at,
-  the `raceStartedAt` of the race it holds a row for, and the row payload
-  itself, so nothing the room does later can change what it grades or stores.
-  `persistRaceResults` skips a player only when the pending challenge's
-  `raceStartedAt` matches the race being persisted — a leftover challenge holds
-  an earlier row and must not suppress a newer one.
+- It is self-contained: the challenge carries the `difficulty` it was drawn at
+  and the row payload itself, so nothing the room does later can change what it
+  grades or stores.
+- **Issuing it transfers ownership of that race's row, permanently.**
+  `issueCaptchaChallenge` sets `player.resultHeld`, and `persistRaceResults` /
+  `PublicRaceRoom.persistResults` skip on that flag — never on "a challenge is
+  still open". Because the challenge opens at the racer's own finish, it
+  normally settles (and deletes itself) *before* `finishRace()` runs, so a guard
+  that reads the live challenge map lets the race end write a second row — and
+  on the timeout path that second row goes through `assessPlausibility`, comes
+  out `suspect = 0`, and puts an unverified finish straight onto the board.
+  `resetForRace` clears the flag with the other per-race player fields, and
+  `publicPlayer()` strips it.
 - Client-side it is a room-lifetime overlay (`captcha-ui.js` over
   `captcha-session.js`), attached in `enterRoom` and mounted on `document.body`,
   never inside the race screen. `handleHello` re-offers a pending challenge on
