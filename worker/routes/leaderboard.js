@@ -60,8 +60,6 @@ import { allowRequest } from "../rate-limit.js";
 import { logThrottleDecision, FRESH_THROTTLE } from "../log-throttle.js";
 import { isPeriod, periodStartMs } from "../../public/src/leaderboard-period.js";
 
-export { CANONICAL_RACE_LENGTH };
-
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
 /** Matches LEADERBOARD_IP_LIMIT's `period` in wrangler.jsonc. */
