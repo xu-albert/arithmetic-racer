@@ -6,8 +6,8 @@
 //   start     { problem }     — race begins; problem is the first one for the player
 //   advance   { laneId, score, finishMs? }   — a racer answered correctly; finishMs set if they finished
 //   problem   { problem }     — next problem for the player after a correct answer
-//   wrong     { laneId }     — player submitted a wrong answer (no penalty, just a UI ping)
-//   drop      { laneId }     — a bot dropped out mid-race (looks like a disconnect)
+//   wrong     { laneId }      — player submitted a wrong answer (no penalty, just a UI ping)
+//   drop      { laneId }      — a bot dropped out mid-race (looks like a disconnect)
 //   finish    { rankings }    — race over; rankings sorted best-first, dropped at the bottom
 
 import { generateSequence, validateAnswer } from './game.js';

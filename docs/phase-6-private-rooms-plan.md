@@ -9,7 +9,10 @@
 > `player.id` the client's `localStorage` racerId, or treats "a known `playerId`" as a
 > reconnect (the identity/reconnection decision rows, the `Player` shape, Task 9), read
 > "a matching racerId" — that proof is what stops a stranger who read an id off the wire
-> from claiming the seat. See "Room identity" in `AGENTS.md`.
+> from claiming the seat. See "Room identity" in `AGENTS.md`. Task 6's runner sketch inherits
+> the same pre-split naming for the client-side lane key: read its `racerId` as `laneId`,
+> which is what `runner.js`/`remote-runner.js`/`ui.js` emit, leaving the `racerId` name to
+> the secret alone.
 
 > **Superseded on room lifetime (2026-08-18).** Every statement below about how a room
 > dies — the "Room lifetime" decision row, Task 4's idle-cleanup step, and the manual
