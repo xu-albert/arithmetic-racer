@@ -462,3 +462,4 @@ describe('quit and stop', () => {
     assert.deepEqual(events, []);
   });
 });
+

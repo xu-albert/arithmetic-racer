@@ -80,6 +80,8 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     input.value = '';
   }
 
+  let resultsTimer = null;
+
   function ordinalSuffix(n) {
     const mod100 = n % 100;
     if (mod100 >= 11 && mod100 <= 13) return 'th';
@@ -191,7 +193,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     } else if (event === 'finish') {
       input.disabled = true;
       renderPodium();
-      setTimeout(() => {
+      resultsTimer = setTimeout(() => {
         screens.race.classList.add('hidden');
         screens.results.classList.remove('hidden');
       }, 800);
@@ -199,6 +201,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   });
 
   return () => {
+    if (resultsTimer) clearTimeout(resultsTimer);
     input.removeEventListener('keydown', onKey);
     quitBtn.removeEventListener('click', onQuit);
     bugReportLink?.removeEventListener('click', restoreAnswerFocus);

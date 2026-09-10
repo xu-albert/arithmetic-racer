@@ -466,6 +466,65 @@ button[aria-pressed="true"]:hover {
   color: #b8860b;
   text-shadow: 0 2px 0 rgba(255, 255, 255, 0.6);
 }
+
+/* ============================================================
+   CAPTCHA BANNER -- server verification after a superhuman pace
+   ============================================================ */
+#captcha-banner {
+  position: fixed;
+  top: 38%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 11;
+  background: var(--card);
+  padding: 1.4rem 2.2rem;
+  border-radius: 1rem;
+  box-shadow: var(--card-shadow-lift);
+  border: 2px solid var(--yellow);
+  text-align: center;
+  max-width: min(90vw, 30rem);
+}
+#captcha-banner .captcha-text {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--navy-mute);
+  line-height: 1.35;
+}
+#captcha-banner .captcha-problem {
+  margin-top: 0.6rem;
+  font-family: var(--font);
+  font-weight: 900;
+  font-size: 2.2rem;
+  color: var(--navy);
+  line-height: 1.1;
+}
+#captcha-banner .captcha-input {
+  margin-top: 0.7rem;
+  width: 100%;
+  max-width: 9rem;
+  padding: 0.5rem 0.6rem;
+  font-family: var(--font);
+  font-weight: 800;
+  font-size: 1.4rem;
+  text-align: center;
+  color: var(--navy);
+  background: #ffffff;
+  border: 2px solid var(--hairline);
+  border-radius: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+#captcha-banner .captcha-input:focus {
+  outline: none;
+  border-color: var(--yellow);
+}
+#captcha-banner .captcha-countdown {
+  margin-top: 0.4rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--navy-mute);
+  font-variant-numeric: tabular-nums;
+  min-height: 1.2em;
+}
 @keyframes finish-pop {
   0%   { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
   70%  { transform: translate(-50%, -50%) scale(1.06); opacity: 1; }

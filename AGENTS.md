@@ -111,8 +111,10 @@ When changing dependencies:
 tests) and then `vitest run` (Worker routes and Durable Objects, against real
 bindings via `@cloudflare/vitest-pool-workers`). A test file's directory decides
 which runner claims it — see `vitest.config.js` `include`/`exclude` and
-`docs/testing.md`. Each Worker test file gets its own ephemeral D1, built from
-`migrations/` — see below.
+`docs/testing.md`; pure-helper files under `server/` (`room-stats.test.js`,
+`captcha.test.js`) are claimed by `node --test` via the explicit list in
+`package.json` and must stay in vitest's `exclude`. Each Worker test file gets
+its own ephemeral D1, built from `migrations/` — see below.
 
 The client race runners are tested under `node:test`'s `mock.timers`
 (`public/src/runner.test.js`, `remote-runner.test.js`). One trap: `tick(ms)`
@@ -120,6 +122,83 @@ fires only the timers already due when it is called, not a timer a callback
 chains after itself, so a countdown or bot schedule has to be walked one tick
 at a time. `requestAnimationFrame` does not exist under Node; the remote-runner
 test installs a queue-and-flush shim on `globalThis` for the bot ticker.
+
+`getConnections()` is an **iterator**, not an array — partyserver walks the
+hibernating sockets lazily — so array methods on it throw at runtime. Room test
+stubs must return one (`connectionIterator()` in `server/room-captcha.test.js`);
+a stub that hands back the array itself makes `.find`/`.filter` look fine in CI
+and break in production.
+
+Room tests answer with zero typing delay, which finishes races in single-digit
+milliseconds — under the captcha trigger (below) whenever the race is the
+standard ten problems. Suites that assert on persisted rows from a ten-problem
+race backdate `state.raceStartedAt` after the countdown to a human pace
+(`server/room-captcha.test.js` shows the pattern).
+
+## Active verification: the superhuman-pace captcha
+
+The captain's chosen anti-cheat direction is active verification, not tighter
+passive bounds: the flat 200 ms floor stays, and a server-timed finish faster
+than `CAPTCHA_TRIGGER_MS_PER_PROBLEM` (500 ms/problem; evidence in the constant's
+comment in `worker/plausibility.js`) makes the room hold that racer's row and
+offer 3 fresh arithmetic problems via a targeted `captcha` message, with
+`CAPTCHA_PROBLEM_COUNT × CAPTCHA_MS_PER_PROBLEM` (12 s) to answer all three.
+Only the standard ten-problem race is ever challenged — `needsCaptchaTrigger`
+gates on `CANONICAL_RACE_LENGTH`, because that rate is what the evidence covers
+and what a leaderboard ranks; a five-problem private room is fast for honest
+reasons and has no board to reach. Pass → the row inserts normally; wrong answer
+or deadline → `insertRaceResult` is called with a plausibility override storing
+`suspect=1`/`captcha_*`, which excludes the row from leaderboards and
+recent-finishes through the existing `suspect = 0` predicates. Never a ban.
+
+**A challenge belongs to the racer who earned it, not to the race.** That is the
+whole shape of the lifecycle, and every part of it follows:
+
+- It is issued in `handleAnswer` the moment that racer's `finishMs` is stamped,
+  so the budget runs from *their* finish. Issuing at race end would aim the
+  clock at whoever waited longest for the stragglers — which is always the fast
+  racer the feature exists to check.
+- Only their own answers or their own deadline settle it. `handleRematch`,
+  `removePlayer` and a room reset all leave it alone; `resetForRace` explicitly
+  does not clear `captchaChallenges`. A host must not be able to fail a guest's
+  verification by clicking Race Again.
+- It is self-contained: the challenge carries the `difficulty` it was drawn at
+  and the row payload itself, so nothing the room does later can change what it
+  grades or stores.
+- **Issuing it transfers ownership of that race's row, permanently.**
+  `issueCaptchaChallenge` sets `player.resultHeld`, and `persistRaceResults` /
+  `PublicRaceRoom.persistResults` skip on that flag — never on "a challenge is
+  still open". Because the challenge opens at the racer's own finish, it
+  normally settles (and deletes itself) *before* `finishRace()` runs, so a guard
+  that reads the live challenge map lets the race end write a second row — and
+  on the timeout path that second row goes through `assessPlausibility`, comes
+  out `suspect = 0`, and puts an unverified finish straight onto the board.
+  `resetForRace` clears the flag with the other per-race player fields, and
+  `publicPlayer()` strips it.
+- Client-side it is a room-lifetime overlay (`captcha-ui.js` over
+  `captcha-session.js`), attached in `enterRoom` and mounted on `document.body`,
+  never inside the race screen. `handleHello` re-offers a pending challenge on
+  every reconnect, and that is only useful if the listener survives a full page
+  reload onto the room lobby.
+
+Other invariants that are easy to break:
+
+- Answers never leave the DO: the challenge stores a seed; problems regenerate
+  from it for grading (`server/captcha.js`). The `captcha` wire message carries
+  `problem` strings only — unlike `race-start`, which ships the full sequence.
+- `state.captchaChallenges` is server-only: `publicState()` strips it like the
+  player fields.
+- A challenge is keyed to its seat (resolved through `playerFor`) and
+  single-use (`resolveCaptchaChallenge` deletes it).
+- Bots never verify: `issueCaptchaChallenge` skips them, which matters because
+  quickmatch bot timelines can sit inside the trigger zone.
+- The `captcha` message carries `remainingMs`, not the absolute deadline: the
+  client's clock is not the DO's, and a re-offer has to show what is left of the
+  original budget rather than restarting it.
+- The plausibility override is a named third argument to `insertRaceResult`, not
+  a payload field. `payload` is built from a request body on the solo path, so
+  an override read off it would be one `{...body}` away from letting a client
+  clear its own suspect flag.
 
 ## `public/` has no build step
 

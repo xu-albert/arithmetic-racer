@@ -12,7 +12,8 @@
 // A row reaches the feed only if all of these hold:
 //
 //   room_id IS NOT NULL                  — the race happened in a room.
-//   suspect = 0                          — plausibility bounds cleared.
+//   suspect = 0                          — not flagged (bounds cleared, and any
+//                                          captcha challenge passed).
 //   finished = 1 AND finish_time_ms > 0  — there is a finish to report.
 //
 // `room_id IS NOT NULL` is the load-bearing one. Solo / Quickplay results are
@@ -31,7 +32,9 @@
 // not a reason to drop Quick Match, which is where most of the liveness is.
 //
 // `suspect = 0` per migrations/0007_race_results_suspect.sql: an implausible
-// race is kept as evidence but must not be shown as a finish.
+// race — or one whose racer failed or ignored the superhuman-pace captcha
+// (worker/plausibility.js, server/captcha.js) — is kept as evidence but must
+// not be shown as a finish.
 //
 // ── Anonymous racers ARE included ───────────────────────────────────────────
 //
