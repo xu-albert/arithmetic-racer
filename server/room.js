@@ -30,9 +30,8 @@ export const ROOM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // public/src/runner.js). There the grace is armed by the human's own finish, so
 // the only racers it ever cuts off are bots. Here they are people, so the window
 // is scaled to the race rather than to the leader's reaction time: roughly a
-// second race's worth of extra time, with a floor for the shortest rooms.
+// second race's worth of extra time, however long that race is.
 export const RACE_GRACE_MS_PER_PROBLEM = 6 * 1000;
-export const RACE_GRACE_MIN_MS = 30 * 1000;
 
 // Ceiling on a whole race, measured from raceStartedAt. The grace above only
 // arms when somebody finishes; a race where nobody ever does — every human idle,
@@ -43,7 +42,7 @@ export const RACE_MAX_MS_PER_PROBLEM = 60 * 1000;
 
 /** The post-first-finisher grace for a race of `raceLength` problems. */
 export function raceGraceMs(raceLength) {
-  return Math.max(RACE_GRACE_MIN_MS, RACE_GRACE_MS_PER_PROBLEM * (raceLength ?? 0));
+  return RACE_GRACE_MS_PER_PROBLEM * raceLength;
 }
 
 // A private room that sees no activity for this long winds down: its state is
@@ -1043,7 +1042,7 @@ export class RaceRoom extends Server {
   raceDeadlineAt() {
     if (this.state.state !== 'racing') return null;
     const deadlines = [];
-    if (this.state.graceDeadline != null) deadlines.push(this.state.graceDeadline);
+    if (Number.isFinite(this.state.graceDeadline)) deadlines.push(this.state.graceDeadline);
     // Both operands checked: a NaN deadline would reach setAlarm() and throw,
     // and a room persisted by an old enough build is not guaranteed to carry a
     // raceLength.

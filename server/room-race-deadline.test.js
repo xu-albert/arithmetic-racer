@@ -21,7 +21,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 
 import {
-  RACE_GRACE_MIN_MS,
+  MAX_RACE_LENGTH,
+  MIN_RACE_LENGTH,
   RACE_GRACE_MS_PER_PROBLEM,
   RACE_MAX_MS_PER_PROBLEM,
   raceGraceMs,
@@ -249,11 +250,12 @@ describe("private room — the post-first-finisher grace", () => {
     });
   });
 
-  it("scales the window with the race and floors it for the shortest rooms", () => {
-    expect(raceGraceMs(10)).toBe(RACE_GRACE_MS_PER_PROBLEM * 10);
-    expect(raceGraceMs(50)).toBe(RACE_GRACE_MS_PER_PROBLEM * 50);
-    // 5 problems × 6s is under the floor.
-    expect(raceGraceMs(5)).toBe(RACE_GRACE_MIN_MS);
+  it("scales the window with the race length across every legal room", () => {
+    for (const len of [MIN_RACE_LENGTH, 10, MAX_RACE_LENGTH]) {
+      expect(raceGraceMs(len)).toBe(RACE_GRACE_MS_PER_PROBLEM * len);
+    }
+    // Nothing flattens the short end: half the race, half the window.
+    expect(raceGraceMs(MIN_RACE_LENGTH * 2)).toBe(raceGraceMs(MIN_RACE_LENGTH) * 2);
   });
 });
 
