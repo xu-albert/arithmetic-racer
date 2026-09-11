@@ -20,6 +20,32 @@ export const IDLE_CLEANUP_MS = 5 * 60 * 1000;
 export const RECONNECT_GRACE_MS = 30 * 1000;
 export const ROOM_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
+// Once the first racer crosses the line the race has a deadline: everyone still
+// answering gets this long before finishRace() marks them dnf. This is the rule
+// docs/phase-6-private-rooms-plan.md specified and main shipped without, and
+// without it a racer who simply stops answering holds the room — and everyone
+// who already finished — open indefinitely.
+//
+// The value deliberately differs from the solo game's GRACE_PERIOD_MS (5s, in
+// public/src/runner.js). There the grace is armed by the human's own finish, so
+// the only racers it ever cuts off are bots. Here they are people, so the window
+// is scaled to the race rather than to the leader's reaction time: roughly a
+// second race's worth of extra time, with a floor for the shortest rooms.
+export const RACE_GRACE_MS_PER_PROBLEM = 6 * 1000;
+export const RACE_GRACE_MIN_MS = 30 * 1000;
+
+// Ceiling on a whole race, measured from raceStartedAt. The grace above only
+// arms when somebody finishes; a race where nobody ever does — every human idle,
+// or every socket half-live — needs its own bound, and public rooms have no idle
+// winddown to fall back on. Generous on purpose: a minute per problem is an order
+// of magnitude slower than any real racer, so only a dead race reaches it.
+export const RACE_MAX_MS_PER_PROBLEM = 60 * 1000;
+
+/** The post-first-finisher grace for a race of `raceLength` problems. */
+export function raceGraceMs(raceLength) {
+  return Math.max(RACE_GRACE_MIN_MS, RACE_GRACE_MS_PER_PROBLEM * (raceLength ?? 0));
+}
+
 // A private room that sees no activity for this long winds down: its state is
 // replaced by a tombstone, its alarm is cleared, and everyone still attached is
 // sent to the "room expired" screen. "Activity" is any client touching the
@@ -95,6 +121,8 @@ export function freshState(id) {
     players: [],
     problemSequence: [],
     raceStartedAt: null,
+    // When the post-first-finisher grace expires, or null until somebody
+    // finishes. Armed by armRaceGrace(); enforced through raceDeadlineAt().
     graceDeadline: null,
     countdownN: null,
     countdownAt: null,
@@ -440,7 +468,17 @@ export class RaceRoom extends Server {
       }
     }
 
-    // Grace deadline removed — each player finishes at their own pace.
+    // Race deadline. Two bounds share this branch, both derived in
+    // raceDeadlineAt(): the grace the first finisher opened, and the ceiling on
+    // a race nobody has finished at all. Either way finishRace() marks whoever
+    // is still racing dnf, persists every row and hands the room to the normal
+    // cleanup path. Deliberately after the countdown tick above, so a race that
+    // only just started is never judged in the same wake-up that began it.
+    const raceDeadline = this.raceDeadlineAt();
+    if (raceDeadline != null && raceDeadline <= now) {
+      await this.finishRace();
+      mutated = true;
+    }
 
     // Idle cleanup.
     if (this.state.idleCleanupAt != null && this.state.idleCleanupAt <= now && this.state.players.length === 0) {
@@ -657,6 +695,10 @@ export class RaceRoom extends Server {
       this.broadcast(JSON.stringify({
         type: 'advance', playerId: player.id, score: player.score, finishMs: player.finishMs,
       }));
+
+      // The first finish puts the race on a clock: from here the stragglers have
+      // raceGraceMs() and then the race ends with or without them.
+      if (player.finishMs != null) this.armRaceGrace();
 
       // Verification starts here, at this racer's own finish, not at race end:
       // the fast racer is by construction the one who then waits longest for
@@ -981,6 +1023,37 @@ export class RaceRoom extends Server {
   }
 
   /**
+   * Open the post-first-finisher window, if it is not already open. The first
+   * finisher owns it: a later one must not push the deadline out, or a racer
+   * finishing every few seconds would extend the wait without limit.
+   */
+  armRaceGrace() {
+    if (this.state.state !== 'racing') return;
+    if (this.state.graceDeadline != null) return;
+    this.state.graceDeadline = Date.now() + raceGraceMs(this.state.raceLength);
+  }
+
+  /**
+   * When this race ends regardless of who is still answering, or null outside a
+   * race. The earlier of the grace the first finisher opened and the hard
+   * ceiling on the race as a whole. Read by both onAlarm (to enforce) and
+   * scheduleNextAlarm (to wake for it); gated on 'racing' so a stale
+   * graceDeadline can never schedule an alarm or end a race twice.
+   */
+  raceDeadlineAt() {
+    if (this.state.state !== 'racing') return null;
+    const deadlines = [];
+    if (this.state.graceDeadline != null) deadlines.push(this.state.graceDeadline);
+    // Both operands checked: a NaN deadline would reach setAlarm() and throw,
+    // and a room persisted by an old enough build is not guaranteed to carry a
+    // raceLength.
+    if (Number.isFinite(this.state.raceStartedAt) && Number.isFinite(this.state.raceLength)) {
+      deadlines.push(this.state.raceStartedAt + RACE_MAX_MS_PER_PROBLEM * this.state.raceLength);
+    }
+    return deadlines.length > 0 ? Math.min(...deadlines) : null;
+  }
+
+  /**
    * Hook: returns true when the race should be ended. Default implementation
    * counts every player. PublicRaceRoom overrides this to ignore bots.
    */
@@ -1097,6 +1170,8 @@ export class RaceRoom extends Server {
     if (this.state.idleCleanupAt != null) candidates.push(this.state.idleCleanupAt);
     for (const dl of Object.values(this.state.disconnectDeadlines)) candidates.push(dl);
     for (const ch of Object.values(this.state.captchaChallenges ?? {})) candidates.push(ch.deadline);
+    const raceDeadline = this.raceDeadlineAt();
+    if (raceDeadline != null) candidates.push(raceDeadline);
     for (const dl of this.extraAlarmDeadlines()) if (dl != null) candidates.push(dl);
     // Re-derived from lastActivityAt on every call, so each bump of the idle
     // clock pushes the winddown alarm out with it.

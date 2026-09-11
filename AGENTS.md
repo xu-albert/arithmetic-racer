@@ -46,8 +46,8 @@ frame, and paying a durable `setAlarm` for each one is what that skip avoids.
 An alarm firing up to a slop window early costs a wake-up, nothing more —
 `onAlarm()` re-derives its deadlines and reschedules. Rooms without an idle
 clock (public) keep writing every changed deadline exactly, since they only
-move one a few times per match. Three timers now run side by side, and they are
-deliberately different mechanisms:
+move one a few times per match. Several timers now run side by side, and they
+are deliberately different mechanisms:
 
 - **Reconnect grace** (30s) and **empty-room cleanup** (5 min) — unchanged, and
   the cleanup still re-mints state, which is what resets `nextPid`.
@@ -57,8 +57,14 @@ deliberately different mechanisms:
   nobody is answering is idle. It ends in `expireRoom()`: state becomes an
   `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped, and everyone attached
   gets `room-expired` and a closed socket.
+- **Race deadline** — `raceDeadlineAt()`, both rooms. `isRaceComplete()` alone
+  never ends a race a connected racer refuses to finish, so two bounds back it:
+  the grace the *first* finisher arms (`armRaceGrace()`, value `raceGraceMs()`)
+  and a ceiling on the race as a whole (`RACE_MAX_MS_PER_PROBLEM`) for the race
+  nobody finishes at all. Either fires `finishRace()` — the ordinary ending,
+  dnf included — so there is no separate timeout path to keep in step.
 
-Two traps this arrangement sets:
+Traps this arrangement sets:
 
 - **The alarm time is durable; the timestamp behind it is not.** Bumping
   `lastActivityAt` without persisting means a DO evicted before its alarm wakes
@@ -67,7 +73,16 @@ Two traps this arrangement sets:
 - **`PublicRaceRoom.expiresWhenIdle()` returns false**, and everything winddown
   reads that hook. Quickmatch rooms are single-shot and unlinkable — expiring
   one would strand a player on a screen whose only exit is a room they cannot
-  reach. Gate any new lifecycle behavior on the same hook.
+  reach. Gate any new lifecycle behavior on the same hook. It is also why the
+  race deadline above is not gated on it: quickmatch has no winddown to fall
+  back on, so it is the only thing bounding a public race.
+- **The race grace is not the solo game's `GRACE_PERIOD_MS`** (5s, in
+  `public/src/runner.js`). That one is armed by the human's own finish, so the
+  racers it cuts off are always bots; in a room they are people, and
+  `raceGraceMs()` is scaled to the race length instead. Keep them separate.
+  Arming is driven by `handleAnswer`, so bots — which never answer — neither
+  arm nor are held by the window, matching `isRaceComplete()`'s human-only view
+  in public rooms. Coverage: `server/room-race-deadline.test.js`.
 
 For a private room the 5-minute cleanup no longer deletes DO storage — it
 re-mints state and persists it, carrying the idle clock forward — so an expired
