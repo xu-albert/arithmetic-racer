@@ -14,7 +14,7 @@
 // it is not exercised here — it needs the full lobby DOM and a real PartySocket.
 // Its gate is the `youAre` condition in public/src/lobby.js.
 
-import { test, describe, beforeEach, afterEach } from 'node:test';
+import { test, describe, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRemoteRunner } from './remote-runner.js';
 import { attachRaceUI } from './ui.js';
@@ -91,6 +91,7 @@ beforeEach(() => {
   globalThis.window = { addEventListener: () => {}, removeEventListener: () => {} };
 });
 afterEach(() => {
+  mock.timers.reset();
   delete globalThis.document;
   delete globalThis.window;
 });
@@ -114,7 +115,11 @@ function racingState(extra = {}) {
 
 /** What main.js's handleRoomRaceStart does once the lobby hands a snapshot over. */
 function openRaceScreen(state, youAre = ME) {
-  const roomClient = { on: () => () => {}, send: () => {} };
+  const listeners = new Set();
+  const roomClient = {
+    on: (h) => { listeners.add(h); return () => listeners.delete(h); },
+    send: () => {},
+  };
   const screens = { race: fakeEl(), results: fakeEl() };
   const runner = createRemoteRunner({ roomClient, initialState: state, youAre });
   const cleanup = attachRaceUI({ runner, raceLength: state.raceLength, screens });
@@ -122,10 +127,13 @@ function openRaceScreen(state, youAre = ME) {
   return {
     runner,
     cleanup,
+    // What the room would push over the socket.
+    receive: (msg) => { for (const l of [...listeners]) l(msg); },
     input: dom.el('answer-input'),
     score: dom.el('score'),
     banner: dom.el('finish-banner'),
     bannerPlace: dom.el('finish-banner').querySelector('.finish-banner-place'),
+    bannerTime: dom.el('finish-banner').querySelector('.finish-banner-time'),
     laneFor,
     // Each lane holds a handle, the car and the finish line; the car is what
     // carries --progress and the victory class.
@@ -195,6 +203,27 @@ describe('the finish banner', () => {
 
     assert.equal(screen.bannerPlace.textContent, '2nd place');
     assert.equal(screen.banner.classList.contains('first-place'), false);
+  });
+
+  test('settles on the place and time the room measured, not this browser\'s clock', () => {
+    // Live path, no reconnect. The room started the race at 10_000 on its own
+    // clock and this browser's is 10s behind it, so the elapsed the browser
+    // computes for the player (-3s) sorts them ahead of an opponent who
+    // really beat them to the line.
+    mock.timers.enable({ apis: ['Date'], now: 7_000 });
+    const screen = openRaceScreen(racingState({
+      players: [player('p-1'), player(ME, { score: SEQ.length - 1 })],
+    }));
+
+    screen.receive({ type: 'advance', playerId: 'p-1', score: SEQ.length, finishMs: 6_000 });
+    screen.runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    screen.receive({ type: 'advance', playerId: ME, score: SEQ.length, finishMs: 7_000 });
+
+    assert.equal(screen.bannerPlace.textContent, '2nd place');
+    assert.equal(screen.bannerTime.textContent, '7.00s');
+    assert.equal(screen.banner.classList.contains('first-place'), false);
+    assert.equal(screen.carFor('player').classList.contains('victory'), false,
+      'a win the skewed clock briefly claimed has to come back off');
   });
 
   test('a player who answers their way to the line still sees 1st on the live path', () => {

@@ -97,6 +97,10 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   // they are the newest finisher. That holds when the banner fires from their
   // own answer, and not when a reconnect replays a finish that others have
   // already raced past — so count the finishers at or before them instead.
+  //
+  // Repaintable, because in a room race it is painted twice: once from the
+  // optimistic finish, then again from the time the room stamped. Every class
+  // it sets has to come back off if the second paint disagrees.
   function showFinishBanner() {
     const place = runner.racers.filter(
       (r) => r.finishMs != null && r.finishMs <= playerRacer.finishMs,
@@ -107,9 +111,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     finishBanner.classList.remove('hidden');
     finishBanner.classList.toggle('first-place', place === 1);
     const playerCar = carEls.get('player');
-    if (playerCar && place === 1) {
-      playerCar.classList.add('victory');
-    }
+    if (playerCar) playerCar.classList.toggle('victory', place === 1);
   }
 
   function renderPodium() {

@@ -205,15 +205,21 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       case 'advance': {
         const r = findRacer(msg.playerId);
         if (!r) break;
-        // Suppress the local player's server-driven advance — we already
-        // applied it optimistically in submitAnswer. Only reconcile if the
-        // server is ahead of us (e.g. a dropped optimistic frame), in which
-        // case server wins.
+        // Mostly the server's echo of what submitAnswer already applied
+        // optimistically, and suppressed as such. Two things still come back
+        // from the server: a score it is ahead on (a dropped optimistic
+        // frame), and `finishMs` — which is the only finish time here measured
+        // on the room's clock. The optimistic one is `Date.now()` minus a
+        // *server* timestamp, so it carries this browser's clock skew, and it
+        // is ranked against opponents' times the room stamped itself.
         if (r.id === PLAYER_ALIAS) {
-          if (msg.score > r.score) {
-            r.score = msg.score;
-            if (msg.finishMs != null) r.finishMs = msg.finishMs;
-            emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
+          const ahead = msg.score > r.score;
+          const restamped = msg.finishMs != null && msg.finishMs !== r.finishMs;
+          if (!ahead && !restamped) break;
+          if (ahead) r.score = msg.score;
+          if (msg.finishMs != null) r.finishMs = msg.finishMs;
+          emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
+          if (ahead) {
             const next = sequence[r.score] ?? null;
             if (next) emit('problem', { problem: next });
           }
@@ -286,6 +292,8 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       if (!problem) return { correct: true };
       if (validateAnswer(problem, raw)) {
         me.score += 1;
+        // Provisional, and on this browser's clock: the room restamps it on
+        // its own the moment its `advance` echoes back.
         if (me.score >= raceLength && me.finishMs == null && raceStartedAtMs != null) {
           me.finishMs = Date.now() - raceStartedAtMs;
         }

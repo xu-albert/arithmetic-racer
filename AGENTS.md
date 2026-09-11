@@ -117,7 +117,10 @@ any message the room sends exactly once at a transition has to be reconstructibl
 from `publicState()`. `race-start` and `bot-timelines` are both sent once at the
 countdown→racing edge, and `createRemoteRunner` rebuilds both from a `racing`
 snapshot (`public/src/remote-runner.js`) — without that the race screen stays on
-its initial paint: input disabled, every car at the line, score 0.
+its initial paint: input disabled, every car at the line, score 0. That rebuild
+covers a *newly constructed* runner only: a PartySocket auto-reconnect mid-race
+reuses the existing one, so `beginRace()` no-ops and the snapshot is applied to
+`runner.racers` in place, emitting nothing.
 
 The client's own handoff order is the trap, twice over.
 

@@ -400,6 +400,27 @@ describe('server advance reconciliation', () => {
     assert.equal(runner.racers.find((r) => r.id === 'player').score, 2);
   });
 
+  test("the room's finish time replaces the optimistic one, which carries this browser's clock skew", () => {
+    // The room started the race at 10_000 on its own clock; this browser's is
+    // 10s behind it, so the elapsed it computes for itself comes out negative
+    // — and it gets ranked against times the room stamped.
+    mock.timers.enable({ apis: ['Date'], now: 7_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    startRace(client, 10_000);
+    for (const p of SEQ) runner.submitAnswer(String(p.answer));
+    const me = runner.racers.find((r) => r.id === 'player');
+    assert.equal(me.finishMs, -3_000, 'the optimistic stamp mixes the two clocks');
+
+    const events = record(runner);
+    client.receive({ type: 'advance', playerId: ME, score: SEQ.length, finishMs: 7_000 });
+
+    assert.equal(me.finishMs, 7_000);
+    assert.deepEqual(events, [
+      { event: 'advance', data: { racerId: 'player', score: SEQ.length, finishMs: 7_000 } },
+    ]);
+  });
+
   test("an opponent's advance is applied from the server and carries their finishMs", () => {
     const client = fakeRoomClient();
     const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
