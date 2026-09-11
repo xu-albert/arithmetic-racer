@@ -70,8 +70,21 @@ function fakeEl(tag = 'div') {
   return el;
 }
 
+// The bot ticker runs on requestAnimationFrame, which Node does not have:
+// frames queue here and run only when a test flushes them, which is also how a
+// background tab's throttling is reproduced.
+let frames;
+let nextFrameId;
 let dom;
 beforeEach(() => {
+  frames = new Map();
+  nextFrameId = 1;
+  globalThis.requestAnimationFrame = (fn) => {
+    const id = nextFrameId++;
+    frames.set(id, fn);
+    return id;
+  };
+  globalThis.cancelAnimationFrame = (id) => { frames.delete(id); };
   const byId = new Map();
   dom = {
     el(id) {
@@ -94,7 +107,15 @@ afterEach(() => {
   mock.timers.reset();
   delete globalThis.document;
   delete globalThis.window;
+  delete globalThis.requestAnimationFrame;
+  delete globalThis.cancelAnimationFrame;
 });
+
+function flushFrame() {
+  const pending = [...frames.values()];
+  frames.clear();
+  for (const fn of pending) fn();
+}
 
 // --- the room, as the server puts it on the wire ----------------------------
 
@@ -224,6 +245,50 @@ describe('the finish banner', () => {
     assert.equal(screen.banner.classList.contains('first-place'), false);
     assert.equal(screen.carFor('player').classList.contains('victory'), false,
       'a win the skewed clock briefly claimed has to come back off');
+  });
+
+  test('counts the bots that were already home when Quick Match is reloaded', () => {
+    // Quick Match. The room holds every bot at score 0 / finishMs null until it
+    // finalizes them, so the snapshot a reloading finisher gets shows no bot
+    // ahead of them; only the timelines it ships do. Elapsed is 7s, the bot
+    // crossed at 3s and the room stamped this player at 5s.
+    mock.timers.enable({ apis: ['Date'], now: 17_000 });
+    const screen = openRaceScreen(racingState({
+      players: [
+        player('bot-1', { isBot: true, tier: 'fast' }),
+        player(ME, { score: SEQ.length, finishMs: 5_000 }),
+        player('p-1', { score: 1 }),
+      ],
+      botTimelines: [[1_000, 2_000, 3_000]],
+    }));
+
+    assert.equal(screen.bannerPlace.textContent, '2nd place');
+    assert.equal(screen.banner.classList.contains('first-place'), false);
+    assert.equal(screen.carFor('player').classList.contains('victory'), false);
+    assert.equal(screen.carFor('bot-1').style.props['--progress'], '1',
+      'the bot is replayed at the line, not left at the start');
+  });
+
+  test('repaints when a finish that beat the player lands after the banner is up', () => {
+    // The bot ticker runs on requestAnimationFrame, which a background tab
+    // throttles hard: a bot can cross the line seconds before the frame that
+    // reports it, and that frame can land after the player's own finish.
+    mock.timers.enable({ apis: ['Date'], now: 10_000 });
+    const screen = openRaceScreen(racingState({
+      players: [player('bot-1', { isBot: true, tier: 'fast' }), player(ME, { score: SEQ.length - 1 })],
+      botTimelines: [[500, 1_000, 2_000]],
+    }));
+
+    mock.timers.setTime(13_000);
+    screen.runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    assert.equal(screen.bannerPlace.textContent, '1st place', 'nothing on screen says otherwise yet');
+    assert.equal(screen.carFor('player').classList.contains('victory'), true);
+
+    flushFrame();
+
+    assert.equal(screen.bannerPlace.textContent, '2nd place');
+    assert.equal(screen.banner.classList.contains('first-place'), false);
+    assert.equal(screen.carFor('player').classList.contains('victory'), false);
   });
 
   test('a player who answers their way to the line still sees 1st on the live path', () => {

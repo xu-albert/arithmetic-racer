@@ -98,9 +98,10 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   // own answer, and not when a reconnect replays a finish that others have
   // already raced past — so count the finishers at or before them instead.
   //
-  // Repaintable, because in a room race it is painted twice: once from the
-  // optimistic finish, then again from the time the room stamped. Every class
-  // it sets has to come back off if the second paint disagrees.
+  // Repaintable, because in a room race it is painted more than once: from the
+  // optimistic finish, again from the time the room stamped, and again for
+  // every finish that lands behind this player's own. Every class it sets has
+  // to come back off if a later paint disagrees.
   function showFinishBanner() {
     const place = runner.racers.filter(
       (r) => r.finishMs != null && r.finishMs <= playerRacer.finishMs,
@@ -189,6 +190,12 @@ export function attachRaceUI({ runner, raceLength, screens }) {
           showFinishBanner();
         }
         updateQueue();
+      } else if (data.finishMs != null && playerRacer.finishMs != null) {
+        // Somebody else reached the line after this player's banner was
+        // painted. If they got there first — a bot the client is still
+        // catching up, an opponent whose finish the socket delivered late —
+        // the place on screen is now one too good.
+        showFinishBanner();
       }
       if (podium.childElementCount > 0) renderPodium();
     } else if (event === 'wrong') {

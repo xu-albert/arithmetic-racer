@@ -561,6 +561,44 @@ describe('bot timelines (Quick Match)', () => {
     runner.stop();
   });
 
+  test('a reload replays the bots where their timelines already put them, not at the line', () => {
+    // The room keeps every bot row at score 0 / finishMs null until it
+    // finalizes them at race end, so a mid-race snapshot says nothing about a
+    // bot that is already home. The timelines it carries do, and the replay has
+    // to read them before it announces anything: the race screen ranks the
+    // local player against whatever it can see at that moment.
+    mock.timers.enable({ apis: ['Date'], now: 17_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: botState({
+        state: 'racing',
+        problemSequence: SEQ,
+        raceStartedAt: 10_000,
+        botTimelines: TIMELINE,
+        players: [
+          player('p-1', { score: 1 }),
+          player(ME, { score: SEQ.length, finishMs: 5_000 }),
+          player('bot-1', { isBot: true, tier: 'fast' }),
+        ],
+      }),
+      youAre: ME,
+    });
+
+    // Everything below is the replay, before a single animation frame has run.
+    const events = record(runner);
+    assert.deepEqual(events, [
+      { event: 'start', data: { problem: null } },
+      { event: 'advance', data: { racerId: 'p-1', score: 1, finishMs: null } },
+      { event: 'advance', data: { racerId: 'player', score: SEQ.length, finishMs: 5_000 } },
+      { event: 'advance', data: { racerId: 'bot-1', score: SEQ.length, finishMs: 3_000 } },
+    ]);
+
+    flushFrame();
+    assert.equal(events.length, 4, 'the frame that follows has nothing left to announce');
+    runner.stop();
+  });
+
   test('snapshots do not overwrite a bot score the client is driving', () => {
     mock.timers.enable({ apis: ['Date'], now: 10_000 });
     const client = fakeRoomClient();

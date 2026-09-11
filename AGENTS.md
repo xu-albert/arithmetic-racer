@@ -122,6 +122,14 @@ covers a *newly constructed* runner only: a PartySocket auto-reconnect mid-race
 reuses the existing one, so `beginRace()` no-ops and the snapshot is applied to
 `runner.racers` in place, emitting nothing.
 
+Bots are the sharpest case of that rebuild, because they have no snapshot state
+at all: `PublicRaceRoom` holds every bot row at `score: 0, finishMs: null` until
+`finishRace()` finalizes it, so mid-race bot progress exists only on the client,
+derived from the timelines. The replay therefore catches them up from
+`botTimelines` before it emits anything — the race screen ranks the local player
+against whatever `runner.racers` says at that moment, and a bot still on the
+start line is a first place the player did not earn.
+
 The client's own handoff order is the trap, twice over.
 
 `attachLobby` constructs the runner and only then hands it to `attachRaceUI`, so

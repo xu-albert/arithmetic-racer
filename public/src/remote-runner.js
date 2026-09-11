@@ -62,24 +62,39 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   let botTimelines = null;
   let botRafId = null;
 
-  function tickBots() {
-    if (!botTimelines || stopped) return;
-    const elapsed = Date.now() - raceStartedAtMs;
-    let anyRunning = false;
+  // Move every bot to where its timeline puts it at `elapsed` and hand back the
+  // ones that moved. Mutating and announcing are separate because a bot's
+  // progress only exists on the client: the room keeps every bot row at score 0
+  // until it finalizes them, so a snapshot replay has to catch them up from the
+  // timelines before it paints anything that ranks the racers against them.
+  function catchUpBots(elapsed) {
+    const moved = [];
+    if (!botTimelines) return moved;
     for (let i = 0; i < botTimelines.length; i++) {
       const bot = racers.find((r) => r.id === `bot-${i + 1}`);
       if (!bot || bot.finishMs != null || bot.dropped || bot.dnf) continue;
       const newScore = scoreBotAt(botTimelines[i], elapsed);
-      if (newScore !== bot.score) {
-        bot.score = newScore;
-        if (newScore >= raceLength && bot.finishMs == null) {
-          bot.finishMs = botTimelines[i][raceLength - 1];
-        }
-        emit('advance', { laneId: bot.id, score: bot.score, finishMs: bot.finishMs });
-      }
-      if (bot.finishMs == null) anyRunning = true;
+      if (newScore === bot.score) continue;
+      bot.score = newScore;
+      if (newScore >= raceLength) bot.finishMs = botTimelines[i][raceLength - 1];
+      moved.push(bot);
     }
-    if (anyRunning && !stopped) {
+    return moved;
+  }
+
+  function botStillRunning() {
+    return botTimelines.some((_, i) => {
+      const bot = racers.find((r) => r.id === `bot-${i + 1}`);
+      return bot && bot.finishMs == null && !bot.dropped && !bot.dnf;
+    });
+  }
+
+  function tickBots() {
+    if (!botTimelines || stopped) return;
+    for (const bot of catchUpBots(Date.now() - raceStartedAtMs)) {
+      emit('advance', { laneId: bot.id, score: bot.score, finishMs: bot.finishMs });
+    }
+    if (botStillRunning() && !stopped) {
       botRafId = requestAnimationFrame(tickBots);
     }
   }
@@ -108,6 +123,8 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // 0/N; 'start' is what unlocks it and 'advance' is what moves a car. A racer
   // who reloads mid-race therefore needs both replayed from the snapshot, or
   // they land on a live race they cannot type into with everyone at the line.
+  // Bots are part of that world and are not in the snapshot at all, so they are
+  // caught up first and then replayed alongside everyone else.
   //
   // `dropped` has to be replayed too, and it is the one field that gates the
   // start: a seat the room dropped (reconnect grace expired, or they quit) is
@@ -117,13 +134,14 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   function deliverStart() {
     if (startDelivered) return;
     startDelivered = true;
+    if (raceStartedAtMs != null) catchUpBots(Date.now() - raceStartedAtMs);
     const me = racers.find((r) => r.id === PLAYER_ALIAS);
     if (!me?.dropped) emit('start', { problem: currentProblemFor(PLAYER_ALIAS) });
     for (const r of racers) {
       if (r.score > 0 || r.finishMs != null) {
         emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
       }
-      if (r.dropped) emit('drop', { racerId: r.id });
+      if (r.dropped) emit('drop', { laneId: r.id });
     }
   }
 
