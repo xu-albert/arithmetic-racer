@@ -66,6 +66,16 @@ are deliberately different mechanisms:
 
 Traps this arrangement sets:
 
+- **A seat that carries a `finishMs` owns its result from that moment.** The
+  race end is now routinely minutes after a racer crosses the line, and quitting
+  or closing the tab in between must not rewrite their row: `dropRacer()` is the
+  only place `dropped` is set and refuses a finisher, and
+  `PublicRaceRoom.removePlayer` holds such a seat instead of splicing it, so
+  `finishRace()` can still build its payload. The hold is what makes that room's
+  `players.length === 0` cleanup gates lie, so `finishRace()` prunes `departed`
+  seats alongside the bots; `handleHello` clears the flag when the seat is
+  claimed again. Coverage: `server/room-race-deadline.test.js`.
+
 - **The alarm time is durable; the timestamp behind it is not.** Bumping
   `lastActivityAt` without persisting means a DO evicted before its alarm wakes
   with a stale clock and winds a live room down early. `flushActivity()` exists

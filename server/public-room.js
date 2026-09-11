@@ -238,8 +238,11 @@ export class PublicRaceRoom extends RaceRoom {
     // Strip bots from state.players so the human-count gates in onAlarm
     // (idle cleanup, 24h max-age) can actually fire once humans leave.
     // Without this, bots remain in players forever and the room's DO storage
-    // never gets reclaimed (bug_004).
-    this.state.players = this.state.players.filter((p) => !p.isBot);
+    // never gets reclaimed (bug_004). The seats removePlayer held past their
+    // socket's departure go the same way and for the same reason: their
+    // payloads are built above, so nothing needs them any more, and a seat
+    // with nobody behind it would hold this room's storage open just as well.
+    this.state.players = this.state.players.filter((p) => !p.isBot && !p.departed);
 
     // If no humans remain at finish time (rare: everyone DNF'd via disconnect),
     // schedule cleanup now. The base cleanup gates only fire from onAlarm.
@@ -293,9 +296,22 @@ export class PublicRaceRoom extends RaceRoom {
   async removePlayer(playerId) {
     const idx = this.state.players.findIndex((p) => p.id === playerId);
     if (idx < 0) return false;
+    const player = this.state.players[idx];
+    delete this.state.disconnectDeadlines[playerId];
+
+    // A seat that already crossed the line owns a result, and splicing it out
+    // here would delete that result before finishRace could write it — with a
+    // race deadline in play the race end is routinely minutes away, held open
+    // by exactly the racer this room refuses to wait on forever. Hold the seat
+    // as the base room holds a dropped one; finishRace prunes it once its row
+    // is built, so the empty-room gates below still see a real headcount.
+    if (this.state.state === 'racing' && player.finishMs != null) {
+      player.departed = true;
+      if (this.isRaceComplete()) this.finishRace();
+      return true;
+    }
 
     this.state.players.splice(idx, 1);
-    delete this.state.disconnectDeadlines[playerId];
     this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
 
     // Mid-race: treat removed unfinished player as drop for ranking.

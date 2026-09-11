@@ -124,6 +124,16 @@ async function rowsForRoom(room) {
   return res.results;
 }
 
+/** Close a seat's socket and let its 30s reconnection grace run out. */
+async function expireReconnectGrace(room, conn) {
+  const playerId = room.playerFor(conn).id;
+  await room.onClose(conn);
+  expect(room.state.disconnectDeadlines[playerId]).toBeGreaterThan(Date.now());
+  room.state.disconnectDeadlines[playerId] = Date.now() - 1;
+  await room.onAlarm();
+  expect(room.state.disconnectDeadlines[playerId]).toBeUndefined();
+}
+
 /** Force the pending race deadline into the past and let the alarm see it. */
 async function expireRaceDeadline(room) {
   const deadline = room.raceDeadlineAt();
@@ -289,6 +299,168 @@ describe("private room — the ceiling on a race nobody finishes", () => {
       const rows = await rowsForRoom(room);
       expect(rows).toHaveLength(2);
       expect(rows.every((r) => r.finished === 0)).toBe(true);
+    });
+  });
+});
+
+// The deadline is what puts a real gap between crossing the line and the race
+// ending, and the racer who crossed it first is the one staring at that gap —
+// so quitting or closing the tab while the stragglers answer is now the routine
+// thing to do. It must not cost them the race they just ran: `dropped` would
+// make buildRaceResultPayload write problems_correct=10, finished=0, and a
+// spliced seat would write nothing at all.
+describe("a racer who crossed the line keeps their finish", () => {
+  it("private room: quitting during the grace still records a finish", async () => {
+    const winner = makeConn("winner");
+    const idle = makeConn("idle");
+    await withPrivateRoom([winner, idle], async (room) => {
+      const winnerId = await join(room, winner, "Winner");
+      const idleId = await join(room, idle, "Idle");
+      await room.handleStartRace(winner);
+      await runCountdown(room);
+
+      await raceToFinish(room, [winner]);
+      expect(room.state.state).toBe("racing");
+
+      // Done, waiting on a racer who is not answering — so they leave.
+      await room.handleQuit(winner);
+      expect(room.state.state).toBe("racing");
+      expect(playerOf(room, winnerId).dropped).toBe(false);
+      expect(playerOf(room, winnerId).finishMs).toBeGreaterThan(0);
+
+      await expireRaceDeadline(room);
+      expect(room.state.state).toBe("finished");
+      expect(playerOf(room, winnerId).dnf).toBe(false);
+
+      const byDevice = Object.fromEntries((await rowsForRoom(room)).map((r) => [r.device_id, r]));
+      expect(byDevice["dev-Winner"].finished).toBe(1);
+      expect(byDevice["dev-Winner"].finish_time_ms).toBeGreaterThan(0);
+      expect(byDevice["dev-Winner"].problems_correct).toBe(room.state.raceLength);
+      // …and the racer who actually stalled is still the one marked unfinished.
+      expect(playerOf(room, idleId).dnf).toBe(true);
+      expect(byDevice["dev-Idle"].finished).toBe(0);
+    });
+  });
+
+  it("private room: a socket that closes during the grace still records a finish", async () => {
+    const winner = makeConn("winner");
+    const idle = makeConn("idle");
+    await withPrivateRoom([winner, idle], async (room) => {
+      const winnerId = await join(room, winner, "Winner");
+      await join(room, idle, "Idle");
+      await room.handleStartRace(winner);
+      await runCountdown(room);
+
+      await raceToFinish(room, [winner]);
+      await expireReconnectGrace(room, winner);
+
+      // Evicted, but the seat and its result are still here for the race end.
+      expect(room.state.state).toBe("racing");
+      expect(playerOf(room, winnerId).dropped).toBe(false);
+
+      await expireRaceDeadline(room);
+      expect(room.state.state).toBe("finished");
+
+      const byDevice = Object.fromEntries((await rowsForRoom(room)).map((r) => [r.device_id, r]));
+      expect(byDevice["dev-Winner"].finished).toBe(1);
+      expect(byDevice["dev-Winner"].finish_time_ms).toBeGreaterThan(0);
+    });
+  });
+
+  it("private room: a racer who had NOT finished is still dropped when they leave", async () => {
+    const host = makeConn("host");
+    const quitter = makeConn("quitter");
+    const leaver = makeConn("leaver");
+    await withPrivateRoom([host, quitter, leaver], async (room) => {
+      await join(room, host, "Host");
+      const quitterId = await join(room, quitter, "Quitter");
+      const leaverId = await join(room, leaver, "Leaver");
+      await room.handleStartRace(host);
+      await runCountdown(room);
+
+      await raceToFinish(room, [host]);
+      await answerCorrectly(room, quitter);
+
+      await room.handleQuit(quitter);
+      expect(playerOf(room, quitterId).dropped).toBe(true);
+      expect(room.state.state).toBe("racing");
+
+      // The last unfinished racer leaving completes the race on the spot —
+      // the deadline is a backstop, not the only way out.
+      await expireReconnectGrace(room, leaver);
+      expect(playerOf(room, leaverId).dropped).toBe(true);
+      expect(room.state.state).toBe("finished");
+
+      const byDevice = Object.fromEntries((await rowsForRoom(room)).map((r) => [r.device_id, r]));
+      expect(byDevice["dev-Host"].finished).toBe(1);
+      expect(byDevice["dev-Quitter"].finished).toBe(0);
+      expect(byDevice["dev-Quitter"].finish_time_ms).toBeNull();
+      expect(byDevice["dev-Quitter"].problems_correct).toBe(1);
+      expect(byDevice["dev-Leaver"].finished).toBe(0);
+    });
+  });
+
+  it("public quickmatch: the finisher's seat is held, so their row still lands", async () => {
+    const a = makeConn("a");
+    const b = makeConn("b");
+    await withPublicRoom([a, b], async (room, { settled }) => {
+      const aId = await join(room, a, "A", { difficulty: "medium" });
+      await join(room, b, "B", { difficulty: "medium" });
+      room.state.autoStartDeadline = Date.now() - 1;
+      await room.onAlarm();
+      await runCountdown(room);
+
+      await raceToFinish(room, [a]);
+      await expireReconnectGrace(room, a);
+
+      // This room splices departing seats; a finished one is held instead,
+      // because the race end that writes its row is still a grace away.
+      expect(room.state.state).toBe("racing");
+      expect(playerOf(room, aId)).not.toBeNull();
+      expect(playerOf(room, aId).dropped).toBe(false);
+
+      await expireRaceDeadline(room);
+      expect(room.state.state).toBe("finished");
+      await settled();
+
+      const rows = await rowsForRoom(room);
+      expect(rows).toHaveLength(2);
+      const byDevice = Object.fromEntries(rows.map((r) => [r.device_id, r]));
+      expect(byDevice["dev-A"].finished).toBe(1);
+      expect(byDevice["dev-A"].finish_time_ms).toBeGreaterThan(0);
+      expect(byDevice["dev-B"].finished).toBe(0);
+    });
+  });
+
+  it("public quickmatch: the held seat does not outlive the row it was held for", async () => {
+    const a = makeConn("a");
+    const b = makeConn("b");
+    await withPublicRoom([a, b], async (room, { settled }) => {
+      const aId = await join(room, a, "A", { difficulty: "medium" });
+      const bId = await join(room, b, "B", { difficulty: "medium" });
+      room.state.autoStartDeadline = Date.now() - 1;
+      await room.onAlarm();
+      await runCountdown(room);
+
+      await raceToFinish(room, [a]);
+      await expireReconnectGrace(room, a);
+      await expireRaceDeadline(room);
+      await settled();
+
+      // Pruned with the bots, for the same reason: this room has no idle
+      // winddown, so a seat nobody is behind would hold its storage forever.
+      expect(playerOf(room, aId)).toBeNull();
+      expect(room.state.players.map((p) => p.id)).toEqual([playerOf(room, bId).id]);
+
+      // With the last real socket gone the ordinary cleanup path arms…
+      await expireReconnectGrace(room, b);
+      expect(room.state.players).toEqual([]);
+      expect(room.state.idleCleanupAt).toBeGreaterThan(Date.now());
+
+      // …and reclaims the room.
+      room.state.idleCleanupAt = Date.now() - 1;
+      await room.onAlarm();
+      expect(await room.ctx.storage.get("state")).toBeUndefined();
     });
   });
 });

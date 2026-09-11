@@ -228,7 +228,7 @@ export function publicPlayer(p) {
   // currently holding the seat — server-only bookkeeping for the eviction
   // path. What survives here is `id`, the ephemeral per-room broadcast id
   // (see nextBroadcastId).
-  const { attempts, longestStreak, currentStreak, deviceId, userId, racerId, connId, resultHeld, ...rest } = p;
+  const { attempts, longestStreak, currentStreak, deviceId, userId, racerId, connId, resultHeld, departed, ...rest } = p;
   return { ...rest, isGuest: !userId };
 }
 
@@ -534,6 +534,10 @@ export class RaceRoom extends Server {
       // This socket is now the seat's owner; the one it displaced must no
       // longer be able to open an eviction window against it.
       existing.connId = connection.id;
+      // The seat may be one PublicRaceRoom.removePlayer held past its socket's
+      // departure so the race end could still write its row; it is attached
+      // again, so it is no longer something to prune there.
+      existing.departed = false;
       // Refresh identity from this connection (cookie may have changed).
       if (isValidDeviceId(msg.deviceId)) existing.deviceId = msg.deviceId;
       existing.userId = currentConnState.userId ?? null;
@@ -761,8 +765,7 @@ export class RaceRoom extends Server {
     if (!player) return;
 
     if (this.state.state === 'racing') {
-      player.dropped = true;
-      this.broadcast(JSON.stringify({ type: 'drop', playerId: player.id }));
+      this.dropRacer(player);
       const allDone = this.isRaceComplete();
       if (allDone) {
         await this.finishRace();
@@ -968,6 +971,21 @@ export class RaceRoom extends Server {
     }
   }
 
+  /**
+   * The one place a seat is marked dropped, because there is one rule about
+   * when it may be: never once it carries a finishMs. A racer who crossed the
+   * line owns that result whatever they do next, and with a race deadline in
+   * play "next" is routinely quitting or closing the tab while the stragglers
+   * are still answering — `dropped` would rewrite the completed race into an
+   * unfinished row (buildRaceResultPayload). Returns true if it newly dropped.
+   */
+  dropRacer(player) {
+    if (player.dropped || player.finishMs != null) return false;
+    player.dropped = true;
+    this.broadcast(JSON.stringify({ type: 'drop', playerId: player.id }));
+    return true;
+  }
+
   async removePlayer(playerId) {
     const idx = this.state.players.findIndex((p) => p.id === playerId);
     if (idx < 0) return false;
@@ -975,13 +993,11 @@ export class RaceRoom extends Server {
     delete this.state.disconnectDeadlines[playerId];
 
     // Mid-race: keep the player in state.players so finishRace persists their
-    // DNF row. Mark dropped (idempotent) and re-check allDone. Cleanup happens
-    // naturally when the room is destroyed or a rematch resets per-race fields.
+    // row — a DNF for whoever was still answering, a finish for whoever was
+    // not. Cleanup happens naturally when the room is destroyed or a rematch
+    // resets per-race fields.
     if (this.state.state === 'racing') {
-      if (!player.dropped) {
-        player.dropped = true;
-        this.broadcast(JSON.stringify({ type: 'drop', playerId }));
-      }
+      this.dropRacer(player);
       const allDone = this.isRaceComplete();
       if (allDone) await this.finishRace();
       return true;
@@ -1043,10 +1059,9 @@ export class RaceRoom extends Server {
     if (this.state.state !== 'racing') return null;
     const deadlines = [];
     if (Number.isFinite(this.state.graceDeadline)) deadlines.push(this.state.graceDeadline);
-    // Both operands checked: a NaN deadline would reach setAlarm() and throw,
-    // and a room persisted by an old enough build is not guaranteed to carry a
-    // raceLength.
-    if (Number.isFinite(this.state.raceStartedAt) && Number.isFinite(this.state.raceLength)) {
+    // Checked because raceStartedAt is null until the countdown releases the
+    // race, and a NaN deadline would reach setAlarm() and throw.
+    if (Number.isFinite(this.state.raceStartedAt)) {
       deadlines.push(this.state.raceStartedAt + RACE_MAX_MS_PER_PROBLEM * this.state.raceLength);
     }
     return deadlines.length > 0 ? Math.min(...deadlines) : null;
