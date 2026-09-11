@@ -119,12 +119,23 @@ countdown→racing edge, and `createRemoteRunner` rebuilds both from a `racing`
 snapshot (`public/src/remote-runner.js`) — without that the race screen stays on
 its initial paint: input disabled, every car at the line, score 0.
 
-The client's own handoff order is the trap. `attachLobby` constructs the runner
-and only then hands it to `attachRaceUI`, so a start derived at construction has
-no listeners yet; the runner holds it and delivers it on first `on()`. Anything
-new that bootstraps from the initial snapshot has to do the same, and has to
-replay `advance` as well — `attachRaceUI` paints cars and the score from zero
-regardless of `runner.racers`.
+The client's own handoff order is the trap, twice over.
+
+`attachLobby` constructs the runner and only then hands it to `attachRaceUI`, so
+a start derived at construction has no listeners yet; the runner holds it and
+delivers it on first `on()`. Anything new that bootstraps from the initial
+snapshot has to do the same, and has to replay `advance` as well —
+`attachRaceUI` paints cars and the score from zero regardless of `runner.racers`.
+
+And a snapshot says what the room is doing before it can say who *you* are:
+`onConnect` pushes `state` ahead of `hello`, so the first one a reloading player
+receives is `racing` with `youAre: null`. Without a seat id nothing is aliased to
+`'player'` and `attachRaceUI` throws reading that racer's score — before it
+subscribes, so the runner's owed start is never collected and the latched
+handoff cannot be retried. `race-handoff.js` is the gate that makes the seat id
+part of the condition rather than a value the caller forwards; it is also what
+makes the path testable without a DOM (`public/src/race-handoff.test.js` drives
+the real sequence through the real runner and race screen).
 
 ## Dependencies and the lockfile
 

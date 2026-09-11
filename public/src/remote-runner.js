@@ -52,10 +52,9 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // set by the `race-start` push, which listeners are always attached for. The
   // exception is a reconnect: the runner is constructed from an already-`racing`
   // snapshot, before attachRaceUI has subscribed, so the start is owed at that
-  // point and paid out in `on()` — that is what `pendingStart` tracks.
+  // point and paid out on the first `on()` — `startDelivered` keeps it to one.
   let raceStarted = false;
   let startDelivered = false;
-  let pendingStart = false;
   let raceStartedAtMs = initialState.raceStartedAt ?? null;
   let lastCountdownN = null;
 
@@ -90,6 +89,21 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     for (const l of listeners) l(event, data);
   }
 
+  function currentProblemFor(laneId) {
+    const r = racers.find((x) => x.id === laneId);
+    return r ? sequence[r.score] ?? null : null;
+  }
+
+  // `bot-timelines` is sent once, so a client that arrives afterwards only ever
+  // learns them from a snapshot. First set wins: the local ticker is already
+  // driving the bot scores off it.
+  function adoptBotTimelines(timelines) {
+    if (!timelines?.length || botTimelines) return;
+    botTimelines = timelines;
+    if (botRafId) cancelAnimationFrame(botRafId);
+    botRafId = requestAnimationFrame(tickBots);
+  }
+
   // The race screen opens with input disabled, every car at 0 and the score at
   // 0/N; 'start' is what unlocks it and 'advance' is what moves a car. A racer
   // who reloads mid-race therefore needs both replayed from the snapshot, or
@@ -97,8 +111,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   function deliverStart() {
     if (startDelivered) return;
     startDelivered = true;
-    pendingStart = false;
-    emit('start', { problem: sequence[0] ?? null });
+    emit('start', { problem: currentProblemFor(PLAYER_ALIAS) });
     for (const r of racers) {
       if (r.score > 0 || r.finishMs != null) {
         emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
@@ -157,11 +170,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // race — which is what enables the answer input.
         if (msg.state.state === 'racing') {
           if (msg.state.raceStartedAt) raceStartedAtMs = msg.state.raceStartedAt;
-          if (msg.state.botTimelines?.length && !botTimelines) {
-            botTimelines = msg.state.botTimelines;
-            if (botRafId) cancelAnimationFrame(botRafId);
-            botRafId = requestAnimationFrame(tickBots);
-          }
+          adoptBotTimelines(msg.state.botTimelines);
           beginRace();
         }
         break;
@@ -237,11 +246,12 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   });
 
   // Reconnect/mid-race join: the handoff in lobby.js builds this runner from an
-  // already-`racing` snapshot, so there is no `race-start` left to wait for. The
-  // race screen is attached to it a moment later, so the start waits for it.
+  // already-`racing` snapshot, so neither `race-start` nor `bot-timelines` is
+  // still coming. The race screen is attached a moment later, so the start
+  // waits for it; the bot ticker does not, and its first frame is async anyway.
   if (initialState.state === 'racing') {
     raceStarted = true;
-    pendingStart = true;
+    adoptBotTimelines(initialState.botTimelines);
   }
 
   return {
@@ -252,7 +262,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     on(handler) {
       listeners.add(handler);
       // Pay a start owed from before anybody was listening (see deliverStart).
-      if (pendingStart) deliverStart();
+      if (raceStarted) deliverStart();
       return () => listeners.delete(handler);
     },
     start() { /* no-op; server drives countdown */ },
@@ -279,10 +289,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       emit('wrong', { laneId: me.id });
       return { correct: false };
     },
-    currentProblemFor(laneId) {
-      const r = racers.find((x) => x.id === laneId);
-      return r ? sequence[r.score] ?? null : null;
-    },
+    currentProblemFor,
     getState() {
       return raceStarted ? 'racing' : 'idle';
     },
