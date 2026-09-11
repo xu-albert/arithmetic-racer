@@ -208,6 +208,39 @@ describe('reconnecting into a race already in progress', () => {
     assert.equal(runner.getState(), 'racing');
   });
 
+  test('a seat the room dropped is replayed as dropped, and is not handed a start', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: racingState({ players: [player('p-1', { score: 2 }), player(ME, { score: 1, dropped: true })] }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    // No 'start': ui.js enables the answer input on it, and both submitAnswer
+    // and the server ignore a dropped seat's answers.
+    assert.deepEqual(events, [
+      { event: 'advance', data: { racerId: 'p-1', score: 2, finishMs: null } },
+      { event: 'advance', data: { racerId: 'player', score: 1, finishMs: null } },
+      { event: 'drop', data: { racerId: 'player' } },
+    ]);
+    assert.deepEqual(runner.getRankings().find((r) => r.id === 'player').dropped, true);
+  });
+
+  test('a dropped opponent is replayed so their lane greys, without ending your race', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: racingState({ players: [player('p-1', { score: 2, dropped: true }), player(ME, { score: 1 })] }),
+      youAre: ME,
+    });
+    assert.deepEqual(record(runner), [
+      { event: 'start', data: { problem: SEQ[1] } },
+      { event: 'advance', data: { racerId: 'p-1', score: 2, finishMs: null } },
+      { event: 'drop', data: { racerId: 'p-1' } },
+      { event: 'advance', data: { racerId: 'player', score: 1, finishMs: null } },
+    ]);
+  });
+
   test('racers who already finished are replayed with their finish time', () => {
     const client = fakeRoomClient();
     const runner = createRemoteRunner({

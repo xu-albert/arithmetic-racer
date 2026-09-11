@@ -108,14 +108,22 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // 0/N; 'start' is what unlocks it and 'advance' is what moves a car. A racer
   // who reloads mid-race therefore needs both replayed from the snapshot, or
   // they land on a live race they cannot type into with everyone at the line.
+  //
+  // `dropped` has to be replayed too, and it is the one field that gates the
+  // start: a seat the room dropped (reconnect grace expired, or they quit) is
+  // kept in `state.players` so the race can still record a DNF, and both
+  // `submitAnswer` and the server ignore its answers. Enabling the input for
+  // one would hand back a box where typing does nothing at all.
   function deliverStart() {
     if (startDelivered) return;
     startDelivered = true;
-    emit('start', { problem: currentProblemFor(PLAYER_ALIAS) });
+    const me = racers.find((r) => r.id === PLAYER_ALIAS);
+    if (!me?.dropped) emit('start', { problem: currentProblemFor(PLAYER_ALIAS) });
     for (const r of racers) {
       if (r.score > 0 || r.finishMs != null) {
         emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
       }
+      if (r.dropped) emit('drop', { racerId: r.id });
     }
   }
 

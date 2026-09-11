@@ -123,19 +123,28 @@ The client's own handoff order is the trap, twice over.
 
 `attachLobby` constructs the runner and only then hands it to `attachRaceUI`, so
 a start derived at construction has no listeners yet; the runner holds it and
-delivers it on first `on()`. Anything new that bootstraps from the initial
-snapshot has to do the same, and has to replay `advance` as well —
-`attachRaceUI` paints cars and the score from zero regardless of `runner.racers`.
+delivers it on first `on()` — and only the *first*, so nothing may subscribe
+ahead of the race screen. Anything new that bootstraps from the initial snapshot
+has to do the same, and has to replay every field the screen paints from events
+rather than from `runner.racers`: `advance` for score and car position, `drop`
+for a greyed lane. `dropped` is the one that also gates the start, because the
+room keeps a dropped seat in `state.players` (for the DNF row) and ignores its
+answers — enabling its input hands back a box where typing does nothing.
 
 And a snapshot says what the room is doing before it can say who *you* are:
 `onConnect` pushes `state` ahead of `hello`, so the first one a reloading player
 receives is `racing` with `youAre: null`. Without a seat id nothing is aliased to
 `'player'` and `attachRaceUI` throws reading that racer's score — before it
 subscribes, so the runner's owed start is never collected and the latched
-handoff cannot be retried. `race-handoff.js` is the gate that makes the seat id
-part of the condition rather than a value the caller forwards; it is also what
-makes the path testable without a DOM (`public/src/race-handoff.test.js` drives
-the real sequence through the real runner and race screen).
+`raceStartHandled` cannot be retried. The seat id is therefore part of the
+handoff condition in `lobby.js`, not a value it merely forwards.
+
+A replay also breaks assumptions the live path made for free. `showFinishBanner`
+counted every finisher to get a place, which is only yours while you are the
+newest one; reloading after someone passed you made it count them too. Suspect
+any race-screen arithmetic that reads "right now" state. `public/src/ui.test.js`
+drives the race screen over a DOM stub for exactly these; `attachLobby` itself
+stays uncovered (full lobby DOM plus a real PartySocket).
 
 ## Dependencies and the lockfile
 

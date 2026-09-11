@@ -93,8 +93,14 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     }
   }
 
+  // Counting everyone who has finished would only be this player's place while
+  // they are the newest finisher. That holds when the banner fires from their
+  // own answer, and not when a reconnect replays a finish that others have
+  // already raced past — so count the finishers at or before them instead.
   function showFinishBanner() {
-    const place = runner.racers.filter((r) => r.finishMs != null).length;
+    const place = runner.racers.filter(
+      (r) => r.finishMs != null && r.finishMs <= playerRacer.finishMs,
+    ).length;
     const seconds = (playerRacer.finishMs / 1000).toFixed(2);
     finishBannerPlace.textContent = `${place}${ordinalSuffix(place)} place`;
     finishBannerTime.textContent = `${seconds}s`;

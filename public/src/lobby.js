@@ -1,7 +1,6 @@
 import { createRoomClient } from './room-client.js';
 import { canEditConfig } from './room-config-rules.js';
 import { createExpiryLatch } from './room-expiry.js';
-import { createRaceHandoffLatch } from './race-handoff.js';
 
 const DIFFS = ['easy', 'medium', 'hard'];
 
@@ -63,11 +62,8 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   let currentState = null;
   let youAre = null;
   let inviteShownThisSession = false;
+  let raceStartHandled = false;
   let prevServerState = null;
-
-  const raceHandoff = createRaceHandoffLatch({
-    onRaceStart: (state, seatId) => onRaceStart?.({ roomClient: client, initialState: state, youAre: seatId }),
-  });
 
   // Public matches are anonymous drop-ins — the internal room slug is
   // meaningless to players, so don't surface it.
@@ -308,7 +304,7 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   rematchBtn.addEventListener('click', () => {
     if (rematchBtn.disabled) return;
     client.send({ type: 'rematch' });
-    raceHandoff.rearm();
+    raceStartHandled = false;
   });
   leaveBtn.addEventListener('click', () => {
     client.send({ type: 'quit' });
@@ -357,11 +353,20 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
       }
 
       // If race already in progress when we joined / state moves to racing, hand off.
-      raceHandoff.handle(currentState, youAre);
-      // After a rematch, state goes back to 'lobby' — re-arm the handoff
+      // `youAre` is part of the condition, not just a value passed along: the
+      // server pushes state on connect, before `hello` proves which seat this
+      // socket owns, so a reloading player's first snapshot says `racing` with
+      // no seat id. Handing that one over aliases nobody to 'player' and the
+      // race screen throws reading that racer's score. The post-`hello`
+      // broadcast carries the seat, one round trip later.
+      if (!raceStartHandled && youAre && (currentState.state === 'racing' || currentState.state === 'countdown') && onRaceStart) {
+        raceStartHandled = true;
+        onRaceStart({ roomClient: client, initialState: currentState, youAre });
+      }
+      // After a rematch, state goes back to 'lobby' — re-arm raceStartHandled
       // and pull the user back to lobby-room if they were sitting on results/race.
       if (currentState.state === 'lobby') {
-        raceHandoff.rearm();
+        raceStartHandled = false;
         if (prevServerState && prevServerState !== 'lobby') {
           for (const [key, el] of Object.entries(screens)) {
             el.classList.toggle('hidden', key !== 'lobby-room');
