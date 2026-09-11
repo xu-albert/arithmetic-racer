@@ -709,8 +709,9 @@ export class RaceRoom extends Server {
       // somebody who has already looked away.
       if (player.finishMs != null) this.issueCaptchaChallenge(player);
 
-      // Race ends only when every non-dropped player has finished. Stragglers
-      // get to finish at their own pace; AFK risk accepted by design.
+      // Race ends when every non-dropped player has finished — or when the
+      // deadline this finish just armed runs out (raceDeadlineAt, enforced in
+      // onAlarm), which is what bounds the straggler who stops answering.
       const allDone = this.isRaceComplete();
       if (allDone) {
         await this.finishRace();
