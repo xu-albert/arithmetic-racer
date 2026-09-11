@@ -110,6 +110,22 @@ an expired one's name. `POST /api/rooms` clears it via the `claimRoomName()` RPC
 trusting `this.state`. Coverage: `server/room-winddown.test.js` (server) and
 `public/src/room-expiry.test.js` (the client contract in `room-expiry.js`).
 
+## Every one-shot room broadcast needs a snapshot equivalent
+
+A reconnecting or reloading client gets a `state` snapshot, never a replay, so
+any message the room sends exactly once at a transition has to be reconstructible
+from `publicState()`. `race-start` and `bot-timelines` are both sent once at the
+countdown→racing edge, and `createRemoteRunner` rebuilds both from a `racing`
+snapshot (`public/src/remote-runner.js`) — without that the race screen stays on
+its initial paint: input disabled, every car at the line, score 0.
+
+The client's own handoff order is the trap. `attachLobby` constructs the runner
+and only then hands it to `attachRaceUI`, so a start derived at construction has
+no listeners yet; the runner holds it and delivers it on first `on()`. Anything
+new that bootstraps from the initial snapshot has to do the same, and has to
+replay `advance` as well — `attachRaceUI` paints cars and the score from zero
+regardless of `runner.racers`.
+
 ## Dependencies and the lockfile
 
 The Cloudflare Workers build runs `npm ci`, which hard-fails unless `package-lock.json`

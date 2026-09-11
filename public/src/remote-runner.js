@@ -48,7 +48,14 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   let sequence = initialState.problemSequence ?? [];
   const listeners = new Set();
   let stopped = false;
-  let raceStartEmitted = false;
+  // `raceStarted` is this runner's view of the race being live. It is normally
+  // set by the `race-start` push, which listeners are always attached for. The
+  // exception is a reconnect: the runner is constructed from an already-`racing`
+  // snapshot, before attachRaceUI has subscribed, so the start is owed at that
+  // point and paid out in `on()` — that is what `pendingStart` tracks.
+  let raceStarted = false;
+  let startDelivered = false;
+  let pendingStart = false;
   let raceStartedAtMs = initialState.raceStartedAt ?? null;
   let lastCountdownN = null;
 
@@ -81,6 +88,30 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   function emit(event, data) {
     if (stopped) return;
     for (const l of listeners) l(event, data);
+  }
+
+  // The race screen opens with input disabled, every car at 0 and the score at
+  // 0/N; 'start' is what unlocks it and 'advance' is what moves a car. A racer
+  // who reloads mid-race therefore needs both replayed from the snapshot, or
+  // they land on a live race they cannot type into with everyone at the line.
+  function deliverStart() {
+    if (startDelivered) return;
+    startDelivered = true;
+    pendingStart = false;
+    emit('start', { problem: sequence[0] ?? null });
+    for (const r of racers) {
+      if (r.score > 0 || r.finishMs != null) {
+        emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
+      }
+    }
+  }
+
+  // Idempotent: whichever arrives first — the one-shot `race-start` push or a
+  // snapshot that already says `racing` — starts the race exactly once.
+  function beginRace() {
+    if (raceStarted) return;
+    raceStarted = true;
+    deliverStart();
   }
 
   function findRacer(serverPlayerId) {
@@ -118,20 +149,20 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           lastCountdownN = msg.state.countdownN;
           emit('countdown', { n: msg.state.countdownN });
         }
-        // Reconnect bootstrap: if we joined mid-race and don't yet have bot
-        // timelines locally, take them from the state snapshot and start the
-        // bot tick loop. Without this, a brief disconnect mid-race leaves
-        // all bots frozen at score 0 because the original 'bot-timelines'
-        // message was only sent once at countdown→racing transition.
-        if (
-          msg.state.state === 'racing'
-          && msg.state.botTimelines?.length
-          && !botTimelines
-        ) {
-          botTimelines = msg.state.botTimelines;
+        // Reconnect bootstrap. Both `race-start` and `bot-timelines` are sent
+        // once, at the countdown→racing transition; a client that joins or
+        // reconnects after it gets a snapshot, never a replay. So the snapshot
+        // has to do their job: adopt the shared race clock, pick up the bot
+        // timelines (without this all bots stay frozen at 0), and start the
+        // race — which is what enables the answer input.
+        if (msg.state.state === 'racing') {
           if (msg.state.raceStartedAt) raceStartedAtMs = msg.state.raceStartedAt;
-          if (botRafId) cancelAnimationFrame(botRafId);
-          botRafId = requestAnimationFrame(tickBots);
+          if (msg.state.botTimelines?.length && !botTimelines) {
+            botTimelines = msg.state.botTimelines;
+            if (botRafId) cancelAnimationFrame(botRafId);
+            botRafId = requestAnimationFrame(tickBots);
+          }
+          beginRace();
         }
         break;
       }
@@ -143,8 +174,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       case 'race-start': {
         sequence = msg.sequence;
         raceStartedAtMs = msg.raceStartedAt;
-        raceStartEmitted = true;
-        emit('start', { problem: sequence[0] });
+        beginRace();
         break;
       }
       case 'bot-timelines': {
@@ -206,12 +236,25 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     }
   });
 
+  // Reconnect/mid-race join: the handoff in lobby.js builds this runner from an
+  // already-`racing` snapshot, so there is no `race-start` left to wait for. The
+  // race screen is attached to it a moment later, so the start waits for it.
+  if (initialState.state === 'racing') {
+    raceStarted = true;
+    pendingStart = true;
+  }
+
   return {
     racers,
     sequence,
     raceLength,
     getRankings,
-    on(handler) { listeners.add(handler); return () => listeners.delete(handler); },
+    on(handler) {
+      listeners.add(handler);
+      // Pay a start owed from before anybody was listening (see deliverStart).
+      if (pendingStart) deliverStart();
+      return () => listeners.delete(handler);
+    },
     start() { /* no-op; server drives countdown */ },
     submitAnswer(raw) {
       // Always relay to server; server is the source of truth.
@@ -241,7 +284,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       return r ? sequence[r.score] ?? null : null;
     },
     getState() {
-      return raceStartEmitted ? 'racing' : 'idle';
+      return raceStarted ? 'racing' : 'idle';
     },
     quit() {
       roomClient.send({ type: 'quit' });
