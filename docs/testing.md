@@ -137,6 +137,7 @@ that way past the PR that introduced the fix is the thing this rule exists to pr
 | 16 | Admin dashboard: `createdAt` type mismatch breaking drill-down and the signups window. | 2167f26 | `worker/routes/admin.test.js` | GUARDED |
 | 17 | **Captcha verification lifecycle**: a settled challenge must leave exactly one `race_results` row for that racer — the race-end insert stands down on `player.resultHeld`, never on "a challenge is still open", or a failed/timed-out verification is followed by a second, passively-clean row that reaches the board. Same PR also fixed: settlement authority leaking to other players (a host rematch failing a guest's challenge), the trigger firing on non-canonical race lengths, and `sendToSeat` treating `getConnections()` as an array. Full invariant writeup: `AGENTS.md` "Active verification: the superhuman-pace captcha". | 4bc89c7 (feature) + 01cf662 / 78f5f04 / 999a7c5 / 11a8d26 (`no-mistakes(review)` fixes) | `server/room-captcha.test.js` ("one row per racer per race, whenever the challenge settles"; "the challenge belongs to the racer, not the race"), `server/room-captcha-e2e.test.js`, `worker/routes/captcha-exclusion.test.js` | GUARDED |
 | 18 | **Unbounded race**: a still-connected racer who simply stopped answering held the race open indefinitely — `isRaceComplete()` was the only ending, so whoever had already crossed the line never received `finish`, their row was never written, and the room never reached its cleanup path (Quick Match has no idle winddown to fall back on). Every race now ends at `raceDeadlineAt()`: the grace the first finisher arms, or a ceiling on the race nobody finishes at all. A seat that already carries a `finishMs` keeps its result through a quit or a disconnect in between. Full invariant writeup: `AGENTS.md` "Room lifecycle: private rooms wind down, public ones do not". | 0836617 (`fix(room): bound every race with a deadline and dnf the racers who stall`) + 354c748 / 16eb38b (`no-mistakes(review)` fixes) | `server/room-race-deadline.test.js` | GUARDED |
+| 19 | **Mid-race reconnect**: reloading or reconnecting while the room is `racing` left the browser on a dead race screen — input disabled, every car at the start line, score 0 — because `race-start`/`bot-timelines` are sent once at the countdown→racing edge and a reconnect gets a `state` snapshot, never a replay. Same PR also fixed the finish banner reading its place off its own finisher count instead of the canonical ranking. Full invariant writeup: `AGENTS.md` "Every one-shot room broadcast needs a snapshot equivalent". | 6fdaf1d (`fix(race): bootstrap a reconnecting client into the race already in progress`) + 9feae38 / d3ee077 / 58a536e / 81befd5 / 8d0fd2e / 8fcf661 / bda53ce (`no-mistakes(review)` fixes) | `public/src/remote-runner.test.js` ("reconnecting into a race already in progress", the bot-timeline reload cases), `public/src/ui.test.js` ("a race screen opened from a mid-race snapshot", "the finish banner") | GUARDED |
 
 ## 5. End-to-end and UI tests
 
@@ -146,7 +147,9 @@ Puppeteer, no headless-Chrome suite. The two files named `*-e2e.test.js`
 thing, but both are vitest tests driving a flow end-to-end at the HTTP/WebSocket/DO level —
 real routing, real sockets, real D1, no browser.
 
-All UI/browser coverage is manual (§6), run against:
+All *browser* coverage is manual (§6) — the one DOM-level exception is the race screen,
+which `public/src/ui.test.js` drives over a DOM stub under `node --test` (§2). The manual
+runs go against:
 - **Browsers**: any two modern Chromium/Firefox/Safari windows, or one regular + one
   incognito window of the same browser (distinct `localStorage` is what matters — see §6's
   note on `racerId` isolation).
@@ -214,6 +217,7 @@ today: `server/public-room.test.js` (secrecy — see regression #1/#13 in §4),
 | Q12 | Race finishes in a Quick Match room | Row(s) written to `race_results` with `room_id` set (see §6 D1 checks below); eligible for recent-finishes/leaderboards per `AGENTS.md`'s eligibility rules |
 | Q13 | Leave a Quick Match room idle for the same window that expires a private room | **No** room-expired screen — public rooms never wind down (`AGENTS.md` "Room lifecycle"; regression #2). Confirm by leaving the tab open past `PRIVATE_ROOM_IDLE_MS` (or a temporarily-lowered value under `wrangler dev`) |
 | Q14 | Two separate Quick Match attempts from two browsers, far enough apart (or at different difficulties) that they land in different rooms | Neither can see or guess the other's private-room-style invite link — there isn't one; matchmaking is server-driven |
+| Q15 | Hard-refresh mid-race in a Quick Match room, a few problems in | Same live race screen as row 14 of the two-browser smoke below, plus the bots: each bot car sits where its timeline has it by now and keeps moving, never back at the line. Bot progress only exists on the client (the room holds every bot row at score 0 until the race ends), so this is the case that catches a lost timeline — a bot still at 0 hands you a place you did not earn |
 
 ### Multiplayer two-browser smoke
 
@@ -233,7 +237,7 @@ today: `server/public-room.test.js` (secrecy — see regression #1/#13 in §4),
 | 11 | First player crosses the finish line | Finish banner shows; race **does not** end until the slower player also finishes — or until the grace that first finish arms runs out (`raceGraceMs()`, 6s per problem, so ~60s for a standard race), which ends the race with whoever is still answering marked `dnf`. |
 | 12 | Slower player completes their last problem | Both see the results screen with rankings sorted by `finishMs`. |
 | 13 | Creator clicks **Race Again** (results / lobby-room) | Both return to lobby in state `lobby`; new problem sequence generated on next Start. |
-| 14 | Hard-refresh one tab mid-race | Player rejoins automatically with the same `playerId`; score, finishMs, dropped state all preserved. |
+| 14 | Hard-refresh one tab mid-race | Player rejoins automatically with the same `playerId`; score, finishMs, dropped state all preserved. The refreshed tab lands back on a *live* race screen — answer input enabled and typeable, the score and every car where the race has actually got to, an opponent the room already dropped still greyed — not a frozen start line (regression #18 in §4). |
 | 15 | Close last tab, wait 5 minutes, revisit the URL | Treated as a brand-new empty room (state was reset by the idle-cleanup alarm). The 30-minute idle clock keeps running underneath — the reset does not restart it. |
 | 15b | Leave a private room untouched past its idle window, then look at the open tab | Both tabs land on the **Room expired** screen. Fastest way to see it without waiting 30 minutes: drop `PRIVATE_ROOM_IDLE_MS` in `server/room.js` to ~30s against `wrangler dev`. |
 | 15c | From that screen, click **Back to Home** / **Create a New Room** | Home clears `?room=` from the URL; Create navigates to a fresh `?room=<slug>` that opens as a working lobby (not "expired" again). |

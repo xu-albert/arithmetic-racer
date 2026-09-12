@@ -1,4 +1,5 @@
-// Podium order, shared by every race runner.
+// Race order, shared by every race runner: the podium draws it, and ui.js's
+// finish banner takes the local player's place from it.
 //
 // Three tiers, best first:
 //   1. finished  — has a finishMs; faster first.
