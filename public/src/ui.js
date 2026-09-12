@@ -205,6 +205,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     } else if (event === 'drop') {
       const lane = laneEls.get(data.laneId);
       if (lane) lane.classList.add('dropped');
+      if (playerRacer.finishMs != null) showFinishBanner();
       if (podium.childElementCount > 0) renderPodium();
     } else if (event === 'finish') {
       input.disabled = true;

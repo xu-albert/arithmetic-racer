@@ -292,6 +292,44 @@ describe('the finish banner', () => {
     assert.equal(screen.carFor('player').classList.contains('victory'), false);
   });
 
+  test('repaints when the finisher ahead of the player leaves before the race ends', () => {
+    // A crossed at 5s and you at 6s, so the banner is right to say 2nd. A then
+    // quits while C is still racing, which forfeits their finish — the ranking
+    // the room will persist now has you first, and so does the screen.
+    mock.timers.enable({ apis: ['Date'], now: 16_000 });
+    const screen = openRaceScreen(racingState({
+      players: [
+        player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+        player(ME, { score: SEQ.length - 1 }),
+        player('p-3', { score: 1 }),
+      ],
+    }));
+
+    screen.runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    assert.equal(screen.bannerPlace.textContent, '2nd place');
+    assert.equal(screen.carFor('player').classList.contains('victory'), false);
+
+    screen.receive({ type: 'drop', playerId: 'p-1' });
+
+    assert.equal(screen.bannerPlace.textContent, '1st place');
+    assert.equal(screen.banner.classList.contains('first-place'), true);
+    assert.equal(screen.carFor('player').classList.contains('victory'), true);
+
+    screen.receive({
+      type: 'finish',
+      rankings: [
+        { id: ME, score: SEQ.length, finishMs: 6_000 },
+        { id: 'p-3', score: SEQ.length, finishMs: 8_000 },
+        { id: 'p-1', score: SEQ.length, finishMs: 5_000, dropped: true },
+      ],
+    });
+
+    assert.equal(screen.bannerPlace.textContent, '1st place');
+    assert.match(screen.podium.children[0].textContent, /\(you\)/,
+      'the podium the banner sits above puts the player first');
+    screen.cleanup();
+  });
+
   test('does not rank a finisher who then left mid-race ahead of the player', () => {
     // A crossed the line at 5s and quit while waiting for the stragglers. The
     // room keeps the seat — finishMs and all — so the results can say "left
