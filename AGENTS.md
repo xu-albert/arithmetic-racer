@@ -132,7 +132,8 @@ start line is a first place the player did not earn.
 
 The client's own handoff order is the trap, twice over.
 
-`attachLobby` constructs the runner and only then hands it to `attachRaceUI`, so
+`main.js`'s `handleRoomRaceStart` — reached through `attachLobby`'s `onRaceStart`
+callback — constructs the runner and only then hands it to `attachRaceUI`, so
 a start derived at construction has no listeners yet; the runner holds it and
 delivers it on first `on()` — and only the *first*, so nothing may subscribe
 ahead of the race screen. Anything new that bootstraps from the initial snapshot

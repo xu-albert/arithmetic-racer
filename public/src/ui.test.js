@@ -153,6 +153,7 @@ function openRaceScreen(state, youAre = ME) {
     input: dom.el('answer-input'),
     score: dom.el('score'),
     banner: dom.el('finish-banner'),
+    podium: dom.el('podium'),
     bannerPlace: dom.el('finish-banner').querySelector('.finish-banner-place'),
     bannerTime: dom.el('finish-banner').querySelector('.finish-banner-time'),
     laneFor,
@@ -289,6 +290,43 @@ describe('the finish banner', () => {
     assert.equal(screen.bannerPlace.textContent, '2nd place');
     assert.equal(screen.banner.classList.contains('first-place'), false);
     assert.equal(screen.carFor('player').classList.contains('victory'), false);
+  });
+
+  test('agrees with the podium when the final rankings carry a finish the screen never saw', () => {
+    // Quick Match in a background tab, browser clock behind the room's: the bot
+    // crossed at 2s, but the frame that would report it never ran and the
+    // elapsed this browser computes has not reached it either. The race ends on
+    // the other human, so the room's rankings are the first thing on this
+    // screen to say the bot is home — after the banner is already up.
+    mock.timers.enable({ apis: ['Date'], now: 11_000 });
+    const screen = openRaceScreen(racingState({
+      players: [
+        player('bot-1', { isBot: true, tier: 'fast' }),
+        player(ME, { score: SEQ.length - 1 }),
+        player('p-1', { score: 1 }),
+      ],
+      botTimelines: [[500, 1_000, 2_000]],
+    }));
+
+    screen.runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    screen.receive({ type: 'advance', playerId: ME, score: SEQ.length, finishMs: 12_000 });
+    assert.equal(screen.bannerPlace.textContent, '1st place', 'nothing on screen says otherwise yet');
+
+    screen.receive({
+      type: 'finish',
+      rankings: [
+        { id: 'bot-1', score: SEQ.length, finishMs: 2_000 },
+        { id: ME, score: SEQ.length, finishMs: 12_000 },
+        { id: 'p-1', score: SEQ.length, finishMs: 14_000 },
+      ],
+    });
+
+    assert.equal(screen.bannerPlace.textContent, '2nd place');
+    assert.equal(screen.banner.classList.contains('first-place'), false);
+    assert.equal(screen.carFor('player').classList.contains('victory'), false);
+    assert.match(screen.podium.children[0].textContent, /^Hbot-1 —/,
+      'the podium the banner sits above puts the bot first');
+    screen.cleanup();
   });
 
   test('a player who answers their way to the line still sees 1st on the live path', () => {

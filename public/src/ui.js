@@ -207,6 +207,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
       if (podium.childElementCount > 0) renderPodium();
     } else if (event === 'finish') {
       input.disabled = true;
+      if (playerRacer.finishMs != null) showFinishBanner();
       renderPodium();
       resultsTimer = setTimeout(() => {
         screens.race.classList.add('hidden');
