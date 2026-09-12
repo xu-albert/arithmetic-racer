@@ -153,7 +153,9 @@ handoff condition in `lobby.js`, not a value it merely forwards.
 
 A replay also breaks assumptions the live path made for free. `showFinishBanner`
 counted every finisher to get a place, which is only yours while you are the
-newest one; reloading after someone passed you made it count them too. Suspect
+newest one; reloading after someone passed you made it count them too. It now
+takes the place off `rankRacers` — the one ranking, which the podium under it
+draws and the server sorts by — so the screen cannot contradict itself. Suspect
 any race-screen arithmetic that reads "right now" state. `public/src/ui.test.js`
 drives the race screen over a DOM stub for exactly these; `attachLobby` itself
 stays uncovered (full lobby DOM plus a real PartySocket).

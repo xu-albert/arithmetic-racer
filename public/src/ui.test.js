@@ -292,6 +292,39 @@ describe('the finish banner', () => {
     assert.equal(screen.carFor('player').classList.contains('victory'), false);
   });
 
+  test('does not rank a finisher who then left mid-race ahead of the player', () => {
+    // A crossed the line at 5s and quit while waiting for the stragglers. The
+    // room keeps the seat — finishMs and all — so the results can say "left
+    // mid-race", and ranks it behind everyone who stayed; so must the banner.
+    mock.timers.enable({ apis: ['Date'], now: 16_000 });
+    const screen = openRaceScreen(racingState({
+      players: [
+        player('p-1', { score: SEQ.length, finishMs: 5_000, dropped: true }),
+        player(ME, { score: SEQ.length - 1 }),
+      ],
+    }));
+
+    screen.runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    screen.receive({ type: 'advance', playerId: ME, score: SEQ.length, finishMs: 6_000 });
+
+    assert.equal(screen.bannerPlace.textContent, '1st place');
+    assert.equal(screen.banner.classList.contains('first-place'), true);
+    assert.equal(screen.carFor('player').classList.contains('victory'), true);
+
+    screen.receive({
+      type: 'finish',
+      rankings: [
+        { id: ME, score: SEQ.length, finishMs: 6_000 },
+        { id: 'p-1', score: SEQ.length, finishMs: 5_000, dropped: true },
+      ],
+    });
+
+    assert.equal(screen.bannerPlace.textContent, '1st place');
+    assert.match(screen.podium.children[0].textContent, /\(you\)/,
+      'the podium the banner sits above puts the player first');
+    screen.cleanup();
+  });
+
   test('agrees with the podium when the final rankings carry a finish the screen never saw', () => {
     // Quick Match in a background tab, browser clock behind the room's: the bot
     // crossed at 2s, but the frame that would report it never ran and the

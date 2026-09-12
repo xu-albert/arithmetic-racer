@@ -93,19 +93,20 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     }
   }
 
-  // Counting everyone who has finished would only be this player's place while
-  // they are the newest finisher. That holds when the banner fires from their
-  // own answer, and not when a reconnect replays a finish that others have
-  // already raced past — so count the finishers at or before them instead.
+  // Place is read off the one ranking this project has — rankings.js, which the
+  // podium below the banner draws and the server sorts its own results by — so
+  // the two can never disagree. Counting finishers here instead would miss the
+  // tiering: a racer who crossed the line and then left mid-race keeps their
+  // finishMs, and is still ranked behind everyone who stayed.
   //
   // Repaintable, because in a room race it is painted more than once: from the
   // optimistic finish, again from the time the room stamped, and again for
   // every finish that lands behind this player's own. Every class it sets has
   // to come back off if a later paint disagrees.
   function showFinishBanner() {
-    const place = runner.racers.filter(
-      (r) => r.finishMs != null && r.finishMs <= playerRacer.finishMs,
-    ).length;
+    const index = runner.getRankings().findIndex((r) => r.id === 'player');
+    if (index < 0) return;
+    const place = index + 1;
     const seconds = (playerRacer.finishMs / 1000).toFixed(2);
     finishBannerPlace.textContent = `${place}${ordinalSuffix(place)} place`;
     finishBannerTime.textContent = `${seconds}s`;
