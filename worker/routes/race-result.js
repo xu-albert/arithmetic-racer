@@ -147,7 +147,7 @@ export async function handleRaceResult(request, env) {
       room_id: null,
     }));
   } catch (err) {
-    logError(KINDS.RACE_RESULT_DB, err, { path: "solo" });
+    logError(KINDS.RACE_RESULT_DB, err, { path: "solo", phase: "insert" });
     return Response.json(
       { error: "db_error" },
       { status: 500 }

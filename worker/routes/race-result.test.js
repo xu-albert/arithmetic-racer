@@ -327,8 +327,9 @@ describe("POST /api/race-result — validation", () => {
     it("rejects accuracy_pct that contradicts the correct/attempted counts", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
           problems_total: 20, problems_attempted: 20,
-          problems_correct: 0, accuracy_pct: 100,
+          problems_correct: 5, accuracy_pct: 100, longest_streak: 0,
         })),
         env
       );
@@ -352,6 +353,7 @@ describe("POST /api/race-result — validation", () => {
     it("rejects longest_streak greater than problems_correct", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
           problems_total: 20, problems_attempted: 20,
           problems_correct: 5, accuracy_pct: 25, longest_streak: 20,
         })),
@@ -458,7 +460,7 @@ describe("POST /api/race-result — bounded solo contract", () => {
       expect(log).toHaveBeenCalledTimes(1);
       const logged = JSON.parse(log.mock.calls[0][0]);
       expect(logged.kind).toBe(KINDS.RACE_RESULT_DB);
-      expect(logged.context).toEqual({ path: "solo" });
+      expect(logged.context).toEqual({ path: "solo", phase: "insert" });
       expect(logged.err.message).toBe(failure.message);
     } finally {
       log.mockRestore();
