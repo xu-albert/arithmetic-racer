@@ -219,9 +219,9 @@ describe('reconnecting into a race already in progress', () => {
     // No 'start': ui.js enables the answer input on it, and both submitAnswer
     // and the server ignore a dropped seat's answers.
     assert.deepEqual(events, [
-      { event: 'advance', data: { racerId: 'p-1', score: 2, finishMs: null } },
-      { event: 'advance', data: { racerId: 'player', score: 1, finishMs: null } },
-      { event: 'drop', data: { racerId: 'player' } },
+      { event: 'advance', data: { laneId: 'p-1', score: 2, finishMs: null } },
+      { event: 'advance', data: { laneId: 'player', score: 1, finishMs: null } },
+      { event: 'drop', data: { laneId: 'player' } },
     ]);
     assert.deepEqual(runner.getRankings().find((r) => r.id === 'player').dropped, true);
   });
@@ -235,9 +235,9 @@ describe('reconnecting into a race already in progress', () => {
     });
     assert.deepEqual(record(runner), [
       { event: 'start', data: { problem: SEQ[1] } },
-      { event: 'advance', data: { racerId: 'p-1', score: 2, finishMs: null } },
-      { event: 'drop', data: { racerId: 'p-1' } },
-      { event: 'advance', data: { racerId: 'player', score: 1, finishMs: null } },
+      { event: 'advance', data: { laneId: 'p-1', score: 2, finishMs: null } },
+      { event: 'drop', data: { laneId: 'p-1' } },
+      { event: 'advance', data: { laneId: 'player', score: 1, finishMs: null } },
     ]);
   });
 
@@ -417,7 +417,7 @@ describe('server advance reconciliation', () => {
 
     assert.equal(me.finishMs, 7_000);
     assert.deepEqual(events, [
-      { event: 'advance', data: { racerId: 'player', score: SEQ.length, finishMs: 7_000 } },
+      { event: 'advance', data: { laneId: 'player', score: SEQ.length, finishMs: 7_000 } },
     ]);
   });
 
@@ -589,9 +589,9 @@ describe('bot timelines (Quick Match)', () => {
     const events = record(runner);
     assert.deepEqual(events, [
       { event: 'start', data: { problem: null } },
-      { event: 'advance', data: { racerId: 'p-1', score: 1, finishMs: null } },
-      { event: 'advance', data: { racerId: 'player', score: SEQ.length, finishMs: 5_000 } },
-      { event: 'advance', data: { racerId: 'bot-1', score: SEQ.length, finishMs: 3_000 } },
+      { event: 'advance', data: { laneId: 'p-1', score: 1, finishMs: null } },
+      { event: 'advance', data: { laneId: 'player', score: SEQ.length, finishMs: 5_000 } },
+      { event: 'advance', data: { laneId: 'bot-1', score: SEQ.length, finishMs: 3_000 } },
     ]);
 
     flushFrame();

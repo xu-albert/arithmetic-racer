@@ -144,7 +144,7 @@ function openRaceScreen(state, youAre = ME) {
   const screens = { race: fakeEl(), results: fakeEl() };
   const runner = createRemoteRunner({ roomClient, initialState: state, youAre });
   const cleanup = attachRaceUI({ runner, raceLength: state.raceLength, screens });
-  const laneFor = (racerId) => dom.el('track').children.find((l) => l.dataset.racerId === racerId);
+  const laneFor = (laneId) => dom.el('track').children.find((l) => l.dataset.laneId === laneId);
   return {
     runner,
     cleanup,
@@ -159,7 +159,7 @@ function openRaceScreen(state, youAre = ME) {
     laneFor,
     // Each lane holds a handle, the car and the finish line; the car is what
     // carries --progress and the victory class.
-    carFor: (racerId) => laneFor(racerId).children.find((c) => c.className.startsWith('car')),
+    carFor: (laneId) => laneFor(laneId).children.find((c) => c.className.startsWith('car')),
   };
 }
 
