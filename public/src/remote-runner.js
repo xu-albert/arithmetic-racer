@@ -165,8 +165,10 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       const aliased = aliasId(p.id, youAre);
       const existing = racers.find((r) => r.id === aliased);
       if (!existing) {
+        // No lane, no car: a seat that arrived after this screen was painted has
+        // nothing on it to correct, and announcing one would redraw a finished
+        // race's standings around somebody who never raced.
         racers.push(toRacer(p, youAre));
-        changed.push(racers[racers.length - 1]);
         continue;
       }
       const before = { score: existing.score, finishMs: existing.finishMs, dropped: existing.dropped };
@@ -199,11 +201,20 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // `finish` broadcast, or a `finished` snapshot for a socket that missed it.
   // Rankings come from the local racers, never from the snapshot's player list:
   // PublicRaceRoom strips bots and departed seats from `state.players` as it
-  // ends the race, so that list is not the podium.
+  // ends the race, so that list is not the podium. Bots are absent from it
+  // entirely and their progress is client-driven, so the race end has to
+  // finalize them here the way the room does — the ticker stops and whoever is
+  // short of the line is a dnf, not a row that keeps crossing it after the
+  // results are up. On the `finish` path the payload has already said so and
+  // this is a no-op.
   function settleRace() {
     if (raceSettled) return;
     raceSettled = true;
     raceStarted = true;
+    if (botRafId) { cancelAnimationFrame(botRafId); botRafId = null; }
+    for (const r of racers) {
+      if (r.isBot && r.finishMs == null && !r.dropped) r.dnf = true;
+    }
     emit('finish', { rankings: getRankings() });
   }
 

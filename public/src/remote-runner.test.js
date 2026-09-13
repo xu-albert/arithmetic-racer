@@ -616,6 +616,50 @@ describe('bot timelines (Quick Match)', () => {
     assert.equal(bot.score, 2);
   });
 
+  test('a finished snapshot ends the bots the client is driving', () => {
+    // Quick Match: the room ended the race on its human-only completeness check
+    // and recorded the bot short of the line as a dnf, but the socket dropped
+    // before `finish`. The reconnect lands on a `finished` snapshot, which
+    // carries no bot rows at all, so the terminal transition is the only thing
+    // that can stop them crossing the line over the results screen.
+    mock.timers.enable({ apis: ['Date'], now: 10_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: botState({ state: 'racing', problemSequence: SEQ, raceStartedAt: 10_000, botTimelines: TIMELINE }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    mock.timers.setTime(12_100);
+    flushFrame();
+    const bot = runner.racers.find((r) => r.id === 'bot-1');
+    assert.equal(bot.score, 2, 'the bot is still short of the line when the race ends');
+    assert.equal(frames.size, 1, 'and its ticker is still running');
+
+    client.receive({
+      type: 'state',
+      state: botState({
+        state: 'finished',
+        players: [player('p-1'), player(ME, { score: SEQ.length, finishMs: 2_100 })],
+      }),
+    });
+
+    assert.equal(frames.size, 0, 'the bot ticker is cancelled at the race end');
+    assert.equal(bot.dnf, true);
+    assert.equal(bot.finishMs, null);
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['player', 'p-1', 'bot-1']);
+
+    // Past its own timeline's finish, and still a dnf on a podium nobody redraws.
+    mock.timers.setTime(14_000);
+    flushFrame();
+    assert.equal(bot.score, 2);
+    assert.equal(bot.finishMs, null);
+    assert.equal(events.at(-1), settled, 'nothing moves once the results are up');
+    runner.stop();
+  });
+
   test('a second snapshot does not restart a loop that is already running', () => {
     mock.timers.enable({ apis: ['Date'], now: 10_000 });
     const client = fakeRoomClient();
@@ -665,6 +709,45 @@ describe('drop, finish and rankings', () => {
     const me = runner.racers.find((r) => r.id === 'player');
     assert.equal(me.finishMs, 3000);
     assert.equal(runner.racers.find((r) => r.id === 'p-3').dnf, true);
+  });
+
+  test('a newcomer arriving after the race ended is tracked but never announced', () => {
+    // The room accepts new players again once it is back in `finished`, and its
+    // new-player path broadcasts state to everyone attached — including the
+    // race screen still showing the final standings. Somebody who never raced
+    // has no lane and no car there, so there is nothing to correct, and an
+    // announcement would only redraw the podium around them.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ players: [player('p-1'), player(ME)] }),
+      youAre: ME,
+    });
+    startRace(client);
+    const events = record(runner);
+    client.receive({
+      type: 'finish',
+      rankings: [
+        { id: ME, score: 3, finishMs: 3000, dropped: false, dnf: false },
+        { id: 'p-1', score: 1, finishMs: null, dropped: false, dnf: true },
+      ],
+    });
+    events.length = 0;
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'finished',
+        players: [
+          player('p-1', { score: 1, dnf: true }),
+          player(ME, { score: 3, finishMs: 3000 }),
+          player('p-3'),
+        ],
+      }),
+    });
+
+    assert.deepEqual(events, [], 'the finished screen hears nothing about them');
+    assert.ok(runner.racers.some((r) => r.id === 'p-3'), 'the seat is still tracked for the lobby');
   });
 
   test('getRankings orders still-racing players by score, higher first', () => {
