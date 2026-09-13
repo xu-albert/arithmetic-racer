@@ -13,6 +13,8 @@
 //   - the reservation is the room's, so the *next* creation cannot take it
 //   - exhausting the retries is a visible failure, not a fallback to a live name
 //   - the ordinary path (nothing in the way) still draws exactly once
+//   - a reservation nobody joins releases its name on the short unjoined clock,
+//     while a room somebody is in keeps the full private-room idle lifetime
 //
 // The reservation is atomic because a Durable Object is single-threaded per
 // name: reserveRoomName() reads and writes storage inside one RPC, so two
@@ -24,7 +26,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import worker from "./server.js";
 import { generateRoomId, allocateRoomId, ROOM_ID_ATTEMPTS } from "./room-id.js";
-import { PRIVATE_ROOM_IDLE_MS } from "./room.js";
+import { PRIVATE_ROOM_IDLE_MS, UNJOINED_ROOM_IDLE_MS } from "./room.js";
 import { EXPIRED_ROOM_STATE } from "../public/src/room-expiry.js";
 
 let connSeq = 0;
@@ -88,24 +90,47 @@ describe("allocateRoomId reserves a free name", () => {
     expect(seen).toEqual([free]);
   });
 
-  it("arms the idle alarm, so an abandoned reservation releases its name", async () => {
+  it("arms the short unjoined alarm, so an abandoned reservation releases its name", async () => {
     const name = "alloc-abandoned-" + crypto.randomUUID();
     expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
 
     // The reservation writes live state; without an alarm nothing would ever
-    // wake this never-joined room and the name would be spent for good.
+    // wake this never-joined room and the name would be spent for good. The
+    // alarm it arms is the *short* one: creation is unauthenticated, so a
+    // reservation nobody joins must not be able to hold a name out of a
+    // 13,248-name namespace for the full idle window.
     await withPrivateRoom(name, async (room) => {
       const alarm = await room.ctx.storage.getAlarm();
       expect(alarm).not.toBeNull();
-      expect(alarm).toBeLessThanOrEqual(Date.now() + PRIVATE_ROOM_IDLE_MS);
+      expect(alarm).toBeLessThanOrEqual(Date.now() + UNJOINED_ROOM_IDLE_MS);
 
-      room.state.lastActivityAt = Date.now() - PRIVATE_ROOM_IDLE_MS - 1000;
+      room.state.lastActivityAt = Date.now() - UNJOINED_ROOM_IDLE_MS - 1000;
       await room.onAlarm();
       expect(room.state.state).toBe(EXPIRED_ROOM_STATE);
     });
 
     // And a later creation drawing it gets it back.
     expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
+  });
+
+  it("gives a reservation the full idle lifetime once somebody has joined", async () => {
+    const name = "alloc-joined-" + crypto.randomUUID();
+    expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
+    await occupy(name, "Creator");
+
+    // Past the unjoined fuse and nowhere near the real one. The short clock
+    // exists to release names nobody took; this room is somebody's lobby and
+    // winds down on PRIVATE_ROOM_IDLE_MS like any other private room.
+    await withPrivateRoom(name, async (room) => {
+      const idleSince = Date.now() - UNJOINED_ROOM_IDLE_MS - 1000;
+      room.state.lastActivityAt = idleSince;
+      await room.persist();
+      await room.onAlarm();
+
+      expect(room.state.state).toBe("lobby");
+      expect(room.state.players.length).toBe(1);
+      expect(await room.ctx.storage.getAlarm()).toBe(idleSince + PRIVATE_ROOM_IDLE_MS);
+    });
   });
 });
 
@@ -161,12 +186,12 @@ describe("allocateRoomId refuses a name in use", () => {
     };
 
     const got = await allocateRoomId(brokenEnv, {
-      attempts: 3,
       generate: () => "alloc-broken",
       onError: (e, id) => errors.push([e, id]),
     });
     expect(got).toBeNull();
-    expect(errors).toEqual([[boom, "alloc-broken"], [boom, "alloc-broken"], [boom, "alloc-broken"]]);
+    // One report per attempt, over the real budget — nothing shortens the loop.
+    expect(errors).toEqual(Array.from({ length: ROOM_ID_ATTEMPTS }, () => [boom, "alloc-broken"]));
   });
 });
 
