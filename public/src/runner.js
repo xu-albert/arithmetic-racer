@@ -4,10 +4,10 @@
 // Events emitted (as (eventName, payload)):
 //   countdown { n }           — n=3, 2, 1; one per second before start
 //   start     { problem }     — race begins; problem is the first one for the player
-//   advance   { racerId, score, finishMs? }   — a racer answered correctly; finishMs set if they finished
+//   advance   { laneId, score, finishMs? }   — a racer answered correctly; finishMs set if they finished
 //   problem   { problem }     — next problem for the player after a correct answer
-//   wrong     { racerId }     — player submitted a wrong answer (no penalty, just a UI ping)
-//   drop      { racerId }     — a bot dropped out mid-race (looks like a disconnect)
+//   wrong     { laneId }      — player submitted a wrong answer (no penalty, just a UI ping)
+//   drop      { laneId }      — a bot dropped out mid-race (looks like a disconnect)
 //   finish    { rankings }    — race over; rankings sorted best-first, dropped at the bottom
 
 import { generateSequence, validateAnswer } from './game.js';
@@ -75,15 +75,15 @@ export function createRunner({ difficulty, seed, player, bots = [], length = RAC
     timers.clear();
   }
 
-  function advance(racerId) {
+  function advance(laneId) {
     if (state !== 'racing') return;
-    const r = racers.find((x) => x.id === racerId);
+    const r = racers.find((x) => x.id === laneId);
     if (!r || r.dropped || r.score >= length) return;
     r.score++;
     if (r.score >= length) {
       r.finishMs = Date.now() - startedAt;
     }
-    emit('advance', { racerId: r.id, score: r.score, finishMs: r.finishMs });
+    emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
     if (r.id === 'player' && r.score >= length) {
       // Give close-behind racers a short window to finish before locking the podium.
       setTimer(finishRace, GRACE_PERIOD_MS);
@@ -94,7 +94,7 @@ export function createRunner({ difficulty, seed, player, bots = [], length = RAC
   function dropBot(bot) {
     if (bot.dropped) return;
     bot.dropped = true;
-    emit('drop', { racerId: bot.id });
+    emit('drop', { laneId: bot.id });
     checkRaceComplete();
   }
 
@@ -187,12 +187,12 @@ export function createRunner({ difficulty, seed, player, bots = [], length = RAC
         return { correct: true, next };
       }
       player.currentStreak = 0;
-      emit('wrong', { racerId: 'player' });
+      emit('wrong', { laneId: 'player' });
       return { correct: false };
     },
 
-    currentProblemFor(racerId) {
-      const r = racers.find((x) => x.id === racerId);
+    currentProblemFor(laneId) {
+      const r = racers.find((x) => x.id === laneId);
       if (!r) return null;
       return sequence[r.score] ?? null;
     },
@@ -206,7 +206,7 @@ export function createRunner({ difficulty, seed, player, bots = [], length = RAC
       const player = racers.find((r) => !r.isBot);
       if (!player || player.dropped || player.score >= length) return;
       player.dropped = true;
-      emit('drop', { racerId: player.id });
+      emit('drop', { laneId: player.id });
       finishRace();
     },
 

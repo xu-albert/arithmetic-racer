@@ -166,7 +166,7 @@ describe('submitAnswer — optimistic local scoring', () => {
     assert.deepEqual(result, { correct: true });
     assert.deepEqual(client.sent, [{ type: 'answer', value: ' 2 ' }]);
     assert.deepEqual(events, [
-      { event: 'advance', data: { racerId: 'player', score: 1, finishMs: null } },
+      { event: 'advance', data: { laneId: 'player', score: 1, finishMs: null } },
       { event: 'problem', data: { problem: SEQ[1] } },
     ]);
   });
@@ -178,7 +178,7 @@ describe('submitAnswer — optimistic local scoring', () => {
     const events = record(runner);
     assert.deepEqual(runner.submitAnswer('99'), { correct: false });
     assert.deepEqual(client.sent, [{ type: 'answer', value: '99' }]);
-    assert.deepEqual(events, [{ event: 'wrong', data: { racerId: 'player' } }]);
+    assert.deepEqual(events, [{ event: 'wrong', data: { laneId: 'player' } }]);
   });
 
   test('the last correct answer stamps finishMs from the shared race clock', () => {
@@ -192,7 +192,7 @@ describe('submitAnswer — optimistic local scoring', () => {
     mock.timers.setTime(14_250);
     runner.submitAnswer('6');
     const last = events.filter((e) => e.event === 'advance').at(-1);
-    assert.deepEqual(last.data, { racerId: 'player', score: 3, finishMs: 4250 });
+    assert.deepEqual(last.data, { laneId: 'player', score: 3, finishMs: 4250 });
     // No 'problem' after the finish line.
     assert.equal(events.filter((e) => e.event === 'problem').length, 2);
   });
@@ -228,7 +228,7 @@ describe('server advance reconciliation', () => {
     const events = record(runner);
     client.receive({ type: 'advance', playerId: ME, score: 2, finishMs: null });
     assert.deepEqual(events, [
-      { event: 'advance', data: { racerId: 'player', score: 2, finishMs: null } },
+      { event: 'advance', data: { laneId: 'player', score: 2, finishMs: null } },
       { event: 'problem', data: { problem: SEQ[2] } },
     ]);
     assert.equal(runner.racers.find((r) => r.id === 'player').score, 2);
@@ -240,7 +240,7 @@ describe('server advance reconciliation', () => {
     startRace(client);
     const events = record(runner);
     client.receive({ type: 'advance', playerId: 'p-1', score: 3, finishMs: 3100 });
-    assert.deepEqual(events, [{ event: 'advance', data: { racerId: 'p-1', score: 3, finishMs: 3100 } }]);
+    assert.deepEqual(events, [{ event: 'advance', data: { laneId: 'p-1', score: 3, finishMs: 3100 } }]);
     const opp = runner.racers.find((r) => r.id === 'p-1');
     assert.equal(opp.score, 3);
     assert.equal(opp.finishMs, 3100);
@@ -322,11 +322,11 @@ describe('bot timelines (Quick Match)', () => {
 
     mock.timers.setTime(12_100);
     flushFrame();
-    assert.deepEqual(events, [{ event: 'advance', data: { racerId: 'bot-1', score: 2, finishMs: null } }]);
+    assert.deepEqual(events, [{ event: 'advance', data: { laneId: 'bot-1', score: 2, finishMs: null } }]);
 
     mock.timers.setTime(13_000);
     flushFrame();
-    assert.deepEqual(events.at(-1), { event: 'advance', data: { racerId: 'bot-1', score: 3, finishMs: 3000 } });
+    assert.deepEqual(events.at(-1), { event: 'advance', data: { laneId: 'bot-1', score: 3, finishMs: 3000 } });
     // Every bot finished: no further frame is requested.
     assert.equal(frames.size, 0);
   });
@@ -347,7 +347,7 @@ describe('bot timelines (Quick Match)', () => {
     });
     assert.equal(frames.size, 1);
     flushFrame();
-    assert.deepEqual(events, [{ event: 'advance', data: { racerId: 'bot-1', score: 2, finishMs: null } }]);
+    assert.deepEqual(events, [{ event: 'advance', data: { laneId: 'bot-1', score: 2, finishMs: null } }]);
   });
 
   test('snapshots do not overwrite a bot score the client is driving', () => {
@@ -387,7 +387,7 @@ describe('drop, finish and rankings', () => {
     startRace(client);
     const events = record(runner);
     client.receive({ type: 'drop', playerId: 'p-1' });
-    assert.deepEqual(events, [{ event: 'drop', data: { racerId: 'p-1' } }]);
+    assert.deepEqual(events, [{ event: 'drop', data: { laneId: 'p-1' } }]);
     assert.equal(runner.racers.find((r) => r.id === 'p-1').dropped, true);
   });
 

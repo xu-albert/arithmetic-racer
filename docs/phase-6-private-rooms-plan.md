@@ -9,7 +9,9 @@
 > `player.id` the client's `localStorage` racerId, or treats "a known `playerId`" as a
 > reconnect (the identity/reconnection decision rows, the `Player` shape, Task 9), read
 > "a matching racerId" — that proof is what stops a stranger who read an id off the wire
-> from claiming the seat. See "Room identity" in `AGENTS.md`.
+> from claiming the seat. See "Room identity" in `AGENTS.md`. Task 6's runner sketch has been
+> respelled to match the shipped client, whose lane key is `laneId`; the `racerId` name now
+> belongs to the secret alone.
 
 > **Superseded on room lifetime (2026-08-18).** Every statement below about how a room
 > dies — the "Room lifetime" decision row, Task 4's idle-cleanup step, and the manual
@@ -529,7 +531,7 @@ export function createRemoteRunner({ roomClient, initialState, raceLength, youAr
 
   // Returns object with the runner.js shape:
   //   racers, sequence, raceLength, getRankings, on(handler), start(), submitAnswer(input),
-  //   currentProblemFor(racerId), getState(), quit(), stop()
+  //   currentProblemFor(laneId), getState(), quit(), stop()
 }
 ```
 
@@ -538,9 +540,9 @@ Behavior:
   - `state`: refresh internal `racers` array from `state.players`.
   - `countdown` → emit `('countdown', { n })`.
   - `race-start` → emit `('start', { problem: sequence[0] })` to match runner.js shape.
-  - `advance` → update racer state, emit `('advance', { racerId, score, finishMs })`. If the racer is the local player, also emit `('problem', { problem: nextProblem })` to match runner.js's per-answer signal.
-  - `wrong` → emit `('wrong', { racerId })`.
-  - `drop` → emit `('drop', { racerId })`.
+  - `advance` → update racer state, emit `('advance', { laneId, score, finishMs })`. If the racer is the local player, also emit `('problem', { problem: nextProblem })` to match runner.js's per-answer signal.
+  - `wrong` → emit `('wrong', { laneId })`.
+  - `drop` → emit `('drop', { laneId })`.
   - `finish` → update racer state, emit `('finish', { rankings })`.
 - `start()`: NO-OP. The server drives countdown.
 - `submitAnswer(raw)`: send `{ type: 'answer', value: raw }`. Do not optimistically validate locally — wait for server `advance` or `wrong`. Return `{ correct: true }` always (UI doesn't need the return value; it reacts to events).

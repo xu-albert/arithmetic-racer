@@ -1,9 +1,9 @@
 // Mirrors public/src/runner.js so attachRaceUI works unchanged.
 // The local player's id is aliased to 'player' so ui.js's `.id === 'player'` checks Just Work.
-// Name collision worth knowing: the `racerId` carried by these events (and written to
-// `lane.dataset.racerId` in ui.js) is that lane key — the server's ephemeral broadcast id,
-// or the 'player' alias — never the localStorage racerId, which is the reconnect secret and
-// leaves this browser only inside `hello` (see identity.js).
+// The `laneId` carried by these events (and written to `lane.dataset.laneId` in ui.js) is
+// that lane key — the server's ephemeral broadcast id, or the 'player' alias — never the
+// localStorage racerId, which is the reconnect secret and leaves this browser only inside
+// `hello` (see identity.js).
 
 import { validateAnswer } from './game.js';
 import { scoreBotAt } from './bot-timeline.js';
@@ -69,7 +69,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         if (newScore >= raceLength && bot.finishMs == null) {
           bot.finishMs = botTimelines[i][raceLength - 1];
         }
-        emit('advance', { racerId: bot.id, score: bot.score, finishMs: bot.finishMs });
+        emit('advance', { laneId: bot.id, score: bot.score, finishMs: bot.finishMs });
       }
       if (bot.finishMs == null) anyRunning = true;
     }
@@ -166,7 +166,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           if (msg.score > r.score) {
             r.score = msg.score;
             if (msg.finishMs != null) r.finishMs = msg.finishMs;
-            emit('advance', { racerId: r.id, score: r.score, finishMs: r.finishMs });
+            emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
             const next = sequence[r.score] ?? null;
             if (next) emit('problem', { problem: next });
           }
@@ -175,7 +175,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // Opponents: update from server.
         r.score = msg.score;
         if (msg.finishMs != null) r.finishMs = msg.finishMs;
-        emit('advance', { racerId: r.id, score: r.score, finishMs: r.finishMs });
+        emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
         break;
       }
       case 'wrong': {
@@ -187,7 +187,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         const r = findRacer(msg.playerId);
         if (!r) break;
         r.dropped = true;
-        emit('drop', { racerId: r.id });
+        emit('drop', { laneId: r.id });
         break;
       }
       case 'finish': {
@@ -228,16 +228,16 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         if (me.score >= raceLength && me.finishMs == null && raceStartedAtMs != null) {
           me.finishMs = Date.now() - raceStartedAtMs;
         }
-        emit('advance', { racerId: me.id, score: me.score, finishMs: me.finishMs });
+        emit('advance', { laneId: me.id, score: me.score, finishMs: me.finishMs });
         const next = sequence[me.score] ?? null;
         if (next) emit('problem', { problem: next });
         return { correct: true };
       }
-      emit('wrong', { racerId: me.id });
+      emit('wrong', { laneId: me.id });
       return { correct: false };
     },
-    currentProblemFor(racerId) {
-      const r = racers.find((x) => x.id === racerId);
+    currentProblemFor(laneId) {
+      const r = racers.find((x) => x.id === laneId);
       return r ? sequence[r.score] ?? null : null;
     },
     getState() {

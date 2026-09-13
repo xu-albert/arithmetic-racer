@@ -104,7 +104,7 @@ describe('submitAnswer', () => {
     const result = runner.submitAnswer(answer);
     assert.deepEqual(result, { correct: true, next: runner.sequence[1] });
     assert.deepEqual(events, [
-      { event: 'advance', data: { racerId: 'player', score: 1, finishMs: null } },
+      { event: 'advance', data: { laneId: 'player', score: 1, finishMs: null } },
       { event: 'problem', data: { problem: runner.sequence[1] } },
     ]);
     const me = runner.racers[0];
@@ -120,7 +120,7 @@ describe('submitAnswer', () => {
     runner.submitAnswer(String(runner.sequence[0].answer));
     const events = record(runner);
     assert.deepEqual(runner.submitAnswer('not a number'), { correct: false });
-    assert.deepEqual(events, [{ event: 'wrong', data: { racerId: 'player' } }]);
+    assert.deepEqual(events, [{ event: 'wrong', data: { laneId: 'player' } }]);
     const me = runner.racers[0];
     assert.equal(me.score, 1);
     assert.equal(me.attempts, 2);
@@ -152,7 +152,7 @@ describe('submitAnswer', () => {
     const result = runner.submitAnswer(String(runner.sequence[2].answer));
     assert.deepEqual(result, { correct: true, next: null });
     const lastAdvance = events.filter((e) => e.event === 'advance').at(-1);
-    assert.deepEqual(lastAdvance, { event: 'advance', data: { racerId: 'player', score: 3, finishMs: 2_500 } });
+    assert.deepEqual(lastAdvance, { event: 'advance', data: { laneId: 'player', score: 3, finishMs: 2_500 } });
     // Nobody else to wait for: the race is over the instant the player is.
     assert.deepEqual(runner.submitAnswer('1'), { correct: false, reason: 'not-racing' });
   });
@@ -195,7 +195,7 @@ describe('finishing', () => {
     startRacing(runner);
     const events = record(runner);
     waitMs(10_000);
-    const botAdvances = events.filter((e) => e.event === 'advance' && e.data.racerId === 'bot-0');
+    const botAdvances = events.filter((e) => e.event === 'advance' && e.data.laneId === 'bot-0');
     assert.equal(botAdvances.at(-1).data.score, 3);
     assert.ok(botAdvances.at(-1).data.finishMs > 0);
     finishPlayer(runner);
@@ -235,11 +235,11 @@ describe('bot dropouts', () => {
     const events = record(runner);
     waitMs(60_000);
     const drop = events.find((e) => e.event === 'drop');
-    assert.deepEqual(drop, { event: 'drop', data: { racerId: 'bot-0' } });
+    assert.deepEqual(drop, { event: 'drop', data: { laneId: 'bot-0' } });
     const bot = runner.racers[1];
     assert.equal(bot.dropped, true);
     assert.equal(bot.score, 3);
-    assert.equal(events.filter((e) => e.event === 'advance' && e.data.racerId === 'bot-0').length, 3);
+    assert.equal(events.filter((e) => e.event === 'advance' && e.data.laneId === 'bot-0').length, 3);
     for (const p of runner.sequence) runner.submitAnswer(String(p.answer));
     const finish = events.find((e) => e.event === 'finish');
     assert.deepEqual(finish.data.rankings.map((r) => r.id), ['player', 'bot-0']);
@@ -266,7 +266,7 @@ describe('quit and stop', () => {
     runner.submitAnswer(String(runner.sequence[0].answer));
     runner.quit();
     assert.deepEqual(events.slice(-2).map((e) => e.event), ['drop', 'finish']);
-    assert.deepEqual(events.at(-2).data, { racerId: 'player' });
+    assert.deepEqual(events.at(-2).data, { laneId: 'player' });
     const me = runner.racers[0];
     assert.equal(me.dropped, true);
     assert.equal(me.finishMs, null);

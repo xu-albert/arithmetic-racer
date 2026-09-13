@@ -21,7 +21,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   for (const racer of runner.racers) {
     const lane = document.createElement('div');
     lane.className = 'lane';
-    lane.dataset.racerId = racer.id;
+    lane.dataset.laneId = racer.id;
 
     const handleEl = document.createElement('span');
     handleEl.className = 'lane-handle';
@@ -171,9 +171,9 @@ export function attachRaceUI({ runner, raceLength, screens }) {
       input.disabled = false;
       input.focus();
     } else if (event === 'advance') {
-      const car = carEls.get(data.racerId);
+      const car = carEls.get(data.laneId);
       if (car) car.style.setProperty('--progress', String(data.score / raceLength));
-      if (data.racerId === 'player') {
+      if (data.laneId === 'player') {
         scoreEl.textContent = `${data.score} / ${raceLength}`;
         if (data.score >= raceLength) {
           input.disabled = true;
@@ -187,7 +187,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
       input.classList.add('wrong');
       setTimeout(() => input.classList.remove('wrong'), 250);
     } else if (event === 'drop') {
-      const lane = laneEls.get(data.racerId);
+      const lane = laneEls.get(data.laneId);
       if (lane) lane.classList.add('dropped');
       if (podium.childElementCount > 0) renderPodium();
     } else if (event === 'finish') {

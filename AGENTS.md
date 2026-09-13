@@ -13,8 +13,9 @@ A room player carries two identifiers, and conflating them is a takeover bug:
   existing seat. Server-side only; `publicPlayer()` strips it, alongside `deviceId`/`userId`.
 - `player.id` — an ephemeral `p-<n>` id minted per room (`nextBroadcastId`). This is the
   wire identity: `youAre`, every `playerId` field, `disconnectDeadlines` keys, and the
-  client's lane keying all use it. Non-UUID on purpose, so `handleHello`'s UUID gate makes
-  a broadcast id unusable as a credential.
+  client's lane keying (`laneId` in the runner events and `lane.dataset.laneId`, named so
+  that nothing client-side reuses the credential's name) all use it. Non-UUID on purpose,
+  so `handleHello`'s UUID gate makes a broadcast id unusable as a credential.
 
 A seat also records `player.connId`, the socket that most recently claimed it. The
 racerId says *which* seat a socket may act on; `connId` says which socket's close is
