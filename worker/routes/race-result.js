@@ -14,6 +14,7 @@
 import { readUserId } from "../session.js";
 import { insertRaceResult } from "../race-result-store.js";
 import { allowRequest } from "../rate-limit.js";
+import { logError, KINDS } from "../logger.js";
 
 // Matches the `period` on both limiters in wrangler.jsonc. The binding only
 // permits 10 or 60, so this is a fixed window, not a rolling one.
@@ -146,7 +147,7 @@ export async function handleRaceResult(request, env) {
       room_id: null,
     }));
   } catch (err) {
-    console.error("[race-result] insert failed", err);
+    logError(KINDS.RACE_RESULT_DB, err, { path: "solo" });
     return Response.json(
       { error: "db_error" },
       { status: 500 }

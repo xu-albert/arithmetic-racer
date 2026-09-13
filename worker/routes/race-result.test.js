@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { handleRaceResult } from "./race-result.js";
+import { KINDS } from "../logger.js";
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
@@ -299,7 +300,7 @@ describe("POST /api/race-result — validation", () => {
       expect(await res.json()).toEqual({ error: "invalid_body" });
     });
 
-    it("accepts wrong-answer retries beyond problems_total", async () => {
+    it("accepts an honest race whose wrong-answer retries push attempted past total", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
           problems_total: 10, problems_attempted: 11,
@@ -446,7 +447,11 @@ describe("POST /api/race-result — bounded solo contract", () => {
       });
       expect(res.status).toBe(500);
       expect(await res.json()).toEqual({ error: "db_error" });
-      expect(log).toHaveBeenCalledWith("[race-result] insert failed", failure);
+      expect(log).toHaveBeenCalledTimes(1);
+      const logged = JSON.parse(log.mock.calls[0][0]);
+      expect(logged.kind).toBe(KINDS.RACE_RESULT_DB);
+      expect(logged.context).toEqual({ path: "solo" });
+      expect(logged.err.message).toBe(failure.message);
     } finally {
       log.mockRestore();
     }
