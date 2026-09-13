@@ -156,6 +156,172 @@ describe('race-start and countdown', () => {
   });
 });
 
+// A reload or a dropped socket mid-race rebuilds the runner from a `state`
+// snapshot. `race-start` is sent once, at the countdown→racing transition, so
+// there is nothing left to wait for — and until the snapshot itself starts the
+// race, ui.js leaves the answer input disabled and every car at the line.
+describe('reconnecting into a race already in progress', () => {
+  const racingState = (extra = {}) =>
+    lobbyState({
+      state: 'racing',
+      problemSequence: SEQ,
+      raceStartedAt: 10_000,
+      ...extra,
+    });
+
+  test('a runner built from an already-racing snapshot is racing, and starts as soon as the UI subscribes', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: racingState({ players: [player('p-1', { score: 2 }), player(ME, { score: 1 })] }),
+      youAre: ME,
+    });
+    // Racing before anybody is listening: the handoff in lobby.js constructs the
+    // runner first and only then hands it to attachRaceUI.
+    assert.equal(runner.getState(), 'racing');
+
+    const events = record(runner);
+    assert.deepEqual(events, [
+      // 'start' is what ui.js enables the answer input on, and it carries the
+      // problem to answer now — which mid-race is not the first one.
+      { event: 'start', data: { problem: SEQ[1] } },
+      // …and 'advance' is what moves the cars and the score readout off zero.
+      { event: 'advance', data: { laneId: 'p-1', score: 2, finishMs: null } },
+      { event: 'advance', data: { laneId: 'player', score: 1, finishMs: null } },
+    ]);
+    assert.deepEqual(runner.currentProblemFor('player'), SEQ[1]);
+  });
+
+  test('the reconnect snapshot that follows does not start the race a second time', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: racingState({ players: [player('p-1', { score: 2 }), player(ME, { score: 1 })] }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    client.receive({
+      type: 'state',
+      state: racingState({ players: [player('p-1', { score: 3 }), player(ME, { score: 1 })] }),
+    });
+    assert.equal(events.filter((e) => e.event === 'start').length, 1);
+    assert.equal(runner.getState(), 'racing');
+  });
+
+  test('a seat the room dropped is replayed as dropped, and is not handed a start', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: racingState({ players: [player('p-1', { score: 2 }), player(ME, { score: 1, dropped: true })] }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    // No 'start': ui.js enables the answer input on it, and both submitAnswer
+    // and the server ignore a dropped seat's answers.
+    assert.deepEqual(events, [
+      { event: 'advance', data: { laneId: 'p-1', score: 2, finishMs: null } },
+      { event: 'advance', data: { laneId: 'player', score: 1, finishMs: null } },
+      { event: 'drop', data: { laneId: 'player' } },
+    ]);
+    assert.deepEqual(runner.getRankings().find((r) => r.id === 'player').dropped, true);
+  });
+
+  test('a dropped opponent is replayed so their lane greys, without ending your race', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: racingState({ players: [player('p-1', { score: 2, dropped: true }), player(ME, { score: 1 })] }),
+      youAre: ME,
+    });
+    assert.deepEqual(record(runner), [
+      { event: 'start', data: { problem: SEQ[1] } },
+      { event: 'advance', data: { laneId: 'p-1', score: 2, finishMs: null } },
+      { event: 'drop', data: { laneId: 'p-1' } },
+      { event: 'advance', data: { laneId: 'player', score: 1, finishMs: null } },
+    ]);
+  });
+
+  test('racers who already finished are replayed with their finish time', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: racingState({
+        players: [player('p-1', { score: SEQ.length, finishMs: 4200 }), player(ME)],
+      }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    assert.deepEqual(events, [
+      { event: 'start', data: { problem: SEQ[0] } },
+      { event: 'advance', data: { laneId: 'p-1', score: SEQ.length, finishMs: 4200 } },
+    ]);
+  });
+
+  test('a snapshot promotes a runner that was built mid-countdown into a live race', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 1, problemSequence: SEQ }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    assert.equal(runner.getState(), 'idle');
+    // The socket dropped over the GO frame, so `race-start` never arrived.
+    client.receive({
+      type: 'state',
+      state: racingState({ players: [player('p-1'), player(ME, { score: 2 })] }),
+    });
+    assert.equal(runner.getState(), 'racing');
+    assert.deepEqual(events, [
+      { event: 'start', data: { problem: SEQ[2] } },
+      { event: 'advance', data: { laneId: 'player', score: 2, finishMs: null } },
+    ]);
+  });
+
+  test('the snapshot adopts the shared race clock, so a reconnected finish is timed from it', () => {
+    mock.timers.enable({ apis: ['Date'], now: 10_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 1, problemSequence: SEQ }),
+      youAre: ME,
+    });
+    record(runner);
+    client.receive({
+      type: 'state',
+      state: racingState({ players: [player('p-1'), player(ME, { score: SEQ.length - 1 })] }),
+    });
+    mock.timers.tick(3_000);
+    runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    assert.equal(runner.racers.find((r) => r.id === 'player').finishMs, 3_000);
+  });
+
+  test('the ordinary countdown → race-start path still starts the race exactly once', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    const events = record(runner);
+    client.receive({ type: 'countdown', n: 1 });
+    client.receive({ type: 'countdown', n: 0 });
+    startRace(client);
+    // A state broadcast follows the transition on the server.
+    client.receive({ type: 'state', state: racingState() });
+    startRace(client);
+    assert.deepEqual(events.filter((e) => e.event === 'start'), [{ event: 'start', data: { problem: SEQ[0] } }]);
+    assert.equal(runner.getState(), 'racing');
+  });
+
+  test('a listener that subscribes after a message-driven start is not handed a second one', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    const attached = record(runner);
+    startRace(client);
+    assert.deepEqual(attached, [{ event: 'start', data: { problem: SEQ[0] } }]);
+    // The start was paid out to whoever was listening when it happened; it is
+    // owed only when the race began before anybody had subscribed.
+    assert.deepEqual(record(runner), []);
+  });
+});
+
 describe('submitAnswer — optimistic local scoring', () => {
   test('a correct answer moves the car before the server replies, and is relayed', () => {
     const client = fakeRoomClient();
@@ -232,6 +398,27 @@ describe('server advance reconciliation', () => {
       { event: 'problem', data: { problem: SEQ[2] } },
     ]);
     assert.equal(runner.racers.find((r) => r.id === 'player').score, 2);
+  });
+
+  test("the room's finish time replaces the optimistic one, which carries this browser's clock skew", () => {
+    // The room started the race at 10_000 on its own clock; this browser's is
+    // 10s behind it, so the elapsed it computes for itself comes out negative
+    // — and it gets ranked against times the room stamped.
+    mock.timers.enable({ apis: ['Date'], now: 7_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    startRace(client, 10_000);
+    for (const p of SEQ) runner.submitAnswer(String(p.answer));
+    const me = runner.racers.find((r) => r.id === 'player');
+    assert.equal(me.finishMs, -3_000, 'the optimistic stamp mixes the two clocks');
+
+    const events = record(runner);
+    client.receive({ type: 'advance', playerId: ME, score: SEQ.length, finishMs: 7_000 });
+
+    assert.equal(me.finishMs, 7_000);
+    assert.deepEqual(events, [
+      { event: 'advance', data: { laneId: 'player', score: SEQ.length, finishMs: 7_000 } },
+    ]);
   });
 
   test("an opponent's advance is applied from the server and carries their finishMs", () => {
@@ -347,7 +534,69 @@ describe('bot timelines (Quick Match)', () => {
     });
     assert.equal(frames.size, 1);
     flushFrame();
-    assert.deepEqual(events, [{ event: 'advance', data: { laneId: 'bot-1', score: 2, finishMs: null } }]);
+    assert.deepEqual(events, [
+      // Reconnecting into a racing snapshot starts the race for this client too.
+      { event: 'start', data: { problem: SEQ[0] } },
+      { event: 'advance', data: { laneId: 'bot-1', score: 2, finishMs: null } },
+    ]);
+  });
+
+  test('the snapshot the runner is built from carries the timelines too — bots are not frozen until the next broadcast', () => {
+    mock.timers.enable({ apis: ['Date'], now: 12_100 });
+    const client = fakeRoomClient();
+    // The handoff in lobby.js constructs the runner from this snapshot; no
+    // further `state` message is owed, so the timelines have to be taken here.
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: botState({ state: 'racing', problemSequence: SEQ, raceStartedAt: 10_000, botTimelines: TIMELINE }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    assert.equal(frames.size, 1, 'the bot ticker is already scheduled');
+    flushFrame();
+    assert.deepEqual(events, [
+      { event: 'start', data: { problem: SEQ[0] } },
+      { event: 'advance', data: { laneId: 'bot-1', score: 2, finishMs: null } },
+    ]);
+    runner.stop();
+  });
+
+  test('a reload replays the bots where their timelines already put them, not at the line', () => {
+    // The room keeps every bot row at score 0 / finishMs null until it
+    // finalizes them at race end, so a mid-race snapshot says nothing about a
+    // bot that is already home. The timelines it carries do, and the replay has
+    // to read them before it announces anything: the race screen ranks the
+    // local player against whatever it can see at that moment.
+    mock.timers.enable({ apis: ['Date'], now: 17_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: botState({
+        state: 'racing',
+        problemSequence: SEQ,
+        raceStartedAt: 10_000,
+        botTimelines: TIMELINE,
+        players: [
+          player('p-1', { score: 1 }),
+          player(ME, { score: SEQ.length, finishMs: 5_000 }),
+          player('bot-1', { isBot: true, tier: 'fast' }),
+        ],
+      }),
+      youAre: ME,
+    });
+
+    // Everything below is the replay, before a single animation frame has run.
+    const events = record(runner);
+    assert.deepEqual(events, [
+      { event: 'start', data: { problem: null } },
+      { event: 'advance', data: { laneId: 'p-1', score: 1, finishMs: null } },
+      { event: 'advance', data: { laneId: 'player', score: SEQ.length, finishMs: 5_000 } },
+      { event: 'advance', data: { laneId: 'bot-1', score: SEQ.length, finishMs: 3_000 } },
+    ]);
+
+    flushFrame();
+    assert.equal(events.length, 4, 'the frame that follows has nothing left to announce');
+    runner.stop();
   });
 
   test('snapshots do not overwrite a bot score the client is driving', () => {
@@ -365,6 +614,50 @@ describe('bot timelines (Quick Match)', () => {
       state: botState({ state: 'racing', players: [player('p-1'), player(ME), player('bot-1', { isBot: true, score: 0 })] }),
     });
     assert.equal(bot.score, 2);
+  });
+
+  test('a finished snapshot ends the bots the client is driving', () => {
+    // Quick Match: the room ended the race on its human-only completeness check
+    // and recorded the bot short of the line as a dnf, but the socket dropped
+    // before `finish`. The reconnect lands on a `finished` snapshot, which
+    // carries no bot rows at all, so the terminal transition is the only thing
+    // that can stop them crossing the line over the results screen.
+    mock.timers.enable({ apis: ['Date'], now: 10_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: botState({ state: 'racing', problemSequence: SEQ, raceStartedAt: 10_000, botTimelines: TIMELINE }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    mock.timers.setTime(12_100);
+    flushFrame();
+    const bot = runner.racers.find((r) => r.id === 'bot-1');
+    assert.equal(bot.score, 2, 'the bot is still short of the line when the race ends');
+    assert.equal(frames.size, 1, 'and its ticker is still running');
+
+    client.receive({
+      type: 'state',
+      state: botState({
+        state: 'finished',
+        players: [player('p-1'), player(ME, { score: SEQ.length, finishMs: 2_100 })],
+      }),
+    });
+
+    assert.equal(frames.size, 0, 'the bot ticker is cancelled at the race end');
+    assert.equal(bot.dnf, true);
+    assert.equal(bot.finishMs, null);
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['player', 'p-1', 'bot-1']);
+
+    // Past its own timeline's finish, and still a dnf on a podium nobody redraws.
+    mock.timers.setTime(14_000);
+    flushFrame();
+    assert.equal(bot.score, 2);
+    assert.equal(bot.finishMs, null);
+    assert.equal(events.at(-1), settled, 'nothing moves once the results are up');
+    runner.stop();
   });
 
   test('a second snapshot does not restart a loop that is already running', () => {
@@ -416,6 +709,114 @@ describe('drop, finish and rankings', () => {
     const me = runner.racers.find((r) => r.id === 'player');
     assert.equal(me.finishMs, 3000);
     assert.equal(runner.racers.find((r) => r.id === 'p-3').dnf, true);
+  });
+
+  test('a newcomer who joined after the race ended stays out of the final standings', () => {
+    // This player's socket died mid-race; the room ended the race on the
+    // deadline and recorded them a dnf, so the one-shot `finish` never arrived.
+    // Meanwhile a third person opened the invite link — the room accepts new
+    // players again once it is back in `finished` — and the reconnect is
+    // answered with a snapshot listing all three. The terminal transition ranks
+    // from the local racers, so a seat that never raced would be tiered as
+    // still-racing and land above this player's own dnf row.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ players: [player('p-1'), player(ME)] }),
+      youAre: ME,
+    });
+    startRace(client);
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'finished',
+        players: [
+          player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+          player(ME, { score: 1, dnf: true }),
+          player('p-3'),
+        ],
+      }),
+    });
+
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-1', 'player']);
+    assert.deepEqual(runner.getRankings().map((r) => r.id), ['p-1', 'player'], 'and the podium draws the same list');
+    assert.equal(runner.racers.some((r) => r.id === 'p-3'), false);
+    assert.equal(events.some((e) => e.data.laneId === 'p-3'), false, 'no lane on the screen belongs to them either');
+  });
+
+  test('a countdown handoff that never saw race-start keeps a post-race joiner off the podium', () => {
+    // The race screen mounts at countdown, then this socket dies over the GO
+    // frame — `race-start` never lands, so nothing has told this runner the
+    // race began. It ends on its deadline with this player a dnf, a third
+    // person opens the invite link while the room sits in `finished`, and the
+    // reconnect is answered with a snapshot listing all three.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 1, problemSequence: SEQ }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'finished',
+        players: [
+          player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+          player(ME, { score: 1, dnf: true }),
+          player('p-3'),
+        ],
+      }),
+    });
+
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-1', 'player']);
+    assert.deepEqual(runner.getRankings().map((r) => r.id), ['p-1', 'player'], 'and the podium draws the same list');
+    assert.equal(runner.racers.some((r) => r.id === 'p-3'), false);
+  });
+
+  test('a lobby snapshot after this runner has raced does not reopen its roster', () => {
+    // Race Again puts the room back in `lobby`, where a newcomer can join. The
+    // snapshot that carries them does reset this still-mounted runner — the
+    // lobby rows are score 0 with no finish, so `reconcilePlayers` rolls the
+    // finish it just settled back off this player. That reset is the room's to
+    // make. Enlarging the roster of the race that ran is not, and is all this
+    // asserts.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ players: [player('p-1'), player(ME)] }),
+      youAre: ME,
+    });
+    startRace(client);
+    client.receive({
+      type: 'finish',
+      rankings: [
+        { id: ME, score: SEQ.length, finishMs: 3000, dropped: false, dnf: false },
+        { id: 'p-1', score: 1, finishMs: null, dropped: false, dnf: true },
+      ],
+    });
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({ players: [player('p-1'), player(ME), player('p-3')] }),
+    });
+
+    assert.deepEqual(runner.racers.map((r) => r.id), ['p-1', 'player'], 'p-3 never joins this race');
+  });
+
+  test('a player who joins before the race starts is still picked up from the snapshot', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    client.receive({ type: 'state', state: lobbyState({ players: [player('p-1'), player(ME), player('p-3')] }) });
+    startRace(client);
+    assert.deepEqual(runner.racers.map((r) => r.id), ['p-1', 'player', 'p-3']);
   });
 
   test('getRankings orders still-racing players by score, higher first', () => {

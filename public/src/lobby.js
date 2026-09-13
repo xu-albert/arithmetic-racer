@@ -353,7 +353,13 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
       }
 
       // If race already in progress when we joined / state moves to racing, hand off.
-      if (!raceStartHandled && (currentState.state === 'racing' || currentState.state === 'countdown') && onRaceStart) {
+      // `youAre` is part of the condition, not just a value passed along: the
+      // server pushes state on connect, before `hello` proves which seat this
+      // socket owns, so a reloading player's first snapshot says `racing` with
+      // no seat id. Handing that one over aliases nobody to 'player' and the
+      // race screen throws reading that racer's score. The post-`hello`
+      // broadcast carries the seat, one round trip later.
+      if (!raceStartHandled && youAre && (currentState.state === 'racing' || currentState.state === 'countdown') && onRaceStart) {
         raceStartHandled = true;
         onRaceStart({ roomClient: client, initialState: currentState, youAre });
       }

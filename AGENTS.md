@@ -110,6 +110,72 @@ an expired one's name. `POST /api/rooms` clears it via the `claimRoomName()` RPC
 trusting `this.state`. Coverage: `server/room-winddown.test.js` (server) and
 `public/src/room-expiry.test.js` (the client contract in `room-expiry.js`).
 
+## Every one-shot room broadcast needs a snapshot equivalent
+
+A reconnecting or reloading client gets a `state` snapshot, never a replay, so
+any message the room sends exactly once at a transition has to be reconstructible
+from `publicState()`. `race-start` and `bot-timelines` are both sent once at the
+countdown→racing edge, and `createRemoteRunner` rebuilds both from a `racing`
+snapshot (`public/src/remote-runner.js`) — without that the race screen stays on
+its initial paint: input disabled, every car at the line, score 0.
+
+A snapshot has to reconcile an *already mounted* runner too, and that is the
+harder half: a PartySocket auto-reconnect reuses the existing runner, so
+`beginRace()` no-ops and only the snapshot's own corrections are news. Applying
+them silently leaves the screen painted from the last event it saw. Worse, the
+snapshot is allowed to *contradict* this client — an answer whose frame died
+with the socket leaves an optimistic finish the room never recorded — so
+`reconcilePlayers()` takes the server's score and finish verbatim, including a
+`null` that revokes a finish, and `announce()` emits what moved. Bots are the
+one exception: the room parks them at 0, so their progress is client-owned.
+
+The terminal transition needs the same treatment. `finish` is sent once, and a
+race now ends on a deadline rather than only when everyone finishes, so a socket
+that was away misses it and reconnects into a `finished` snapshot instead.
+`settleRace()` is that one-time transition however it is learned. It ranks from
+the local `racers`, never from the snapshot's player list: `PublicRaceRoom`
+strips bots and departed seats from `state.players` as it ends the race, so that
+list is not the podium.
+
+Bots are the sharpest case of that rebuild, because they have no snapshot state
+at all: `PublicRaceRoom` holds every bot row at `score: 0, finishMs: null` until
+`finishRace()` finalizes it, so mid-race bot progress exists only on the client,
+derived from the timelines. The replay therefore catches them up from
+`botTimelines` before it emits anything — the race screen ranks the local player
+against whatever `runner.racers` says at that moment, and a bot still on the
+start line is a first place the player did not earn.
+
+The client's own handoff order is the trap, twice over.
+
+`main.js`'s `handleRoomRaceStart` — reached through `attachLobby`'s `onRaceStart`
+callback — constructs the runner and only then hands it to `attachRaceUI`, so
+a start derived at construction has no listeners yet; the runner holds it and
+delivers it on first `on()` — and only the *first*, so nothing may subscribe
+ahead of the race screen. Anything new that bootstraps from the initial snapshot
+has to do the same, and has to replay every field the screen paints from events
+rather than from `runner.racers`: `advance` for score and car position, `drop`
+for a greyed lane. `dropped` is the one that also gates the start, because the
+room keeps a dropped seat in `state.players` (for the DNF row) and ignores its
+answers — enabling its input hands back a box where typing does nothing.
+
+And a snapshot says what the room is doing before it can say who *you* are:
+`onConnect` pushes `state` ahead of `hello`, so the first one a reloading player
+receives is `racing` with `youAre: null`. Without a seat id nothing is aliased to
+`'player'` and `attachRaceUI` throws reading that racer's score — before it
+subscribes, so the runner's owed start is never collected and the latched
+`raceStartHandled` cannot be retried. The seat id is therefore part of the
+handoff condition in `lobby.js`, not a value it merely forwards.
+
+A replay also breaks assumptions the live path made for free. `showFinishBanner`
+counted every finisher to get a place, which is only yours while you are the
+newest one; reloading after someone passed you made it count them too. It now
+takes the place off `rankRacers` — the one ranking, which the podium under it
+draws and the server sorts by — so the screen cannot contradict itself. Suspect
+any race-screen arithmetic that reads "right now" state. `public/src/ui.test.js`
+drives the race screen over a DOM stub for exactly these, and
+`public/src/lobby-handoff.test.js` covers the gate itself — the real
+`attachLobby` over a stubbed PartySocket, DOM and localStorage.
+
 ## Dependencies and the lockfile
 
 The Cloudflare Workers build runs `npm ci`, which hard-fails unless `package-lock.json`

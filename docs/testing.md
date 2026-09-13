@@ -56,7 +56,7 @@ lint: a stray test file in the wrong directory silently joins the wrong runner (
 
 | Directory | Runner | What's covered |
 | --- | --- | --- |
-| `public/src/*.test.js` | `node --test` | Client logic: `runner.js`/`remote-runner.js` (race loop), `game.js` (problem generation, difficulty), `bot.js`/`bot-timeline.js`, `handles.js`, `header.js`, `profile.js`, `room-config-rules.js`, `room-expiry.js`, `seeded-rng.js`, `username-validator-client.js`, `recent-finishes.js`, `leaderboard.js`, `leaderboard-period.js`, `bug-report-context.js`, `auto-start.js`, `captcha-session.js` |
+| `public/src/*.test.js` | `node --test` | Client logic: `runner.js`/`remote-runner.js` (race loop), `game.js` (problem generation, difficulty), `bot.js`/`bot-timeline.js`, `handles.js`, `header.js`, `profile.js`, `room-config-rules.js`, `room-expiry.js`, `ui.js` (race screen, over a DOM stub), `lobby.js` (the race-handoff gate, over stubbed PartySocket + DOM), `seeded-rng.js`, `username-validator-client.js`, `recent-finishes.js`, `leaderboard.js`, `leaderboard-period.js`, `bug-report-context.js`, `auto-start.js`, `captcha-session.js` |
 | `server/*.test.js` (vitest) | `vitest` | Room DO behavior: `room-identity.test.js`, `public-room.test.js`, `room-config.test.js`, `room-handles.test.js`, `room-winddown.test.js`, `room-captcha.test.js`, `room-captcha-e2e.test.js`, `room-race-deadline.test.js`, `lobby-router.test.js`, `socket-limit.test.js` |
 | `server/room-stats.test.js`, `server/captcha.test.js` | `node --test` | Pure PPM/points math and the captcha helpers (trigger rate, seeded problem set, wire projection), no DO — explicitly carved out of vitest |
 | `worker/*.test.js` | `vitest` | Worker-level helpers with D1/binding dependencies: `email.test.js`, `log-throttle.test.js`, `logger.test.js`, `plausibility.test.js`, `race-result-store.test.js`, `race-score.test.js`, `rate-limit.test.js`, `user-agent.test.js`, `username-validator.test.js`, `version.test.js` |
@@ -66,9 +66,12 @@ lint: a stray test file in the wrong directory silently joins the wrong runner (
 
 **How to run:**
 - Everything: `npm test` (see §12).
-- Just the `node --test` layer: `node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs`
-- Just `vitest`: `npx vitest run`
-- A single file: append its path to either command, e.g. `node --test server/room-stats.test.js` or `npx vitest run server/room-identity.test.js`.
+- Just the `node --test` layer, or a single file from it: §12 has the exact commands. They
+  carry `--experimental-test-module-mocks`, as the `test` script does — without it
+  `lobby-handoff.test.js`, which stubs `partysocket` via `mock.module`, fails rather than
+  skips.
+- Just `vitest`, or a single file from it: `npx vitest run [path]`, e.g.
+  `npx vitest run server/room-identity.test.js`.
 
 **What's missing:** no dedicated unit tests for `public/src/main.js` (routing between
 Quickplay/lobby-room/room-expired screens) or `server/room.js`'s WebSocket message dispatch
@@ -137,6 +140,7 @@ that way past the PR that introduced the fix is the thing this rule exists to pr
 | 16 | Admin dashboard: `createdAt` type mismatch breaking drill-down and the signups window. | 2167f26 | `worker/routes/admin.test.js` | GUARDED |
 | 17 | **Captcha verification lifecycle**: a settled challenge must leave exactly one `race_results` row for that racer — the race-end insert stands down on `player.resultHeld`, never on "a challenge is still open", or a failed/timed-out verification is followed by a second, passively-clean row that reaches the board. Same PR also fixed: settlement authority leaking to other players (a host rematch failing a guest's challenge), the trigger firing on non-canonical race lengths, and `sendToSeat` treating `getConnections()` as an array. Full invariant writeup: `AGENTS.md` "Active verification: the superhuman-pace captcha". | 4bc89c7 (feature) + 01cf662 / 78f5f04 / 999a7c5 / 11a8d26 (`no-mistakes(review)` fixes) | `server/room-captcha.test.js` ("one row per racer per race, whenever the challenge settles"; "the challenge belongs to the racer, not the race"), `server/room-captcha-e2e.test.js`, `worker/routes/captcha-exclusion.test.js` | GUARDED |
 | 18 | **Unbounded race**: a still-connected racer who simply stopped answering held the race open indefinitely — `isRaceComplete()` was the only ending, so whoever had already crossed the line never received `finish`, their row was never written, and the room never reached its cleanup path (Quick Match has no idle winddown to fall back on). Every race now ends at `raceDeadlineAt()`: the grace the first finisher arms, or a ceiling on the race nobody finishes at all. A seat that already carries a `finishMs` keeps its result through a quit or a disconnect in between. Full invariant writeup: `AGENTS.md` "Room lifecycle: private rooms wind down, public ones do not". | 0836617 (`fix(room): bound every race with a deadline and dnf the racers who stall`) + 354c748 / 16eb38b (`no-mistakes(review)` fixes) | `server/room-race-deadline.test.js` | GUARDED |
+| 19 | **Mid-race reconnect**: reloading or reconnecting while the room is `racing` left the browser on a dead race screen — input disabled, every car at the start line, score 0 — because `race-start`/`bot-timelines` are sent once at the countdown→racing edge and a reconnect gets a `state` snapshot, never a replay. Same PR also fixed the finish banner reading its place off its own finisher count instead of the canonical ranking. A follow-up round extended it from a freshly built runner to an already-mounted one: an authoritative snapshot now reconciles the live screen (rolling back a finish whose answer never reached the room, reopening the input, greying a dropped seat), and a `finished` snapshot delivers the terminal result for a socket that missed the one-shot `finish`. Full invariant writeup: `AGENTS.md` "Every one-shot room broadcast needs a snapshot equivalent". | 23ca4bb (`fix(race): bootstrap a reconnecting client into the race already in progress`) + 722d9f0 / 4be0b6d (the mounted-runner reconciliation) + f105676 / 79e688a / bb8d31b / 1a54b78 / 9701592 / fcc1b9c / 2300e52 / f45df72 / 97700a9 / 59ac2c6 (`no-mistakes(review)` fixes) | `public/src/remote-runner.test.js` ("reconnecting into a race already in progress", the bot-timeline reload cases), `public/src/ui.test.js` ("a race screen opened from a mid-race snapshot", "an authoritative snapshot landing on a mounted race screen", "the finish banner"), `public/src/lobby-handoff.test.js` (the `youAre` gate, over the real `attachLobby`) | GUARDED |
 
 ## 5. End-to-end and UI tests
 
@@ -146,7 +150,9 @@ Puppeteer, no headless-Chrome suite. The two files named `*-e2e.test.js`
 thing, but both are vitest tests driving a flow end-to-end at the HTTP/WebSocket/DO level —
 real routing, real sockets, real D1, no browser.
 
-All UI/browser coverage is manual (§6), run against:
+All *browser* coverage is manual (§6) — the DOM-level exceptions are the race screen and the
+lobby's race-handoff gate, which `public/src/ui.test.js` and `public/src/lobby-handoff.test.js`
+drive over DOM stubs under `node --test` (§2). The manual runs go against:
 - **Browsers**: any two modern Chromium/Firefox/Safari windows, or one regular + one
   incognito window of the same browser (distinct `localStorage` is what matters — see §6's
   note on `racerId` isolation).
@@ -214,6 +220,7 @@ today: `server/public-room.test.js` (secrecy — see regression #1/#13 in §4),
 | Q12 | Race finishes in a Quick Match room | Row(s) written to `race_results` with `room_id` set (see §6 D1 checks below); eligible for recent-finishes/leaderboards per `AGENTS.md`'s eligibility rules |
 | Q13 | Leave a Quick Match room idle for the same window that expires a private room | **No** room-expired screen — public rooms never wind down (`AGENTS.md` "Room lifecycle"; regression #2). Confirm by leaving the tab open past `PRIVATE_ROOM_IDLE_MS` (or a temporarily-lowered value under `wrangler dev`) |
 | Q14 | Two separate Quick Match attempts from two browsers, far enough apart (or at different difficulties) that they land in different rooms | Neither can see or guess the other's private-room-style invite link — there isn't one; matchmaking is server-driven |
+| Q15 | Hard-refresh mid-race in a Quick Match room, a few problems in | Same live race screen as row 14 of the two-browser smoke below, plus the bots: each bot car sits where its timeline has it by now and keeps moving, never back at the line. Bot progress only exists on the client (the room holds every bot row at score 0 until the race ends), so this is the case that catches a lost timeline — a bot still at 0 hands you a place you did not earn |
 
 ### Multiplayer two-browser smoke
 
@@ -233,7 +240,8 @@ today: `server/public-room.test.js` (secrecy — see regression #1/#13 in §4),
 | 11 | First player crosses the finish line | Finish banner shows; race **does not** end until the slower player also finishes — or until the grace that first finish arms runs out (`raceGraceMs()`, 6s per problem, so ~60s for a standard race), which ends the race with whoever is still answering marked `dnf`. |
 | 12 | Slower player completes their last problem | Both see the results screen with rankings sorted by `finishMs`. |
 | 13 | Creator clicks **Race Again** (results / lobby-room) | Both return to lobby in state `lobby`; new problem sequence generated on next Start. |
-| 14 | Hard-refresh one tab mid-race | Player rejoins automatically with the same `playerId`; score, finishMs, dropped state all preserved. |
+| 14 | Hard-refresh one tab mid-race | Player rejoins automatically with the same `playerId`; score, finishMs, dropped state all preserved. The refreshed tab lands back on a *live* race screen — answer input enabled and typeable, the score and every car where the race has actually got to, an opponent the room already dropped still greyed — not a frozen start line (regression #19 in §4). |
+| 14b | Take one tab offline mid-race (DevTools → Network → Offline) *without* reloading, stay offline until the race ends (the other player finishes, or row 11's grace runs out), then come back online | The tab does not sit on a frozen race screen: the reconnect's `finished` snapshot settles the race on the already-mounted screen and the results screen appears with the room's own rankings (this player marked `dnf`). Come back *before* the end instead and that same screen is corrected from the snapshot rather than left on whatever it last painted — the room's score and finish for every seat, a seat it dropped while you were away greyed out (regression #19 in §4). |
 | 15 | Close last tab, wait 5 minutes, revisit the URL | Treated as a brand-new empty room (state was reset by the idle-cleanup alarm). The 30-minute idle clock keeps running underneath — the reset does not restart it. |
 | 15b | Leave a private room untouched past its idle window, then look at the open tab | Both tabs land on the **Room expired** screen. Fastest way to see it without waiting 30 minutes: drop `PRIVATE_ROOM_IDLE_MS` in `server/room.js` to ~30s against `wrangler dev`. |
 | 15c | From that screen, click **Back to Home** / **Create a New Room** | Home clears `?room=` from the URL; Create navigates to a fresh `?room=<slug>` that opens as a working lobby (not "expired" again). |
@@ -514,19 +522,23 @@ Single command for the full suite:
 npm test
 ```
 
-This runs `node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs && vitest run --passWithNoTests` — the exact command is the authoritative `test` script in `package.json`, and its output is the authoritative test count.
+That is the `node --test` layer followed by `vitest run --passWithNoTests`; the `test` script
+in `package.json` is the authoritative command (which files each runner claims, and which
+flags the layer needs), and its output is the authoritative test count.
 
 Individual pieces:
 
 ```bash
-# node --test layer only
-node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs
+# node --test layer only. --experimental-test-module-mocks is not optional: without it
+# lobby-handoff.test.js, which stubs partysocket via mock.module, fails rather than skips.
+node --experimental-test-module-mocks --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs
 
 # vitest layer only (Worker routes + Durable Object logic, real D1 bindings)
 npx vitest run
 
-# a single test file, either runner
+# a single test file, either runner (keep the flag for public/src — see above)
 node --test server/room-stats.test.js
+node --experimental-test-module-mocks --test public/src/ui.test.js
 npx vitest run server/room-identity.test.js
 
 # schema-drift check against live prod/preview D1 (needs sqlite3 + wrangler login)
