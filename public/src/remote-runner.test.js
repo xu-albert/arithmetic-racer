@@ -748,6 +748,65 @@ describe('drop, finish and rankings', () => {
     assert.equal(events.some((e) => e.data.laneId === 'p-3'), false, 'no lane on the screen belongs to them either');
   });
 
+  test('a countdown handoff that never saw race-start keeps a post-race joiner off the podium', () => {
+    // The race screen mounts at countdown, then this socket dies over the GO
+    // frame — `race-start` never lands, so nothing has told this runner the
+    // race began. It ends on its deadline with this player a dnf, a third
+    // person opens the invite link while the room sits in `finished`, and the
+    // reconnect is answered with a snapshot listing all three.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 1, problemSequence: SEQ }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'finished',
+        players: [
+          player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+          player(ME, { score: 1, dnf: true }),
+          player('p-3'),
+        ],
+      }),
+    });
+
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-1', 'player']);
+    assert.deepEqual(runner.getRankings().map((r) => r.id), ['p-1', 'player'], 'and the podium draws the same list');
+    assert.equal(runner.racers.some((r) => r.id === 'p-3'), false);
+  });
+
+  test('a lobby snapshot after this runner has raced does not reopen its roster', () => {
+    // Race Again puts the room back in `lobby` and a newcomer can join there,
+    // but this runner's results screen is still ranking the race that just ran.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ players: [player('p-1'), player(ME)] }),
+      youAre: ME,
+    });
+    startRace(client);
+    client.receive({
+      type: 'finish',
+      rankings: [
+        { id: ME, score: SEQ.length, finishMs: 3000, dropped: false, dnf: false },
+        { id: 'p-1', score: 1, finishMs: null, dropped: false, dnf: true },
+      ],
+    });
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({ players: [player('p-1'), player(ME), player('p-3')] }),
+    });
+
+    assert.deepEqual(runner.getRankings().map((r) => r.id), ['p-1', 'player'], 'the newcomer is not one of them');
+  });
+
   test('a player who joins before the race starts is still picked up from the snapshot', () => {
     const client = fakeRoomClient();
     const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });

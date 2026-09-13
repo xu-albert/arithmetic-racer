@@ -159,18 +159,20 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // it never received rolls back, and a finish it never acknowledged is revoked
   // by a null. Bots are the one exception — the room parks them at 0 until it
   // finalizes them, so their progress lives only here.
-  function reconcilePlayers(players) {
+  function reconcilePlayers(players, roomState) {
+    // The roster belongs to one race, and it is open only while the room is
+    // still gathering players for a race this runner has not begun. Past that —
+    // a countdown that has handed off, a race in flight, a `finished` snapshot
+    // carrying somebody who took the invite link after the race ended — an
+    // unknown seat has no lane and no car on the mounted screen, and rankRacers
+    // would tier it above the player's own dnf row on the podium it draws.
+    const rosterOpen = !raceStarted && roomState === 'lobby';
     const changed = [];
     for (const p of players ?? []) {
       const aliased = aliasId(p.id, youAre);
       const existing = racers.find((r) => r.id === aliased);
       if (!existing) {
-        // The roster closes when the race begins. The room refuses new players
-        // through countdown and racing, so a seat this runner has never seen is
-        // somebody who arrived after the race ended: no lane, no car, nothing
-        // on the mounted screen to correct — and rankRacers would tier them
-        // above the player's own dnf row on the podium it still draws.
-        if (!raceStarted) racers.push(toRacer(p, youAre));
+        if (rosterOpen) racers.push(toRacer(p, youAre));
         continue;
       }
       const before = { score: existing.score, finishMs: existing.finishMs, dropped: existing.dropped };
@@ -249,7 +251,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // snapshot is itself what starts the race, `deliverStart` replays the
         // whole world below and announcing again would double every event.
         const wasMounted = startDelivered;
-        const changed = reconcilePlayers(msg.state.players);
+        const changed = reconcilePlayers(msg.state.players, msg.state.state);
         if (msg.state.problemSequence?.length) sequence = msg.state.problemSequence;
         // Replay countdown if we joined mid-countdown and haven't seen a countdown event yet.
         if (msg.state.state === 'countdown' && msg.state.countdownN != null && lastCountdownN == null) {
