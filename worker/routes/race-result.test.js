@@ -387,6 +387,15 @@ describe("POST /api/race-result — validation", () => {
         env
       );
       expect(res.status).toBe(200);
+
+      // The only accepted shape with three distinct counts, so it is the only
+      // place a swapped INSERT binding between them can be caught.
+      const row = await env.DB.prepare(
+        "SELECT problems_total, problems_correct, problems_attempted FROM race_results"
+      ).first();
+      expect(row.problems_total).toBe(20);
+      expect(row.problems_correct).toBe(6);
+      expect(row.problems_attempted).toBe(7);
     });
   });
 
@@ -413,8 +422,8 @@ describe("POST /api/race-result — validation", () => {
 // recorded. readUserId in worker/session.js is what resolves the cookie.
 
 describe("POST /api/race-result — bounded solo contract", () => {
-  // An unfinished race is the one shape no other rule rejects, so a bound under
-  // test here is the only thing that can turn the body away.
+  // Every row below is shaped so exactly one rule can reject it: a second
+  // rejector would keep the suite green with the rule under test deleted.
   const quit = {
     finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
     problems_correct: 0, problems_attempted: 0, accuracy_pct: 0, longest_streak: 0,
@@ -423,9 +432,9 @@ describe("POST /api/race-result — bounded solo contract", () => {
   it.each([
     ["finished with a null finish time", { finish_time_ms: null, avg_time_per_problem_ms: 0, longest_streak: 0 }],
     ["missing finish time", { finish_time_ms: undefined }],
-    ["zero finish time", { finish_time_ms: 0 }],
-    ["unfinished with time", { finished: false }],
-    ["finished before all problems solved", { problems_correct: 18, accuracy_pct: 90 }],
+    ["zero finish time", { finish_time_ms: 0, avg_time_per_problem_ms: 0 }],
+    ["unfinished with time", { finished: false, problems_correct: 18, accuracy_pct: 90, avg_time_per_problem_ms: 0 }],
+    ["finished before all problems solved", { problems_correct: 18, accuracy_pct: 90, avg_time_per_problem_ms: 2667 }],
     ["huge race", { ...quit, problems_total: 1e100 }],
     ["race above maximum", { ...quit, problems_total: 51 }],
     ["oversized device id", { device_id: "x".repeat(129) }],
