@@ -66,9 +66,12 @@ lint: a stray test file in the wrong directory silently joins the wrong runner (
 
 **How to run:**
 - Everything: `npm test` (see §12).
-- Just the `node --test` layer: `node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs`
-- Just `vitest`: `npx vitest run`
-- A single file: append its path to either command, e.g. `node --test server/room-stats.test.js` or `npx vitest run server/room-identity.test.js`.
+- Just the `node --test` layer, or a single file from it: §12 has the exact commands. They
+  carry `--experimental-test-module-mocks`, as the `test` script does — without it
+  `lobby-handoff.test.js`, which stubs `partysocket` via `mock.module`, fails rather than
+  skips.
+- Just `vitest`, or a single file from it: `npx vitest run [path]`, e.g.
+  `npx vitest run server/room-identity.test.js`.
 
 **What's missing:** no dedicated unit tests for `public/src/main.js` (routing between
 Quickplay/lobby-room/room-expired screens) or `server/room.js`'s WebSocket message dispatch
@@ -147,9 +150,9 @@ Puppeteer, no headless-Chrome suite. The two files named `*-e2e.test.js`
 thing, but both are vitest tests driving a flow end-to-end at the HTTP/WebSocket/DO level —
 real routing, real sockets, real D1, no browser.
 
-All *browser* coverage is manual (§6) — the one DOM-level exception is the race screen,
-which `public/src/ui.test.js` drives over a DOM stub under `node --test` (§2). The manual
-runs go against:
+All *browser* coverage is manual (§6) — the DOM-level exceptions are the race screen and the
+lobby's race-handoff gate, which `public/src/ui.test.js` and `public/src/lobby-handoff.test.js`
+drive over DOM stubs under `node --test` (§2). The manual runs go against:
 - **Browsers**: any two modern Chromium/Firefox/Safari windows, or one regular + one
   incognito window of the same browser (distinct `localStorage` is what matters — see §6's
   note on `racerId` isolation).
@@ -238,6 +241,7 @@ today: `server/public-room.test.js` (secrecy — see regression #1/#13 in §4),
 | 12 | Slower player completes their last problem | Both see the results screen with rankings sorted by `finishMs`. |
 | 13 | Creator clicks **Race Again** (results / lobby-room) | Both return to lobby in state `lobby`; new problem sequence generated on next Start. |
 | 14 | Hard-refresh one tab mid-race | Player rejoins automatically with the same `playerId`; score, finishMs, dropped state all preserved. The refreshed tab lands back on a *live* race screen — answer input enabled and typeable, the score and every car where the race has actually got to, an opponent the room already dropped still greyed — not a frozen start line (regression #19 in §4). |
+| 14b | Take one tab offline mid-race (DevTools → Network → Offline) *without* reloading, stay offline until the race ends (the other player finishes, or row 11's grace runs out), then come back online | The tab does not sit on a frozen race screen: the reconnect's `finished` snapshot settles the race on the already-mounted screen and the results screen appears with the room's own rankings (this player marked `dnf`). Come back *before* the end instead and that same screen is corrected from the snapshot rather than left on whatever it last painted — the room's score and finish for every seat, a seat it dropped while you were away greyed out (regression #19 in §4). |
 | 15 | Close last tab, wait 5 minutes, revisit the URL | Treated as a brand-new empty room (state was reset by the idle-cleanup alarm). The 30-minute idle clock keeps running underneath — the reset does not restart it. |
 | 15b | Leave a private room untouched past its idle window, then look at the open tab | Both tabs land on the **Room expired** screen. Fastest way to see it without waiting 30 minutes: drop `PRIVATE_ROOM_IDLE_MS` in `server/room.js` to ~30s against `wrangler dev`. |
 | 15c | From that screen, click **Back to Home** / **Create a New Room** | Home clears `?room=` from the URL; Create navigates to a fresh `?room=<slug>` that opens as a working lobby (not "expired" again). |
@@ -518,19 +522,23 @@ Single command for the full suite:
 npm test
 ```
 
-This runs `node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs && vitest run --passWithNoTests` — the exact command is the authoritative `test` script in `package.json`, and its output is the authoritative test count.
+That is the `node --test` layer followed by `vitest run --passWithNoTests`; the `test` script
+in `package.json` is the authoritative command (which files each runner claims, and which
+flags the layer needs), and its output is the authoritative test count.
 
 Individual pieces:
 
 ```bash
-# node --test layer only
-node --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs
+# node --test layer only. --experimental-test-module-mocks is not optional: without it
+# lobby-handoff.test.js, which stubs partysocket via mock.module, fails rather than skips.
+node --experimental-test-module-mocks --test public/src/*.test.js server/room-stats.test.js server/captcha.test.js migrations/*.test.js scripts/*.test.mjs
 
 # vitest layer only (Worker routes + Durable Object logic, real D1 bindings)
 npx vitest run
 
-# a single test file, either runner
+# a single test file, either runner (keep the flag for public/src — see above)
 node --test server/room-stats.test.js
+node --experimental-test-module-mocks --test public/src/ui.test.js
 npx vitest run server/room-identity.test.js
 
 # schema-drift check against live prod/preview D1 (needs sqlite3 + wrangler login)
