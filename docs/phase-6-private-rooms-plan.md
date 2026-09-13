@@ -19,6 +19,13 @@
 > also expires after 30 minutes with no client touching it, and the 5-minute empty-room
 > cleanup no longer deletes its storage. See "Room lifecycle" in `AGENTS.md`.
 
+> **Superseded on the race deadline (2026-09-11).** The 5-second finish rule below — the
+> "Race finish" decision row, Task 4's `graceDeadline = Date.now() + GRACE_PERIOD_MS` step
+> and the verify bullet reading it back — is not what a room runs. `main` shipped with no
+> race deadline at all for a while; the one it has now is scaled to the race length rather
+> than copied from the solo runner's `GRACE_PERIOD_MS`, and a second bound ends the race
+> nobody finishes at all. See "Room lifecycle" in `AGENTS.md`.
+
 ---
 
 ## Onboarding (read first, in order)
