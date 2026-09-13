@@ -1154,17 +1154,35 @@ export class RaceRoom extends Server {
   }
 
   /**
-   * RPC, called by `POST /api/rooms` when this name is handed out for a new
-   * room. Room ids are drawn from a ~13k-combination word list, so a fresh
-   * room can land on the name of one that expired; without this, its creator
-   * would open the invite link straight onto the "room expired" screen.
+   * RPC, called by `POST /api/rooms` to take this name for a new room. True if
+   * the name was free and is now this room's; false if a live room already
+   * owns it, which is the route's signal to draw again — room ids are three
+   * words from a ~13k-combination list, so a draw really can land on a room
+   * somebody else is sitting in, and returning it would hand the caller a
+   * lobby they did not create.
+   *
+   * The read-then-write *is* the reservation. A Durable Object is
+   * single-threaded per name and its input gate stays shut across these
+   * storage awaits, so two creations that drew the same name serialize here
+   * and only the first one finds it free. Nothing weaker works: a bare
+   * "is it taken?" check would let both callers see a free name and both
+   * return it.
+   *
+   * Free means no state at all, or an expired-room tombstone — clearing that
+   * is why this RPC existed in the first place, since otherwise the creator
+   * opens the invite link straight onto the "room expired" screen.
+   *
+   * Reserving writes *live* state, so an abandoned reservation would hold its
+   * name forever. Arming the alarm hands it to the ordinary idle winddown,
+   * which turns it back into a reclaimable tombstone PRIVATE_ROOM_IDLE_MS
+   * later — the same clock a room whose creator joined and left runs on.
    *
    * Reachable before onStart() — partyserver only initializes on fetch/alarm —
    * so it reads storage itself rather than trusting `this.state`.
    */
-  async claimRoomName() {
+  async reserveRoomName() {
     const stored = await this.ctx.storage.get('state');
-    if (stored?.state !== EXPIRED_ROOM_STATE) return false;
+    if (stored != null && stored.state !== EXPIRED_ROOM_STATE) return false;
     const fresh = this.freshState(this.name);
     await this.ctx.storage.put('state', fresh);
     // If this instance was already running on the tombstone, swap it out too;
@@ -1173,6 +1191,7 @@ export class RaceRoom extends Server {
       this.state = fresh;
       this.persistedActivityAt = fresh.lastActivityAt;
     }
+    await this.scheduleNextAlarm();
     return true;
   }
 

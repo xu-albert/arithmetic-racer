@@ -1,0 +1,228 @@
+// Private room-id allocation.
+//
+// Room ids are three words from a 13,248-name list (24 adjectives × 24 × 23
+// ordered distinct animal pairs), so a draw landing on a name somebody is
+// already using is a birthday problem in the number of live rooms rather than a
+// rarity: ~8.8% at 50 live rooms, ~31.2% at 100. `POST /api/rooms` used to
+// sample once and return the name either way, which handed the caller somebody
+// else's live lobby as their brand-new "private" room — a room they had not
+// created and whose occupants they had never met.
+//
+// So creation reserves instead of sampling. The invariants under test:
+//   - a name a live room owns is never returned; the route draws again
+//   - the reservation is the room's, so the *next* creation cannot take it
+//   - exhausting the retries is a visible failure, not a fallback to a live name
+//   - the ordinary path (nothing in the way) still draws exactly once
+//
+// The reservation is atomic because a Durable Object is single-threaded per
+// name: reserveRoomName() reads and writes storage inside one RPC, so two
+// creations that drew the same name serialize there. That is why the check
+// cannot live in the Worker — both callers would see a free name and both
+// return it.
+
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { env, runInDurableObject } from "cloudflare:test";
+import worker from "./server.js";
+import { generateRoomId, allocateRoomId, ROOM_ID_ATTEMPTS } from "./room-id.js";
+import { PRIVATE_ROOM_IDLE_MS } from "./room.js";
+import { EXPIRED_ROOM_STATE } from "../public/src/room-expiry.js";
+
+let connSeq = 0;
+
+function makeConn(state = {}) {
+  return {
+    id: `sock-${++connSeq}-${crypto.randomUUID()}`,
+    raw: [],
+    closed: null,
+    state,
+    send(s) { this.raw.push(s); },
+    setState(s) { this.state = s; },
+    close(code, reason) { this.closed = { code, reason }; },
+    messages() { return this.raw.map((s) => JSON.parse(s)); },
+  };
+}
+
+async function withPrivateRoom(name, fn) {
+  const stub = env.RaceRoom.get(env.RaceRoom.idFromName(name));
+  return runInDurableObject(stub, async (room) => {
+    if (!room.state) await room.onStart();
+    const conns = [];
+    room.broadcast = (s) => { for (const c of conns) c.send(s); };
+    room.getConnections = () => conns;
+    return fn(room, { conns, stub });
+  });
+}
+
+/** A room with a seated creator in its lobby — the thing a collision hits. */
+async function occupy(name, handle = "Alice") {
+  return withPrivateRoom(name, async (room, { conns }) => {
+    const conn = makeConn({ userId: null });
+    conns.push(conn);
+    await room.onConnect(conn, { request: { headers: new Headers() } });
+    await room.onMessage(conn, JSON.stringify({
+      type: "hello", playerId: crypto.randomUUID(), handle, deviceId: `dev-${handle}`,
+    }));
+    expect(room.state.players.length).toBe(1);
+  });
+}
+
+const reserve = (name) => env.RaceRoom.get(env.RaceRoom.idFromName(name)).reserveRoomName();
+
+/** A draw sequence the allocator consumes one name at a time. */
+function drawsOf(...names) {
+  const seen = [];
+  const generate = () => {
+    const next = names[seen.length] ?? names[names.length - 1];
+    seen.push(next);
+    return next;
+  };
+  return { generate, seen };
+}
+
+describe("allocateRoomId reserves a free name", () => {
+  it("returns the drawn name and draws only once when nothing is in the way", async () => {
+    const free = "alloc-free-" + crypto.randomUUID();
+    const { generate, seen } = drawsOf(free);
+
+    expect(await allocateRoomId(env, { generate })).toBe(free);
+    expect(seen).toEqual([free]);
+  });
+
+  it("arms the idle alarm, so an abandoned reservation releases its name", async () => {
+    const name = "alloc-abandoned-" + crypto.randomUUID();
+    expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
+
+    // The reservation writes live state; without an alarm nothing would ever
+    // wake this never-joined room and the name would be spent for good.
+    await withPrivateRoom(name, async (room) => {
+      const alarm = await room.ctx.storage.getAlarm();
+      expect(alarm).not.toBeNull();
+      expect(alarm).toBeLessThanOrEqual(Date.now() + PRIVATE_ROOM_IDLE_MS);
+
+      room.state.lastActivityAt = Date.now() - PRIVATE_ROOM_IDLE_MS - 1000;
+      await room.onAlarm();
+      expect(room.state.state).toBe(EXPIRED_ROOM_STATE);
+    });
+
+    // And a later creation drawing it gets it back.
+    expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
+  });
+});
+
+describe("allocateRoomId refuses a name in use", () => {
+  it("retries past an occupied name onto a fresh one", async () => {
+    const taken = "alloc-taken-" + crypto.randomUUID();
+    const free = "alloc-next-" + crypto.randomUUID();
+    await occupy(taken);
+
+    const { generate, seen } = drawsOf(taken, free);
+    expect(await allocateRoomId(env, { generate })).toBe(free);
+    expect(seen).toEqual([taken, free]);
+
+    // The occupied room was not disturbed by the attempt on it.
+    await withPrivateRoom(taken, async (room) => {
+      expect(room.state.state).toBe("lobby");
+      expect(room.state.players.length).toBe(1);
+      expect(room.state.players[0].isCreator).toBe(true);
+    });
+  });
+
+  it("refuses a name another creation already reserved but nobody has joined", async () => {
+    // The window this closes: created, link not yet opened. The room has no
+    // players, so anything keyed on occupancy would call it free.
+    const name = "alloc-reserved-" + crypto.randomUUID();
+    expect(await reserve(name)).toBe(true);
+
+    const free = "alloc-reserved-next-" + crypto.randomUUID();
+    const { generate } = drawsOf(name, free);
+    expect(await allocateRoomId(env, { generate })).toBe(free);
+  });
+
+  it("gives up after the attempt budget rather than returning a live name", async () => {
+    const taken = "alloc-exhausted-" + crypto.randomUUID();
+    await occupy(taken);
+
+    const { generate, seen } = drawsOf(taken);
+    expect(await allocateRoomId(env, { generate })).toBeNull();
+    expect(seen.length).toBe(ROOM_ID_ATTEMPTS);
+  });
+
+  it("counts a throwing reservation as taken and reports it", async () => {
+    // An RPC that threw leaves the reservation unproven, so the name is not
+    // ours to hand out — the same answer as "occupied", and the caller hears
+    // about it.
+    const errors = [];
+    const boom = new Error("DO unreachable");
+    const brokenEnv = {
+      RaceRoom: {
+        idFromName: (n) => n,
+        get: () => ({ reserveRoomName: () => { throw boom; } }),
+      },
+    };
+
+    const got = await allocateRoomId(brokenEnv, {
+      attempts: 3,
+      generate: () => "alloc-broken",
+      onError: (e, id) => errors.push([e, id]),
+    });
+    expect(got).toBeNull();
+    expect(errors).toEqual([[boom, "alloc-broken"], [boom, "alloc-broken"], [boom, "alloc-broken"]]);
+  });
+});
+
+describe("POST /api/rooms never hands back a live room", () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  /**
+   * Pin the draw. generateRoomId() takes three rolls for an ordinary name, so
+   * feeding it a repeating triple makes every draw the same id — the shape both
+   * tests below want, one to collide on it and one to receive it.
+   */
+  function pinDraw(rolls) {
+    let i = 0;
+    vi.spyOn(Math, "random").mockImplementation(() => rolls[i++ % rolls.length]);
+    return generateRoomId(() => rolls[(i++) % rolls.length]);
+  }
+
+  const createRoom = () => worker.fetch(
+    new Request("https://racer.test/api/rooms", { method: "POST" }), env, {},
+  );
+
+  it("returns the drawn name on the ordinary path", async () => {
+    const roomId = pinDraw([0.05, 0.41, 0.88]);
+
+    const res = await createRoom();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ roomId });
+
+    // And it is the caller's own room: their first connection reaches a lobby
+    // where they are the creator.
+    await withPrivateRoom(roomId, async (room, { conns }) => {
+      const creator = makeConn({ userId: null });
+      conns.push(creator);
+      await room.onConnect(creator, { request: { headers: new Headers() } });
+      expect(creator.closed).toBeNull();
+      await room.onMessage(creator, JSON.stringify({
+        type: "hello", playerId: crypto.randomUUID(), handle: "Creator", deviceId: "dev-creator",
+      }));
+      expect(room.state.players[0].isCreator).toBe(true);
+    });
+  });
+
+  it("503s when every draw is a room somebody is already in", async () => {
+    // Every draw is the same name and that name is occupied, so the retries
+    // run out. The caller has to be told; returning the name would drop them
+    // into Alice's lobby, where they are not the creator.
+    const roomId = pinDraw([0.62, 0.62, 0.62]);
+    await occupy(roomId, "Alice");
+
+    const res = await createRoom();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "no room name available" });
+
+    await withPrivateRoom(roomId, async (room) => {
+      expect(room.state.players.length).toBe(1);
+      expect(room.state.players[0].handle).toBe("Alice");
+    });
+  });
+});

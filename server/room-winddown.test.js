@@ -349,7 +349,7 @@ describe("private room — what a client hitting an expired room gets", () => {
     });
   });
 
-  it("claimRoomName clears a tombstone when the name is handed out again", async () => {
+  it("reserveRoomName clears a tombstone when the name is handed out again", async () => {
     const name = "expired-claim-" + crypto.randomUUID();
     await withPrivateRoom(name, async (room, { conns }) => {
       await join(room, conns);
@@ -359,7 +359,7 @@ describe("private room — what a client hitting an expired room gets", () => {
 
     // Over RPC, the same path POST /api/rooms takes.
     const stub = env.RaceRoom.get(env.RaceRoom.idFromName(name));
-    expect(await stub.claimRoomName()).toBe(true);
+    expect(await stub.reserveRoomName()).toBe(true);
 
     await withPrivateRoom(name, async (room) => {
       await room.onStart();
@@ -369,8 +369,10 @@ describe("private room — what a client hitting an expired room gets", () => {
       expect(visitor.messages()[0].type).toBe("state");
     });
 
-    // Idempotent, and it never disturbs a live room.
-    expect(await stub.claimRoomName()).toBe(false);
+    // The reservation now owns the name: a second creation drawing it is told
+    // no rather than being handed this lobby. See server/room-allocation.test.js
+    // for the retry that answer drives.
+    expect(await stub.reserveRoomName()).toBe(false);
   });
 });
 

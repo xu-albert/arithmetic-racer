@@ -102,17 +102,56 @@ Traps this arrangement sets:
 For a private room the 5-minute cleanup no longer deletes DO storage — it
 re-mints state and persists it, carrying the idle clock forward — so an expired
 private room leaves a small storage row behind for good. Nothing wakes the DO
-to collect it; it is cleared lazily, by `claimRoomName()` when the name is drawn
-again or by the `EXPIRED_ROOM_TTL_MS` check in `onStart()` if someone connects
-after 24h. That unbounded-but-tiny growth was accepted deliberately: it is the
-price of the expired screen, and a collector alarm would cost more than the row.
+to collect it; it is cleared lazily, by `reserveRoomName()` when the name is
+drawn again or by the `EXPIRED_ROOM_TTL_MS` check in `onStart()` if someone
+connects after 24h. That unbounded-but-tiny growth was accepted deliberately:
+it is the price of the expired screen, and a collector alarm would cost more
+than the row.
 
 The tombstone answers for the room name for `EXPIRED_ROOM_TTL_MS`, because room
 ids are three words from a ~13k-combination list and a new room really can draw
-an expired one's name. `POST /api/rooms` clears it via the `claimRoomName()` RPC
-— which runs *before* `onStart()`, so it reads storage itself rather than
+an expired one's name. `POST /api/rooms` clears it via the `reserveRoomName()`
+RPC — which runs *before* `onStart()`, so it reads storage itself rather than
 trusting `this.state`. Coverage: `server/room-winddown.test.js` (server) and
 `public/src/room-expiry.test.js` (the client contract in `room-expiry.js`).
+
+## A room name is reserved, never merely drawn
+
+The 13,248-name list (`public/src/handles.js` × `server/room-id.js`) is small
+enough that collisions are a birthday problem in the number of *live* rooms, not
+a rarity: the chance some pair among 50 allocated names collides is ~8.8%, and
+~31.2% at 100. So `POST /api/rooms` allocates through
+`allocateRoomId()` (`server/room-id.js`), which draws up to `ROOM_ID_ATTEMPTS`
+names and keeps the first whose `reserveRoomName()` says yes. Three things about
+that hold it together:
+
+- **The reservation is the DO's read-then-write, and it has to stay there.** A
+  Durable Object is single-threaded per name and its input gate stays shut
+  across those storage awaits, so two creations that drew the same name
+  serialize inside the RPC and only the first finds it free. The same check
+  hoisted into the Worker — "ask, then return the name" — is not a reservation:
+  both callers see free and both get the name.
+- **A live room is any state that is not a tombstone, occupancy irrelevant.** A
+  room created a moment ago has no players yet, so anything keyed on
+  `players.length` would hand its name to the next caller.
+- **Reserving writes live state, so it must arm the alarm.** An abandoned
+  reservation is a room nobody will ever connect to; without the alarm nothing
+  wakes it and the name is spent permanently. Arming hands it to the ordinary
+  idle winddown, which turns it back into a reclaimable tombstone after
+  `PRIVATE_ROOM_IDLE_MS`. The cost accepted in exchange is that every created
+  room — joined or not — leaves a storage row, on the same reasoning as the
+  tombstone row above.
+
+Exhausting the attempts is a `503`, never a fallback to the last name drawn;
+`public/main.js`'s create-room button already surfaces a non-ok response. A
+throwing reservation counts as taken for the same reason — an unproven claim is
+not a name we own. Coverage: `server/room-allocation.test.js`.
+
+Private rooms are **unlisted, not access-controlled**, and that is a deliberate
+product decision rather than a gap to close: the name is the only credential and
+the namespace is cheap to enumerate. Reserving fixes who *creates* a room, not
+who can reach one. Do not add a join capability, invite code or admission check
+without a fresh decision.
 
 ## Every one-shot room broadcast needs a snapshot equivalent
 
