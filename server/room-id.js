@@ -34,8 +34,8 @@ export const ROOM_ID_ATTEMPTS = 8;
  * see its comment in server/room.js. A throwing attempt counts as taken: the
  * reservation is unproven, so the name cannot be handed out either way.
  */
-export async function allocateRoomId(env, { attempts = ROOM_ID_ATTEMPTS, generate = generateRoomId, onError } = {}) {
-  for (let i = 0; i < attempts; i++) {
+export async function allocateRoomId(env, { generate = generateRoomId, onError } = {}) {
+  for (let i = 0; i < ROOM_ID_ATTEMPTS; i++) {
     const roomId = generate();
     try {
       if (await env.RaceRoom.get(env.RaceRoom.idFromName(roomId)).reserveRoomName()) return roomId;

@@ -525,7 +525,7 @@ and no standing manual checklist — gap (§11).
 | Quick Match manual flow | Manual | §6 Quick Match section |
 | Multiplayer two-browser matrix | Manual | §6 Multiplayer two-browser smoke |
 | Room-identity secrecy spot-check | Automated (part of `npm test`) | Covered by `server/room-identity.test.js` / `server/public-room.test.js` — no separate manual step needed once `npm test` is green |
-| Private room-name allocation (no collision handed back) | Automated (part of `npm test`) | `server/room-allocation.test.js` — forced collisions, an exhausted budget, and the ordinary single-draw path |
+| Private room-name allocation (no collision handed back) | Automated (part of `npm test`) | `server/room-allocation.test.js` — forced collisions, an exhausted budget, the ordinary single-draw path, and the short hold on a reservation nobody joins |
 | Idle winddown / room-expired screen | Automated + manual | `server/room-winddown.test.js` automated; §6 15b–15e for the visible behavior |
 | D1 persistence spot-check | Manual | §6 "Room races → race_results persistence" |
 | Recent-finishes / leaderboard browser checks | Manual (logic is automated) | §6 F1–F9, L1–L9 |

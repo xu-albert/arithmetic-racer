@@ -53,6 +53,19 @@ export function raceGraceMs(raceLength) {
 // activity; a race nobody is answering is idle by this definition.
 export const PRIVATE_ROOM_IDLE_MS = 30 * 60 * 1000;
 
+// The same winddown, on a much shorter fuse, for a room that was reserved by
+// `POST /api/rooms` and that nobody has joined yet. Reserving writes live state
+// before there is anyone in the room, so an unauthenticated caller can take
+// names out of a 13,248-name namespace as fast as it can post; holding each one
+// for the full 30 minutes would let a few requests per second deny room
+// creation to everybody. The creator's socket is already opening while the
+// response is in flight, so two minutes is generous for the only client that
+// legitimately has a reservation. The moment a seat is claimed the room is an
+// ordinary private room on PRIVATE_ROOM_IDLE_MS — including after it empties
+// out again, since the idle-cleanup re-mint deliberately carries that clock
+// forward rather than marking the room unjoined a second time.
+export const UNJOINED_ROOM_IDLE_MS = 2 * 60 * 1000;
+
 // How long the tombstone answers for the room name before it is reusable.
 // Room ids come from a 13k-combination word list, so holding one forever
 // would eventually stamp "expired" on a brand-new room; a day is long enough
@@ -600,6 +613,9 @@ export class RaceRoom extends Server {
     };
     this.state.players.push(player);
     this.state.idleCleanupAt = null;
+    // Somebody is in the room now, so it graduates off the reservation's short
+    // fuse onto the ordinary idle clock, for good.
+    delete this.state.unjoined;
 
     connection.setState({ ...currentConnState, playerId: player.id, racerId });
     connection.send(JSON.stringify({ type: 'hello-ack', playerId: player.id, handle }));
@@ -1079,9 +1095,10 @@ export class RaceRoom extends Server {
   }
 
   publicState() {
-    // Strip server-only Player fields (attempts/streak counters, identity) and
-    // the captcha table (seeds, answers, held result rows) before broadcasting.
-    const { captchaChallenges, ...rest } = this.state;
+    // Strip server-only Player fields (attempts/streak counters, identity), the
+    // captcha table (seeds, answers, held result rows) and the unjoined flag
+    // (a lifecycle detail no client acts on) before broadcasting.
+    const { captchaChallenges, unjoined, ...rest } = this.state;
     return { ...rest, players: this.state.players.map(publicPlayer) };
   }
 
@@ -1130,7 +1147,9 @@ export class RaceRoom extends Server {
     if (this.state.state === EXPIRED_ROOM_STATE) return null;
     const since = this.state.lastActivityAt ?? this.state.createdAt;
     if (since == null) return null;
-    return since + PRIVATE_ROOM_IDLE_MS;
+    // A reservation nobody has joined runs on the short fuse; see
+    // UNJOINED_ROOM_IDLE_MS. The flag is dropped by the first seat claimed.
+    return since + (this.state.unjoined ? UNJOINED_ROOM_IDLE_MS : PRIVATE_ROOM_IDLE_MS);
   }
 
   /**
@@ -1173,9 +1192,11 @@ export class RaceRoom extends Server {
    * opens the invite link straight onto the "room expired" screen.
    *
    * Reserving writes *live* state, so an abandoned reservation would hold its
-   * name forever. Arming the alarm hands it to the ordinary idle winddown,
-   * which turns it back into a reclaimable tombstone PRIVATE_ROOM_IDLE_MS
-   * later — the same clock a room whose creator joined and left runs on.
+   * name forever. Arming the alarm hands it to the idle winddown, which turns
+   * it back into a reclaimable tombstone — on UNJOINED_ROOM_IDLE_MS while
+   * nobody has joined, since this endpoint is unauthenticated and the namespace
+   * is small, and on the ordinary PRIVATE_ROOM_IDLE_MS from the first seat
+   * onwards.
    *
    * Reachable before onStart() — partyserver only initializes on fetch/alarm —
    * so it reads storage itself rather than trusting `this.state`.
@@ -1183,7 +1204,7 @@ export class RaceRoom extends Server {
   async reserveRoomName() {
     const stored = await this.ctx.storage.get('state');
     if (stored != null && stored.state !== EXPIRED_ROOM_STATE) return false;
-    const fresh = this.freshState(this.name);
+    const fresh = { ...this.freshState(this.name), unjoined: true };
     await this.ctx.storage.put('state', fresh);
     // If this instance was already running on the tombstone, swap it out too;
     // onStart will not run again to do it.
