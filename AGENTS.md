@@ -58,8 +58,8 @@ are deliberately different mechanisms:
   nobody is answering is idle. It ends in `expireRoom()`: state becomes an
   `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped, and everyone attached
   gets `room-expired` and a closed socket. The same winddown runs on the much
-  shorter `UNJOINED_ROOM_IDLE_MS` while a room is only a reservation nobody has
-  joined — see "A room name is reserved, never merely drawn".
+  shorter `UNJOINED_ROOM_IDLE_MS` while nobody has joined the room at all — see
+  "A room name is reserved, never merely drawn".
 - **Race deadline** — `raceDeadlineAt()`, both rooms. `isRaceComplete()` alone
   never ends a race a connected racer refuses to finish, so two bounds back it:
   the grace the *first* finisher arms (`armRaceGrace()`, value `raceGraceMs()`)
@@ -132,22 +132,25 @@ that hold it together:
 - **A live room is any state that is not a tombstone, occupancy irrelevant.** A
   room created a moment ago has no players yet, so anything keyed on
   `players.length` would hand its name to the next caller.
-- **Reserving writes live state, so it must arm the alarm — on a short fuse.**
-  An abandoned reservation is a room nobody will ever connect to; without the
-  alarm nothing wakes it and the name is spent permanently. Arming hands it to
-  the ordinary idle winddown, which turns it back into a reclaimable tombstone.
-  A reservation nobody has joined winds down after `UNJOINED_ROOM_IDLE_MS`
-  (2 min) rather than `PRIVATE_ROOM_IDLE_MS`, because creation is
-  unauthenticated and unmetered by design: at 30 minutes a hold, a few requests
-  a second would take all 13,248 names and 503 every real creation. Two
-  minutes is generous for the only client that legitimately holds a reservation
-  — the creator's socket is opening while the response is still in flight.
-  `state.unjoined` carries it, set only by `reserveRoomName()` and dropped by
-  the first seat `handleHello()` creates, so the short clock can never shorten
-  a room somebody is in, nor one that emptied out after having someone (the
-  idle-cleanup re-mint carries the clock forward and never re-marks it). The
-  cost accepted in exchange is that every created room — joined or not — leaves
-  a storage row, on the same reasoning as the tombstone row above.
+- **Live state with nobody in it must always carry a fuse, whichever path
+  minted it.** Because a live row is what makes a name unreservable, an unjoined
+  room that nothing will ever wake spends its name permanently. So the two
+  places such state is born both mark `state.unjoined` and arm the alarm:
+  `reserveRoomName()`, and `onStart()` on a fresh mint. The second one is not
+  optional — partyserver runs `onStart` before it looks at the `Upgrade` header,
+  so a plain `GET /parties/race-room/<name>` persists a lobby and then 404s,
+  and unmarked those rows would 503 every real creation for good.
+  An unjoined room winds down after `UNJOINED_ROOM_IDLE_MS` (2 min) instead of
+  `PRIVATE_ROOM_IDLE_MS`, because both paths are unauthenticated and unmetered
+  by design: at a 30-minute hold, a few requests a second would take all 13,248
+  names. Two minutes is generous for the only client that legitimately holds a
+  name it has not joined — the creator's socket is opening while the `POST`
+  response is still in flight. The flag is dropped by the first seat
+  `handleHello()` creates, so the short clock can never shorten a room somebody
+  is in, nor one that emptied out after having someone (the idle-cleanup
+  re-mint carries the clock forward and never re-marks it). The cost accepted in
+  exchange is that every created room — joined or not — leaves a storage row, on
+  the same reasoning as the tombstone row above.
 
 Exhausting the attempts is a `503`, never a fallback to the last name drawn;
 `public/main.js`'s create-room button already surfaces a non-ok response. A

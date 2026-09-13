@@ -63,7 +63,9 @@ export const PRIVATE_ROOM_IDLE_MS = 30 * 60 * 1000;
 // legitimately has a reservation. The moment a seat is claimed the room is an
 // ordinary private room on PRIVATE_ROOM_IDLE_MS — including after it empties
 // out again, since the idle-cleanup re-mint deliberately carries that clock
-// forward rather than marking the room unjoined a second time.
+// forward rather than marking the room unjoined a second time. `reserveRoomName`
+// and `onStart` are the two places live state is minted with nobody in the room,
+// and both mark it.
 export const UNJOINED_ROOM_IDLE_MS = 2 * 60 * 1000;
 
 // How long the tombstone answers for the room name before it is reusable.
@@ -302,6 +304,14 @@ export class RaceRoom extends Server {
   async onStart() {
     const stored = await this.ctx.storage.get('state');
     this.state = stored ?? this.freshState(this.name);
+    // Minting live state here, rather than loading it, means nobody has joined
+    // this room yet — and this is the boundary every such state that is not a
+    // reservation crosses. partyserver runs onStart before it has even looked
+    // for an Upgrade header, so a bare GET to /parties/race-room/<name>
+    // persists a lobby too; unmarked and with no alarm, that row would hold the
+    // name against reserveRoomName() for good, with nothing left to wake the
+    // room and release it.
+    let minted = !stored;
     // A room persisted by an older build still carries racerIds in player.id.
     // Re-key on load so no live room keeps broadcasting them. A socket that
     // hibernated across that deploy holds the pre-migration id in its
@@ -314,6 +324,7 @@ export class RaceRoom extends Server {
     if (this.state.state === EXPIRED_ROOM_STATE
       && Date.now() - (this.state.expiredAt ?? 0) > EXPIRED_ROOM_TTL_MS) {
       this.state = this.freshState(this.name);
+      minted = true;
       migrated = true;
     }
 
@@ -325,7 +336,11 @@ export class RaceRoom extends Server {
       migrated = true;
     }
 
-    if (!stored || migrated) await this.persist();
+    if (minted && this.expiresWhenIdle()) this.state.unjoined = true;
+    if (minted || migrated) await this.persist();
+    // The short fuse is only a deadline until something wakes the room to
+    // enforce it, and nothing on this path arms one otherwise.
+    if (this.state.unjoined) await this.scheduleNextAlarm();
   }
 
   async onConnect(connection, ctx) {
@@ -1194,7 +1209,9 @@ export class RaceRoom extends Server {
    * it back into a reclaimable tombstone — on UNJOINED_ROOM_IDLE_MS while
    * nobody has joined, since this endpoint is unauthenticated and the namespace
    * is small, and on the ordinary PRIVATE_ROOM_IDLE_MS from the first seat
-   * onwards.
+   * onwards. onStart() does the same for the live state a plain request to
+   * /parties/race-room/<name> mints, so no path leaves an unjoined room holding
+   * a name without a fuse on it.
    *
    * Reachable before onStart() — partyserver only initializes on fetch/alarm —
    * so it reads storage itself rather than trusting `this.state`.
