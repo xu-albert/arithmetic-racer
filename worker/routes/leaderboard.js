@@ -53,6 +53,7 @@
 // so it gets the same answer — one canonical length, stated in the lobby copy
 // so nobody sets up a five-problem room expecting to appear.
 
+import { CANONICAL_RACE_LENGTH } from "../race-constants.js";
 import { db, isMissingColumnError } from "../db.js";
 import { logWarn, KINDS } from "../logger.js";
 import { allowRequest } from "../rate-limit.js";
@@ -63,27 +64,6 @@ const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
 /** Matches LEADERBOARD_IP_LIMIT's `period` in wrangler.jsonc. */
 const RATE_LIMIT_WINDOW_S = 60;
-
-/**
- * The one race length a board ranks. See the eligibility block above for why
- * the boards admit exactly this length and no other.
- *
- * The constant this must stay equal to is `freshState().raceLength` in
- * server/room.js. That is where every board-eligible row's `problems_total`
- * actually comes from: `buildRaceResultPayload` copies it (server/room-stats.js),
- * `publicFreshState` inherits it unchanged, and `PublicRaceRoom.handleSetConfig`
- * refuses config edits — which is why Quick Match is fixed at ten and why a
- * private room starts there (the lobby's length input is seeded from
- * `currentState.raceLength` off the wire, not from any client constant).
- * `leaderboard.test.js` asserts the two are equal, because a comment saying so
- * is exactly what failed here before: if `freshState` moved and this did not,
- * every board would quietly return zero rows with no error and no log.
- *
- * `RACE_LENGTH` in public/src/runner.js is a different ten. It is the solo
- * race, which is excluded on provenance anyway (`room_id IS NULL`), so it can
- * neither break nor fix a board in either direction.
- */
-export const CANONICAL_RACE_LENGTH = 10;
 
 /** Rows returned when the caller does not ask for a size. */
 const DEFAULT_LIMIT = 10;

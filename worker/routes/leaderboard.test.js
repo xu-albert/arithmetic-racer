@@ -15,10 +15,10 @@ import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:
 import {
   handleLeaderboard,
   parseLimit,
-  CANONICAL_RACE_LENGTH,
   _resetRateLimitLog,
   _resetSchemaBehindWarning,
 } from "./leaderboard.js";
+import { CANONICAL_RACE_LENGTH } from "../race-constants.js";
 import { freshState } from "../../server/room.js";
 import { computePoints, computePpm } from "../race-score.js";
 import { periodStartMs } from "../../public/src/leaderboard-period.js";

@@ -13,7 +13,7 @@ import {
   CAPTCHA_PROBLEM_COUNT,
   CAPTCHA_MS_PER_PROBLEM,
 } from '../worker/plausibility.js';
-import { CANONICAL_RACE_LENGTH } from '../worker/routes/leaderboard.js';
+import { CANONICAL_RACE_LENGTH } from '../worker/race-constants.js';
 import { generateSequence } from '../public/src/game.js';
 
 /**
