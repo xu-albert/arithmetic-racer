@@ -291,8 +291,9 @@ describe("POST /api/race-result — validation", () => {
     it("rejects problems_correct greater than problems_total", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
-          problems_total: 1, problems_attempted: 1,
-          problems_correct: 999, accuracy_pct: 100,
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
+          problems_total: 10, problems_attempted: 12,
+          problems_correct: 12, accuracy_pct: 100, longest_streak: 0,
         })),
         env
       );
@@ -410,14 +411,21 @@ describe("POST /api/race-result — validation", () => {
 // recorded. readUserId in worker/session.js is what resolves the cookie.
 
 describe("POST /api/race-result — bounded solo contract", () => {
+  // An unfinished race is the one shape no other rule rejects, so a bound under
+  // test here is the only thing that can turn the body away.
+  const quit = {
+    finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
+    problems_correct: 0, problems_attempted: 0, accuracy_pct: 0, longest_streak: 0,
+  };
+
   it.each([
-    ["finished without time and no answers", { finish_time_ms: null, problems_correct: 0, problems_attempted: 0, accuracy_pct: 0, longest_streak: 0, avg_time_per_problem_ms: 0 }],
+    ["finished with a null finish time", { finish_time_ms: null, avg_time_per_problem_ms: 0, longest_streak: 0 }],
     ["missing finish time", { finish_time_ms: undefined }],
     ["zero finish time", { finish_time_ms: 0 }],
     ["unfinished with time", { finished: false }],
     ["finished before all problems solved", { problems_correct: 18, accuracy_pct: 90 }],
-    ["huge race", { problems_total: 1e100 }],
-    ["race above maximum", { problems_total: 51 }],
+    ["huge race", { ...quit, problems_total: 1e100 }],
+    ["race above maximum", { ...quit, problems_total: 51 }],
     ["oversized device id", { device_id: "x".repeat(129) }],
     ["too many attempts", { problems_attempted: 10001, accuracy_pct: 0.2 }],
     ["unbounded time", { finish_time_ms: 86400001, avg_time_per_problem_ms: 4320000 }],
