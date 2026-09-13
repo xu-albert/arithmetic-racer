@@ -117,10 +117,25 @@ any message the room sends exactly once at a transition has to be reconstructibl
 from `publicState()`. `race-start` and `bot-timelines` are both sent once at the
 countdown→racing edge, and `createRemoteRunner` rebuilds both from a `racing`
 snapshot (`public/src/remote-runner.js`) — without that the race screen stays on
-its initial paint: input disabled, every car at the line, score 0. That rebuild
-covers a *newly constructed* runner only: a PartySocket auto-reconnect mid-race
-reuses the existing one, so `beginRace()` no-ops and the snapshot is applied to
-`runner.racers` in place, emitting nothing.
+its initial paint: input disabled, every car at the line, score 0.
+
+A snapshot has to reconcile an *already mounted* runner too, and that is the
+harder half: a PartySocket auto-reconnect reuses the existing runner, so
+`beginRace()` no-ops and only the snapshot's own corrections are news. Applying
+them silently leaves the screen painted from the last event it saw. Worse, the
+snapshot is allowed to *contradict* this client — an answer whose frame died
+with the socket leaves an optimistic finish the room never recorded — so
+`reconcilePlayers()` takes the server's score and finish verbatim, including a
+`null` that revokes a finish, and `announce()` emits what moved. Bots are the
+one exception: the room parks them at 0, so their progress is client-owned.
+
+The terminal transition needs the same treatment. `finish` is sent once, and a
+race now ends on a deadline rather than only when everyone finishes, so a socket
+that was away misses it and reconnects into a `finished` snapshot instead.
+`settleRace()` is that one-time transition however it is learned. It ranks from
+the local `racers`, never from the snapshot's player list: `PublicRaceRoom`
+strips bots and departed seats from `state.players` as it ends the race, so that
+list is not the podium.
 
 Bots are the sharpest case of that rebuild, because they have no snapshot state
 at all: `PublicRaceRoom` holds every bot row at `score: 0, finishMs: null` until

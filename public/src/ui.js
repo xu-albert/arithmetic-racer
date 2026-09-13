@@ -96,8 +96,13 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   // Place is read off the one ranking this project has — rankings.js, which the
   // podium below the banner draws and the server sorts its own results by — so
   // the two can never disagree. Counting finishers here instead would miss the
-  // tiering: a racer who crossed the line and then left mid-race keeps their
-  // finishMs, and is still ranked behind everyone who stayed.
+  // tiering rankRacers applies to a seat that is dropped or DNF.
+  //
+  // Note the server will not hand us a dropped finisher: `dropRacer` refuses a
+  // seat that already carries a finishMs, and PublicRaceRoom holds a departed
+  // finisher's seat instead of splicing it, so an earned finish survives a quit
+  // or a disconnect. The tiering still has to be honoured here because DNF
+  // seats reach it, and because rankings.js is shared with hand-built data.
   //
   // Repaintable, because in a room race it is painted more than once: from the
   // optimistic finish, again from the time the room stamped, and again for
@@ -114,6 +119,24 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     finishBanner.classList.toggle('first-place', place === 1);
     const playerCar = carEls.get('player');
     if (playerCar) playerCar.classList.toggle('victory', place === 1);
+  }
+
+  // The banner's counterpart. An authoritative frame can revoke a finish this
+  // screen already announced — the room ignored the answer because the race had
+  // already ended, or a reconnect snapshot shows the server never received it —
+  // and every class the banner set has to come back off with it.
+  function hideFinishBanner() {
+    finishBanner.classList.add('hidden');
+    finishBanner.classList.remove('first-place');
+    carEls.get('player')?.classList.remove('victory');
+  }
+
+  // Paint the banner from whatever the local racer's finish currently is, so a
+  // single call is correct whether the finish was just earned, re-placed behind
+  // a later arrival, or taken away.
+  function paintFinishBanner() {
+    if (playerRacer.finishMs != null) showFinishBanner();
+    else hideFinishBanner();
   }
 
   function renderPodium() {
@@ -185,11 +208,14 @@ export function attachRaceUI({ runner, raceLength, screens }) {
       if (car) car.style.setProperty('--progress', String(data.score / raceLength));
       if (data.laneId === 'player') {
         scoreEl.textContent = `${data.score} / ${raceLength}`;
-        if (data.score >= raceLength) {
-          input.disabled = true;
-          input.value = '';
-          showFinishBanner();
-        }
+        // Reconnect can move this backwards: an answer whose frame never
+        // reached the room leaves the screen finished while the server still
+        // has the earlier score. Derive the input from the authoritative state
+        // each time rather than only ever closing it.
+        const done = data.score >= raceLength || playerRacer.dropped;
+        input.disabled = done;
+        if (done) input.value = '';
+        paintFinishBanner();
         updateQueue();
       } else if (data.finishMs != null && playerRacer.finishMs != null) {
         // Somebody else reached the line after this player's banner was
@@ -205,11 +231,15 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     } else if (event === 'drop') {
       const lane = laneEls.get(data.laneId);
       if (lane) lane.classList.add('dropped');
-      if (playerRacer.finishMs != null) showFinishBanner();
+      // A seat the room dropped cannot score again; its answers are ignored on
+      // both sides, so leave no box inviting them.
+      if (data.laneId === 'player') { input.disabled = true; input.value = ''; }
+      paintFinishBanner();
       if (podium.childElementCount > 0) renderPodium();
     } else if (event === 'finish') {
       input.disabled = true;
-      if (playerRacer.finishMs != null) showFinishBanner();
+      input.value = '';
+      paintFinishBanner();
       renderPodium();
       resultsTimer = setTimeout(() => {
         screens.race.classList.add('hidden');

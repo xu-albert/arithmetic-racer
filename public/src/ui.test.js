@@ -197,6 +197,143 @@ describe('a race screen opened from a mid-race snapshot', () => {
   });
 });
 
+// An auto-reconnect does not build a new runner: PartySocket reattaches under
+// the one already mounted, so `raceStartHandled` stays latched and the snapshot
+// lands on a live screen. Everything below therefore reuses ONE runner across
+// the disconnect — constructing a second one exercises the first-paint path
+// instead, which is where these bugs hide.
+describe('an authoritative snapshot landing on a mounted race screen', () => {
+  test('rolls back a finish the room never received and reopens the input', () => {
+    // 9/10 and the last answer's frame dies with the socket. The optimistic
+    // client shows a finished race; the room still has the earlier score.
+    mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 16_000 });
+    const screen = openRaceScreen(racingState({
+      players: [player('p-1'), player(ME, { score: SEQ.length - 1 })],
+    }));
+    screen.runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    assert.equal(screen.input.disabled, true, 'optimistically finished');
+
+    screen.receive({
+      type: 'state',
+      youAre: ME,
+      state: racingState({ players: [player('p-1'), player(ME, { score: SEQ.length - 1 })] }),
+    });
+
+    assert.equal(screen.input.disabled, false, 'the race is still on; let them answer');
+    assert.equal(screen.runner.racers[1].finishMs, null, 'the unacknowledged finish is revoked');
+    assert.equal(screen.score.textContent, `${SEQ.length - 1} / ${SEQ.length}`);
+    assert.deepEqual(screen.runner.currentProblemFor('player'), SEQ[SEQ.length - 1]);
+    assert.equal(screen.banner.classList.contains('hidden'), true, 'and the banner goes with it');
+    screen.cleanup();
+  });
+
+  test('repaints a place invalidated by an opponent finish missed while away', () => {
+    const screen = openRaceScreen(racingState({
+      players: [player('p-1'), player(ME, { score: SEQ.length, finishMs: 6_000 }), player('p-3')],
+    }));
+    assert.equal(screen.bannerPlace.textContent, '1st place');
+
+    // While the socket was down p-1 finished ahead of them.
+    screen.receive({
+      type: 'state',
+      youAre: ME,
+      state: racingState({
+        players: [
+          player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+          player(ME, { score: SEQ.length, finishMs: 6_000 }),
+          player('p-3'),
+        ],
+      }),
+    });
+
+    assert.equal(screen.bannerPlace.textContent, '2nd place');
+    assert.equal(screen.carFor('player').classList.contains('victory'), false);
+    assert.equal(screen.carFor('p-1').style.props['--progress'], String(1));
+    screen.cleanup();
+  });
+
+  test('closes the input of a seat the room dropped while the socket was away', () => {
+    const screen = openRaceScreen(racingState());
+    assert.equal(screen.input.disabled, false);
+
+    screen.receive({
+      type: 'state',
+      youAre: ME,
+      state: racingState({
+        players: [player('p-1', { score: 2 }), player(ME, { score: 1, dropped: true })],
+      }),
+    });
+
+    assert.equal(screen.input.disabled, true, 'its answers are ignored on both sides');
+    assert.equal(screen.laneFor('player').classList.contains('dropped'), true);
+    screen.cleanup();
+  });
+
+  test('settles a race that ended on the deadline while the socket was away', () => {
+    // `finish` is sent once. A socket that missed it gets a `finished`
+    // snapshot instead, and that has to be the terminal transition.
+    mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 80_000 });
+    const screen = openRaceScreen(racingState());
+
+    screen.receive({
+      type: 'state',
+      youAre: ME,
+      state: racingState({
+        state: 'finished',
+        players: [
+          player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+          player(ME, { score: 1, dnf: true }),
+        ],
+      }),
+    });
+
+    assert.equal(screen.input.disabled, true, 'the race is over');
+    assert.equal(screen.runner.getState(), 'finished');
+    assert.equal(screen.podium.childElementCount, 2, 'the final standings are shown');
+    assert.match(screen.podium.children[0].textContent, /Hp-1/);
+    screen.cleanup();
+  });
+
+  test('a settled race scores no further answers', () => {
+    mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 80_000 });
+    const screen = openRaceScreen(racingState());
+    screen.receive({
+      type: 'state',
+      youAre: ME,
+      state: racingState({ state: 'finished', players: [player('p-1'), player(ME, { score: 1, dnf: true })] }),
+    });
+
+    const before = screen.runner.racers[1].score;
+    screen.runner.submitAnswer(String(SEQ[1].answer));
+    assert.equal(screen.runner.racers[1].score, before, 'the room ignores it, so must we');
+    screen.cleanup();
+  });
+
+  test('clears a banner whose finish the final result revoked', () => {
+    // The deadline ended the race server-side while the last answer was in
+    // flight; the room ignored it, so the authoritative result is a DNF.
+    mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 16_000 });
+    const screen = openRaceScreen(racingState({
+      players: [player('p-1'), player(ME, { score: SEQ.length - 1 })],
+    }));
+    screen.runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    assert.equal(screen.banner.classList.contains('hidden'), false, 'optimistically announced');
+
+    screen.receive({
+      type: 'finish',
+      rankings: [
+        { id: 'p-1', score: 0, finishMs: null, dnf: true },
+        { id: ME, score: SEQ.length - 1, finishMs: null, dnf: true },
+      ],
+    });
+
+    assert.equal(screen.banner.classList.contains('hidden'), true, 'no finish, no banner');
+    assert.equal(screen.banner.classList.contains('first-place'), false);
+    assert.equal(screen.carFor('player').classList.contains('victory'), false);
+    screen.cleanup();
+  });
+});
+
 describe('the finish banner', () => {
   test('reports the place the player actually finished in, not how many have finished since', () => {
     // You won at 5s; B finished at 6s; C is still racing, so the room is still
@@ -309,6 +446,9 @@ describe('the finish banner', () => {
     assert.equal(screen.bannerPlace.textContent, '2nd place');
     assert.equal(screen.carFor('player').classList.contains('victory'), false);
 
+    // Synthetic: the current server does not drop a seat that already finished
+    // (see the note on the next test). This drives the banner's reaction to a
+    // ranking change, which is what the assertions below are about.
     screen.receive({ type: 'drop', playerId: 'p-1' });
 
     assert.equal(screen.bannerPlace.textContent, '1st place');
@@ -330,10 +470,47 @@ describe('the finish banner', () => {
     screen.cleanup();
   });
 
-  test('does not rank a finisher who then left mid-race ahead of the player', () => {
-    // A crossed the line at 5s and quit while waiting for the stragglers. The
-    // room keeps the seat — finishMs and all — so the results can say "left
-    // mid-race", and ranks it behind everyone who stayed; so must the banner.
+  test('a winner who quits keeps their finish, and the runner stays second', () => {
+    // The contract current main actually implements: an earned finish survives
+    // a quit or a close. p-1 finished at 5s and left; the room keeps the seat
+    // with its finishMs, so the player who finishes later is still second.
+    mock.timers.enable({ apis: ['Date'], now: 16_000 });
+    const screen = openRaceScreen(racingState({
+      players: [
+        player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+        player(ME, { score: SEQ.length - 1 }),
+      ],
+    }));
+
+    screen.runner.submitAnswer(String(SEQ[SEQ.length - 1].answer));
+    assert.equal(screen.bannerPlace.textContent, '2nd place');
+
+    // They close the tab. The server does NOT drop them — it keeps the seat and
+    // its finish — so what reaches this client is a snapshot, not a `drop`.
+    screen.receive({
+      type: 'state',
+      youAre: ME,
+      state: racingState({
+        players: [
+          player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+          player(ME, { score: SEQ.length, finishMs: 6_000 }),
+        ],
+      }),
+    });
+
+    assert.equal(screen.bannerPlace.textContent, '2nd place', 'their finish still counts');
+    assert.equal(screen.banner.classList.contains('first-place'), false);
+    assert.equal(screen.carFor('player').classList.contains('victory'), false);
+    screen.cleanup();
+  });
+
+  test('does not rank a dropped finisher ahead of the player', () => {
+    // Synthetic ranking input, not a sequence today's server produces: it will
+    // not drop a seat that already has a finishMs (server/room.js dropRacer,
+    // and PublicRaceRoom holds a departed finisher's seat). Kept because
+    // rankings.js tiering must stay correct for any dropped/DNF seat, and the
+    // banner must read the same tiering the podium does. The behaviour the
+    // current server does produce is the test below this one.
     mock.timers.enable({ apis: ['Date'], now: 16_000 });
     const screen = openRaceScreen(racingState({
       players: [

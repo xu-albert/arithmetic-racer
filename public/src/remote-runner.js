@@ -55,6 +55,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // point and paid out on the first `on()` — `startDelivered` keeps it to one.
   let raceStarted = false;
   let startDelivered = false;
+  let raceSettled = false;
   let raceStartedAtMs = initialState.raceStartedAt ?? null;
   let lastCountdownN = null;
 
@@ -153,6 +154,59 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     deliverStart();
   }
 
+  // Apply an authoritative snapshot to the local racers and hand back the ones
+  // whose painted state moved. The server is allowed to contradict us: a score
+  // it never received rolls back, and a finish it never acknowledged is revoked
+  // by a null. Bots are the one exception — the room parks them at 0 until it
+  // finalizes them, so their progress lives only here.
+  function reconcilePlayers(players) {
+    const changed = [];
+    for (const p of players ?? []) {
+      const aliased = aliasId(p.id, youAre);
+      const existing = racers.find((r) => r.id === aliased);
+      if (!existing) {
+        racers.push(toRacer(p, youAre));
+        changed.push(racers[racers.length - 1]);
+        continue;
+      }
+      const before = { score: existing.score, finishMs: existing.finishMs, dropped: existing.dropped };
+      existing.handle = displayHandle(p.handle, !!p.isGuest);
+      if (existing.isBot) {
+        if (p.finishMs != null) existing.finishMs = p.finishMs;
+      } else {
+        if (p.score != null) existing.score = p.score;
+        existing.finishMs = p.finishMs ?? null;
+      }
+      existing.dropped = !!p.dropped;
+      existing.dnf = !!p.dnf;
+      if (
+        existing.score !== before.score
+        || existing.finishMs !== before.finishMs
+        || existing.dropped !== before.dropped
+      ) changed.push(existing);
+    }
+    return changed;
+  }
+
+  function announce(changed) {
+    for (const r of changed) {
+      emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
+      if (r.dropped) emit('drop', { laneId: r.id });
+    }
+  }
+
+  // The terminal transition, delivered exactly once however it is learned: the
+  // `finish` broadcast, or a `finished` snapshot for a socket that missed it.
+  // Rankings come from the local racers, never from the snapshot's player list:
+  // PublicRaceRoom strips bots and departed seats from `state.players` as it
+  // ends the race, so that list is not the podium.
+  function settleRace() {
+    if (raceSettled) return;
+    raceSettled = true;
+    raceStarted = true;
+    emit('finish', { rankings: getRankings() });
+  }
+
   function findRacer(serverPlayerId) {
     const aliased = aliasId(serverPlayerId, youAre);
     return racers.find((r) => r.id === aliased);
@@ -167,21 +221,15 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
 
     switch (msg.type) {
       case 'state': {
-        // Mutate existing racer objects in-place; ui.js holds references via runner.racers.
-        for (const p of msg.state.players) {
-          const aliased = aliasId(p.id, youAre);
-          const existing = racers.find((r) => r.id === aliased);
-          if (existing) {
-            existing.handle = displayHandle(p.handle, !!p.isGuest);
-            // Don't overwrite bot scores mid-race — client drives them via tickBots.
-            if (!existing.isBot) existing.score = p.score ?? existing.score;
-            if (p.finishMs != null) existing.finishMs = p.finishMs;
-            existing.dropped = !!p.dropped;
-            existing.dnf = !!p.dnf;
-          } else {
-            racers.push(toRacer(p, youAre));
-          }
-        }
+        // A snapshot is the authority on everyone the room counts. Reconcile the
+        // model *and* say what changed: once the race screen is mounted it paints
+        // from events, so a silent mutation leaves a stale screen — the score, the
+        // cars, the lanes and the banner all keep whatever the last event said.
+        // Whether the screen was already painted *before* this snapshot: if the
+        // snapshot is itself what starts the race, `deliverStart` replays the
+        // whole world below and announcing again would double every event.
+        const wasMounted = startDelivered;
+        const changed = reconcilePlayers(msg.state.players);
         if (msg.state.problemSequence?.length) sequence = msg.state.problemSequence;
         // Replay countdown if we joined mid-countdown and haven't seen a countdown event yet.
         if (msg.state.state === 'countdown' && msg.state.countdownN != null && lastCountdownN == null) {
@@ -199,6 +247,13 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           adoptBotTimelines(msg.state.botTimelines);
           beginRace();
         }
+        // `beginRace` replays everything itself on its first delivery. Past that
+        // the runner is already mounted — an auto-reconnect reuses it — so the
+        // snapshot's own corrections are what the screen has not seen yet.
+        if (wasMounted) announce(changed);
+        // The room can also end while this socket is away: the one-shot `finish`
+        // is not replayed, so a `finished` snapshot has to settle the race.
+        if (msg.state.state === 'finished') settleRace();
         break;
       }
       case 'countdown': {
@@ -271,7 +326,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           r.dropped = !!sp.dropped;
           r.dnf = !!sp.dnf;
         }
-        emit('finish', { rankings: getRankings() });
+        settleRace();
         break;
       }
     }
@@ -299,6 +354,9 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     },
     start() { /* no-op; server drives countdown */ },
     submitAnswer(raw) {
+      // The race is over: the room ignores answers past its own finish, so
+      // scoring one locally would only invent progress the server will deny.
+      if (raceSettled) return { correct: true };
       // Always relay to server; server is the source of truth.
       roomClient.send({ type: 'answer', value: raw });
       // Optimistic local update — your own car moves on press, no waiting on
@@ -325,6 +383,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     },
     currentProblemFor,
     getState() {
+      if (raceSettled) return 'finished';
       return raceStarted ? 'racing' : 'idle';
     },
     quit() {
