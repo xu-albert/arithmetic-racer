@@ -711,12 +711,14 @@ describe('drop, finish and rankings', () => {
     assert.equal(runner.racers.find((r) => r.id === 'p-3').dnf, true);
   });
 
-  test('a newcomer arriving after the race ended is tracked but never announced', () => {
-    // The room accepts new players again once it is back in `finished`, and its
-    // new-player path broadcasts state to everyone attached — including the
-    // race screen still showing the final standings. Somebody who never raced
-    // has no lane and no car there, so there is nothing to correct, and an
-    // announcement would only redraw the podium around them.
+  test('a newcomer who joined after the race ended stays out of the final standings', () => {
+    // This player's socket died mid-race; the room ended the race on the
+    // deadline and recorded them a dnf, so the one-shot `finish` never arrived.
+    // Meanwhile a third person opened the invite link — the room accepts new
+    // players again once it is back in `finished` — and the reconnect is
+    // answered with a snapshot listing all three. The terminal transition ranks
+    // from the local racers, so a seat that never raced would be tiered as
+    // still-racing and land above this player's own dnf row.
     const client = fakeRoomClient();
     const runner = createRemoteRunner({
       roomClient: client,
@@ -725,29 +727,33 @@ describe('drop, finish and rankings', () => {
     });
     startRace(client);
     const events = record(runner);
-    client.receive({
-      type: 'finish',
-      rankings: [
-        { id: ME, score: 3, finishMs: 3000, dropped: false, dnf: false },
-        { id: 'p-1', score: 1, finishMs: null, dropped: false, dnf: true },
-      ],
-    });
-    events.length = 0;
 
     client.receive({
       type: 'state',
       state: lobbyState({
         state: 'finished',
         players: [
-          player('p-1', { score: 1, dnf: true }),
-          player(ME, { score: 3, finishMs: 3000 }),
+          player('p-1', { score: SEQ.length, finishMs: 5_000 }),
+          player(ME, { score: 1, dnf: true }),
           player('p-3'),
         ],
       }),
     });
 
-    assert.deepEqual(events, [], 'the finished screen hears nothing about them');
-    assert.ok(runner.racers.some((r) => r.id === 'p-3'), 'the seat is still tracked for the lobby');
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-1', 'player']);
+    assert.deepEqual(runner.getRankings().map((r) => r.id), ['p-1', 'player'], 'and the podium draws the same list');
+    assert.equal(runner.racers.some((r) => r.id === 'p-3'), false);
+    assert.equal(events.some((e) => e.data.laneId === 'p-3'), false, 'no lane on the screen belongs to them either');
+  });
+
+  test('a player who joins before the race starts is still picked up from the snapshot', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    client.receive({ type: 'state', state: lobbyState({ players: [player('p-1'), player(ME), player('p-3')] }) });
+    startRace(client);
+    assert.deepEqual(runner.racers.map((r) => r.id), ['p-1', 'player', 'p-3']);
   });
 
   test('getRankings orders still-racing players by score, higher first', () => {

@@ -165,10 +165,12 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       const aliased = aliasId(p.id, youAre);
       const existing = racers.find((r) => r.id === aliased);
       if (!existing) {
-        // No lane, no car: a seat that arrived after this screen was painted has
-        // nothing on it to correct, and announcing one would redraw a finished
-        // race's standings around somebody who never raced.
-        racers.push(toRacer(p, youAre));
+        // The roster closes when the race begins. The room refuses new players
+        // through countdown and racing, so a seat this runner has never seen is
+        // somebody who arrived after the race ended: no lane, no car, nothing
+        // on the mounted screen to correct — and rankRacers would tier them
+        // above the player's own dnf row on the podium it still draws.
+        if (!raceStarted) racers.push(toRacer(p, youAre));
         continue;
       }
       const before = { score: existing.score, finishMs: existing.finishMs, dropped: existing.dropped };
@@ -202,11 +204,18 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // Rankings come from the local racers, never from the snapshot's player list:
   // PublicRaceRoom strips bots and departed seats from `state.players` as it
   // ends the race, so that list is not the podium. Bots are absent from it
-  // entirely and their progress is client-driven, so the race end has to
-  // finalize them here the way the room does — the ticker stops and whoever is
-  // short of the line is a dnf, not a row that keeps crossing it after the
-  // results are up. On the `finish` path the payload has already said so and
-  // this is a no-op.
+  // entirely and their progress is client-driven, so the race end has to stop
+  // them here: the ticker is cancelled, and a bot still short of the line is a
+  // dnf rather than a row that keeps crossing it over the results screen.
+  //
+  // On the `finish` path that loop is a no-op — the payload has already said
+  // so. On the snapshot path it is only a partial match for what the room
+  // recorded: a bot the local ticker carried over the line while the socket was
+  // down keeps its client-side finish and still prints as a finisher, because a
+  // `finished` snapshot carries no bot rows and no race-end offset, so nothing
+  // here can contradict it. The local player's own place is unaffected either
+  // way — such a crossing is always past the race end, hence past every human
+  // finish.
   function settleRace() {
     if (raceSettled) return;
     raceSettled = true;

@@ -172,8 +172,9 @@ newest one; reloading after someone passed you made it count them too. It now
 takes the place off `rankRacers` — the one ranking, which the podium under it
 draws and the server sorts by — so the screen cannot contradict itself. Suspect
 any race-screen arithmetic that reads "right now" state. `public/src/ui.test.js`
-drives the race screen over a DOM stub for exactly these; `attachLobby` itself
-stays uncovered (full lobby DOM plus a real PartySocket).
+drives the race screen over a DOM stub for exactly these, and
+`public/src/lobby-handoff.test.js` covers the gate itself — the real
+`attachLobby` over a stubbed PartySocket, DOM and localStorage.
 
 ## Dependencies and the lockfile
 

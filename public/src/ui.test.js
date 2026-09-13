@@ -11,8 +11,8 @@
 // `drop` arrives" stop being true.
 //
 // Coverage note: `attachLobby` is what decides *when* to build that runner, and
-// it is not exercised here — it needs the full lobby DOM and a real PartySocket.
-// Its gate is the `youAre` condition in public/src/lobby.js.
+// it is not exercised here. Its gate — the `youAre` condition in
+// public/src/lobby.js — is covered in the sibling public/src/lobby-handoff.test.js.
 
 import { test, describe, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
