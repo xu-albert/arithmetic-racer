@@ -160,12 +160,13 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // by a null. Bots are the one exception — the room parks them at 0 until it
   // finalizes them, so their progress lives only here.
   function reconcilePlayers(players, roomState) {
-    // The roster belongs to one race, and it is open only while the room is
-    // still gathering players for a race this runner has not begun. Past that —
-    // a countdown that has handed off, a race in flight, a `finished` snapshot
-    // carrying somebody who took the invite link after the race ended — an
-    // unknown seat has no lane and no car on the mounted screen, and rankRacers
-    // would tier it above the player's own dnf row on the podium it draws.
+    // Additions to the roster stop when the room stops gathering players for a
+    // race this runner has not begun. Past that — a countdown that has handed
+    // off, a race in flight, a `finished` snapshot carrying somebody who took
+    // the invite link after the race ended — an unknown seat has no lane and no
+    // car on the mounted screen, and rankRacers would tier it above the
+    // player's own dnf row on the podium it draws. Only that direction: nothing
+    // here removes a seat the room spliced out of its own player list.
     const rosterOpen = !raceStarted && roomState === 'lobby';
     const changed = [];
     for (const p of players ?? []) {

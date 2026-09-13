@@ -782,8 +782,12 @@ describe('drop, finish and rankings', () => {
   });
 
   test('a lobby snapshot after this runner has raced does not reopen its roster', () => {
-    // Race Again puts the room back in `lobby` and a newcomer can join there,
-    // but this runner's results screen is still ranking the race that just ran.
+    // Race Again puts the room back in `lobby`, where a newcomer can join. The
+    // snapshot that carries them does reset this still-mounted runner — the
+    // lobby rows are score 0 with no finish, so `reconcilePlayers` rolls the
+    // finish it just settled back off this player. That reset is the room's to
+    // make. Enlarging the roster of the race that ran is not, and is all this
+    // asserts.
     const client = fakeRoomClient();
     const runner = createRemoteRunner({
       roomClient: client,
@@ -804,7 +808,7 @@ describe('drop, finish and rankings', () => {
       state: lobbyState({ players: [player('p-1'), player(ME), player('p-3')] }),
     });
 
-    assert.deepEqual(runner.getRankings().map((r) => r.id), ['p-1', 'player'], 'the newcomer is not one of them');
+    assert.deepEqual(runner.racers.map((r) => r.id), ['p-1', 'player'], 'p-3 never joins this race');
   });
 
   test('a player who joins before the race starts is still picked up from the snapshot', () => {
