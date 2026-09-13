@@ -15,6 +15,10 @@
 //   - the ordinary path (nothing in the way) still draws exactly once
 //   - a reservation nobody joins releases its name on the short unjoined clock,
 //     while a room somebody is in keeps the full private-room idle lifetime
+//   - a name is never spent permanently by a request that merely minted room
+//     state without joining it — a plain GET to /parties/race-room/<name> does
+//     that, because partyserver initializes the room before it looks for an
+//     Upgrade header
 //
 // The reservation is atomic because a Durable Object is single-threaded per
 // name: reserveRoomName() reads and writes storage inside one RPC, so two
@@ -23,7 +27,7 @@
 // return it.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject, SELF } from "cloudflare:test";
 import worker from "./server.js";
 import { generateRoomId, allocateRoomId, ROOM_ID_ATTEMPTS } from "./room-id.js";
 import { PRIVATE_ROOM_IDLE_MS, UNJOINED_ROOM_IDLE_MS } from "./room.js";
@@ -44,13 +48,25 @@ function makeConn(state = {}) {
   };
 }
 
+/** getConnections() is an iterator under `hibernate: true`, never an array. */
+function connectionIterator(conns) {
+  let i = 0;
+  const it = {
+    [Symbol.iterator]() { return it; },
+    next() {
+      return i < conns.length ? { done: false, value: conns[i++] } : { done: true, value: undefined };
+    },
+  };
+  return it;
+}
+
 async function withPrivateRoom(name, fn) {
   const stub = env.RaceRoom.get(env.RaceRoom.idFromName(name));
   return runInDurableObject(stub, async (room) => {
     if (!room.state) await room.onStart();
     const conns = [];
     room.broadcast = (s) => { for (const c of conns) c.send(s); };
-    room.getConnections = () => conns;
+    room.getConnections = () => connectionIterator(conns);
     return fn(room, { conns, stub });
   });
 }
@@ -110,6 +126,34 @@ describe("allocateRoomId reserves a free name", () => {
     });
 
     // And a later creation drawing it gets it back.
+    expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
+  });
+
+  it("does not let a bare GET on a room name spend that name for good", async () => {
+    const name = "alloc-bare-get-" + crypto.randomUUID();
+
+    // Not an upgrade, so nobody joins anything — but partyserver initializes the
+    // room (and onStart persists live state) before it ever reads the Upgrade
+    // header, so the name is now held by a room with no players.
+    const res = await SELF.fetch(`https://racer.test/parties/race-room/${name}`);
+    expect(res.status).toBe(404);
+    expect(await reserve(name)).toBe(false);
+
+    await withPrivateRoom(name, async (room) => {
+      expect(room.state.state).toBe("lobby");
+      expect(room.state.players).toEqual([]);
+      // The room has to be wakeable, or that state sits there forever and the
+      // name can never be reserved again: nothing else will arm an alarm on a
+      // room nobody connects to. It is the unjoined fuse, not the 30-minute one.
+      const alarm = await room.ctx.storage.getAlarm();
+      expect(alarm).not.toBeNull();
+      expect(alarm).toBeLessThanOrEqual(Date.now() + UNJOINED_ROOM_IDLE_MS);
+
+      room.state.lastActivityAt = Date.now() - UNJOINED_ROOM_IDLE_MS - 1000;
+      await room.onAlarm();
+      expect(room.state.state).toBe(EXPIRED_ROOM_STATE);
+    });
+
     expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
   });
 
