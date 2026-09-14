@@ -80,7 +80,11 @@ Traps this arrangement sets:
 - **The alarm time is durable; the timestamp behind it is not.** Bumping
   `lastActivityAt` without persisting means a DO evicted before its alarm wakes
   with a stale clock and winds a live room down early. `flushActivity()` exists
-  for the handlers that reply without persisting; keep new ones behind it.
+  for the handlers that reply without persisting; keep new ones behind it. It
+  is the idle clock's write and not a handler's, though: it returns early on
+  `expiresWhenIdle()`, so a public room never flushes at all and every handler
+  that mutates race state has to `persist()` for itself. Coverage:
+  `server/room-answer-persistence.test.js`.
 - **`PublicRaceRoom.expiresWhenIdle()` returns false**, and everything winddown
   reads that hook. Quickmatch rooms are single-shot and unlinkable — expiring
   one would strand a player on a screen whose only exit is a room they cannot
