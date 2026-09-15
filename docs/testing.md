@@ -14,6 +14,23 @@ verbatim under section 6.
 
 ---
 
+### Clean install with npm 12
+
+Use Node from `.nvmrc` with npm 12, then run `npm ci` and `npm test`.
+`package.json` records the install-script approvals that `npm ci` reads. Only
+`better-sqlite3` is approved: without its install script, migration tests cannot load
+`better_sqlite3.node`. Warnings that esbuild, fsevents, sharp and workerd scripts were
+blocked are expected; the full suite and Wrangler dry-run build pass on macOS arm64
+with those scripts blocked.
+
+After a dependency change, review `npm install-scripts ls`; approve an additional
+package only when an observed failure requires its script, using
+`npm install-scripts approve <pkg>`, and commit the resulting `allowScripts` change.
+Do not use `--all`. Verify with a fresh `npm ci`, the full `npm test`, and
+`npm run deploy -- --dry-run`. npm's approval command normally pins versions, but
+currently writes a name-only approval for better-sqlite3 because its lockfile entry
+has no `resolved` URL; review its script again when upgrading it.
+
 ## 1. Test strategy and the test pyramid
 
 Two runners, deliberately split by what they need to be true, per `AGENTS.md`'s "Tests run
