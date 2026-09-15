@@ -182,6 +182,11 @@ drives the race screen over a DOM stub for exactly these, and
 
 ## Dependencies and the lockfile
 
+For npm 12 installs, `package.json`'s `allowScripts` is the reviewed install-script
+policy; setup and approval maintenance are in `docs/testing.md` under "Clean install
+with npm 12". A successful `npm ci` alone does not prove native test bindings work:
+always follow it with the full `npm test` when changing that policy.
+
 The Cloudflare Workers build runs `npm ci`, which hard-fails unless `package-lock.json`
 records the optional platform packages for *every* platform (`@esbuild/*`,
 `lightningcss-*`, `@rolldown/binding-*`, `@img/sharp-*`, `@cloudflare/workerd-*`,
