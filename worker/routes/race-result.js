@@ -14,6 +14,7 @@
 import { readUserId } from "../session.js";
 import { insertRaceResult } from "../race-result-store.js";
 import { allowRequest } from "../rate-limit.js";
+import { logError, KINDS } from "../logger.js";
 
 // Matches the `period` on both limiters in wrangler.jsonc. The binding only
 // permits 10 or 60, so this is a fixed window, not a rolling one.
@@ -25,6 +26,16 @@ function rateLimited() {
     { status: 429, headers: { "retry-after": String(RATE_LIMIT_WINDOW_S) } }
   );
 }
+
+// Solo uses ten problems today; retain small custom/older race lengths while
+// bounding storage inputs. Attempts include retries, not just solved problems.
+const MAX_PROBLEMS = 50;
+const MAX_ATTEMPTS = 10_000;
+const MAX_DEVICE_ID_LENGTH = 128;
+// Generous hard ceiling for an abandoned tab; the existing 30-minute soft
+// plausibility threshold still flags long races below this boundary.
+const MAX_RESULT_TIME_MS = 24 * 60 * 60_000;
+const AVG_TIME_TOLERANCE_MS = 0.5; // Math.round(finishTime / correct) in public/main.js
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 
@@ -40,9 +51,18 @@ const ACCURACY_TOLERANCE_PCT = 1;
  * passed every range check and persisted before this existed.
  */
 function isSelfConsistent(b) {
-  // correct <= attempted <= total. Transitively bounds correct by total too.
+  // A wrong answer increments attempts without advancing the problem.
   if (b.problems_correct > b.problems_attempted) return false;
-  if (b.problems_attempted > b.problems_total) return false;
+  if (b.problems_correct > b.problems_total) return false;
+
+  if (b.finished) {
+    if (b.problems_correct !== b.problems_total) return false;
+    const expectedAverage = b.finish_time_ms / b.problems_correct;
+    if (Math.abs(b.avg_time_per_problem_ms - expectedAverage) > AVG_TIME_TOLERANCE_MS) return false;
+  } else {
+    // The client reports no elapsed time or average for a quit.
+    if (b.problems_correct === b.problems_total || b.avg_time_per_problem_ms !== 0) return false;
+  }
 
   // You cannot have a run of correct answers longer than your correct answers.
   if (b.longest_streak > b.problems_correct) return false;
@@ -63,14 +83,15 @@ function isValidBody(b) {
   return (
     b &&
     typeof b === "object" &&
-    typeof b.device_id === "string" && b.device_id.length > 0 &&
+    typeof b.device_id === "string" && b.device_id.length > 0 && b.device_id.length <= MAX_DEVICE_ID_LENGTH &&
     DIFFICULTIES.has(b.difficulty) &&
     typeof b.finished === "boolean" &&
-    (b.finish_time_ms === null ||
-      (typeof b.finish_time_ms === "number" && Number.isFinite(b.finish_time_ms) && b.finish_time_ms >= 0)) &&
-    Number.isInteger(b.problems_total) && b.problems_total > 0 &&
+    (b.finished
+      ? (Number.isFinite(b.finish_time_ms) && b.finish_time_ms > 0 && b.finish_time_ms <= MAX_RESULT_TIME_MS)
+      : b.finish_time_ms === null) &&
+    Number.isInteger(b.problems_total) && b.problems_total > 0 && b.problems_total <= MAX_PROBLEMS &&
     Number.isInteger(b.problems_correct) && b.problems_correct >= 0 &&
-    Number.isInteger(b.problems_attempted) && b.problems_attempted >= 0 &&
+    Number.isInteger(b.problems_attempted) && b.problems_attempted >= 0 && b.problems_attempted <= MAX_ATTEMPTS &&
     Number.isFinite(b.avg_time_per_problem_ms) && b.avg_time_per_problem_ms >= 0 &&
     Number.isFinite(b.accuracy_pct) && b.accuracy_pct >= 0 && b.accuracy_pct <= 100 &&
     Number.isInteger(b.longest_streak) && b.longest_streak >= 0 &&
@@ -126,8 +147,9 @@ export async function handleRaceResult(request, env) {
       room_id: null,
     }));
   } catch (err) {
+    logError(KINDS.RACE_RESULT_DB, err, { path: "solo", phase: "insert" });
     return Response.json(
-      { error: "db_error", detail: String(err) },
+      { error: "db_error" },
       { status: 500 }
     );
   }
