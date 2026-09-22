@@ -74,7 +74,7 @@ lint: a stray test file in the wrong directory silently joins the wrong runner (
 | Directory | Runner | What's covered |
 | --- | --- | --- |
 | `public/src/*.test.js` | `node --test` | Client logic: `runner.js`/`remote-runner.js` (race loop), `game.js` (problem generation, difficulty), `bot.js`/`bot-timeline.js`, `handles.js`, `header.js`, `profile.js`, `room-config-rules.js`, `room-expiry.js`, `ui.js` (race screen, over a DOM stub), `lobby.js` (the race-handoff gate, over stubbed PartySocket + DOM), `seeded-rng.js`, `username-validator-client.js`, `recent-finishes.js`, `leaderboard.js`, `leaderboard-period.js`, `bug-report-context.js`, `auto-start.js`, `captcha-session.js` |
-| `server/*.test.js` (vitest) | `vitest` | Room DO behavior: `room-identity.test.js`, `public-room.test.js`, `room-config.test.js`, `room-handles.test.js`, `room-winddown.test.js`, `room-captcha.test.js`, `room-captcha-e2e.test.js`, `room-race-deadline.test.js`, `room-answer-persistence.test.js`, `lobby-router.test.js`, `socket-limit.test.js` |
+| `server/*.test.js` (vitest) | `vitest` | Room DO behavior: `room-identity.test.js`, `public-room.test.js`, `room-config.test.js`, `room-handles.test.js`, `room-winddown.test.js`, `room-captcha.test.js`, `room-captcha-e2e.test.js`, `room-race-deadline.test.js`, `room-answer-persistence.test.js`, `private-room-ten-players.test.js`, `lobby-router.test.js`, `socket-limit.test.js` |
 | `server/room-stats.test.js`, `server/captcha.test.js` | `node --test` | Pure PPM/points math and the captcha helpers (trigger rate, seeded problem set, wire projection), no DO — explicitly carved out of vitest |
 | `worker/*.test.js` | `vitest` | Worker-level helpers with D1/binding dependencies: `email.test.js`, `log-throttle.test.js`, `logger.test.js`, `plausibility.test.js`, `race-result-store.test.js`, `race-score.test.js`, `rate-limit.test.js`, `user-agent.test.js`, `username-validator.test.js`, `version.test.js` |
 | `worker/routes/*.test.js` | `vitest` | Route handlers: `admin.test.js`, `contact.test.js`, `leaderboard.test.js`, `matchmake.test.js` + `matchmake-e2e.test.js`, `me.test.js`, `race-result.test.js`, `recent-finishes.test.js`, `captcha-exclusion.test.js` |
@@ -163,10 +163,11 @@ that way past the PR that introduced the fix is the thing this rule exists to pr
 ## 5. End-to-end and UI tests
 
 There is no automated browser/E2E layer in this project today — no Playwright, no
-Puppeteer, no headless-Chrome suite. The two files named `*-e2e.test.js`
-(`worker/routes/matchmake-e2e.test.js`, `server/room-captcha-e2e.test.js`) are the closest
-thing, but both are vitest tests driving a flow end-to-end at the HTTP/WebSocket/DO level —
-real routing, real sockets, real D1, no browser.
+Puppeteer, no headless-Chrome suite. The closest thing is three vitest files that drive a
+flow end-to-end at the HTTP/WebSocket/DO level — real routing, real sockets, real D1, no
+browser: the two named `*-e2e.test.js` (`worker/routes/matchmake-e2e.test.js`,
+`server/room-captcha-e2e.test.js`) and `server/private-room-ten-players.test.js`, which holds
+ten concurrent sockets through a whole private race (§7).
 
 All *browser* coverage is manual (§6) — the DOM-level exceptions are the race screen and the
 lobby's race-handoff gate, which `public/src/ui.test.js` and `public/src/lobby-handoff.test.js`
