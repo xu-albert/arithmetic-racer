@@ -588,3 +588,26 @@ describe('the finish banner', () => {
     assert.equal(screen.input.disabled, true, 'the race is over for them');
   });
 });
+
+describe('ten-player private-room race screen', () => {
+  test('renders ten lanes and all final standings, including a tenth-place local racer', () => {
+    mock.timers.enable({ apis: ['setTimeout'] });
+    const players = Array.from({ length: 10 }, (_, i) => player(`p-${i + 1}`, { handle: `Racer${i + 1}` }));
+    const screen = openRaceScreen(racingState({ players }), 'p-10');
+    assert.equal(dom.el('track').children.length, 10);
+    assert.equal(screen.input.disabled, false);
+    for (const [i, p] of players.entries()) {
+      screen.receive({ type: 'advance', playerId: p.id, score: SEQ.length, finishMs: 20_000 + i * 1000 });
+      assert.equal(screen.carFor(p.id === 'p-10' ? 'player' : p.id).style.props['--progress'], '1');
+    }
+    screen.receive({ type: 'finish', rankings: players.map((p, i) => ({ ...p, score: SEQ.length, finishMs: 20_000 + i * 1000 })) });
+    mock.timers.tick(2000);
+    assert.equal(screen.podium.children.length, 10);
+    assert.deepEqual(screen.podium.children.map((row) => row.textContent), players.map((p, i) =>
+      `${p.handle}${i === 9 ? ' (you)' : ''} — 3/3 in ${(20 + i).toFixed(1)}s`));
+    assert.equal(screen.bannerPlace.textContent, '10th place');
+    assert.equal(screen.input.disabled, true);
+    screen.cleanup();
+    screen.runner.stop();
+  });
+});

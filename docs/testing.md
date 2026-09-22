@@ -415,20 +415,37 @@ counts — the history is the racer's own log, so solo races are listed, unlike 
 
 ## 7. Performance and load
 
-No formal performance budgets or automated load tests exist today. What's actually measured:
+### Ten-player private-room capability
 
-- **WS message frequency** (§6's WebSocket probes section): manually counted, expected "low
-  (~1–2 per race, only on state transitions)" — this is the closest thing to a performance
-  assertion in the project, and it is manual.
+`npx vitest run server/private-room-ten-players.test.js` creates a private room
+through the Worker and holds ten real WebSockets through hello, lobby, countdown,
+concurrent answer rounds, finish, and D1 persistence. It checks every client's
+complete standings, ten distinct result rows (including the tenth seat's wrong
+answer statistics), and reverse-join-order finishes. This passes without a
+production-code change: ten players already work on the server.
+
+The test also bounds this ten-problem race's answer-to-results JSON traffic to
+32 KiB per client, with 100 progress messages and just one terminal state snapshot.
+This is a regression budget for payload volume, not a production latency or billing
+benchmark. `public/src/lobby-handoff.test.js` and `public/src/ui.test.js` cover the
+ten-row lobby, complete handoff, ten lanes, full standings, and tenth-place banner.
+Browser layout checks use the actual page and remote runner with an injected
+roster; they remain manual, separate from the real-socket server test. At desktop
+and mobile widths the extra lanes and results remain reachable by vertical scrolling.
+Public quickmatch's six-player cap and timing are outside this test's scope.
+
+Other performance checks:
+
+- **WS state-message frequency** (§6's WebSocket probes section): manual probes
+  supplement the automated ten-player snapshot-count assertion above.
 - **Leaderboard cache**: `s-maxage` (30s) via the Miniflare/Cloudflare Cache API, exercised
   manually in §6 L4 but not asserted as a timing budget by any test.
 - **Animation jank**: called out as a manual regression-sweep item (§6), with no frame-timing
   assertion.
 
-No load test exists for concurrent rooms, concurrent WebSocket connections per room
-(`server/socket-limit.test.js` tests the *limit logic*, not load — it asserts the cap is
-enforced, not how the system behaves near it), or D1 query latency under load. This is a gap
-(§11).
+Beyond the ten-player single-room regression above, there is no concurrent-room
+load test or D1 latency benchmark. `server/socket-limit.test.js` tests limit logic,
+not performance near the cap. These remain gaps (§11).
 
 ## 8. Security and privacy checks
 
@@ -527,10 +544,10 @@ Risk-ordered; effort is rough (S = under an hour, M = a session, L = multi-sessi
 | P1 | Quick Match bot-backfill disclosure copy (§4 #4) has no automated assertion. | The copy could regress to "undisclosed" again with no test catching it. | S — a `public/src/*.test.js` assertion on the disclosure string being present in the relevant template/module. |
 | P2 | `isCreator` badge leak into public lobby (§4 #13) has no isolated regression test. | A future `publicPlayer()`/lobby-render change could reintroduce host-only UI in a public room. | S — extend `server/public-room.test.js` with an explicit assertion that `isCreator` (or equivalent) never appears in a public room's broadcast payload. |
 | P2 | No WebSocket message-shape contract test. | A field rename/removal in `hello`/`youAre`/`state` breaks the client with no test signal until manual §6 catches it. | M — a small schema/shape assertion layered onto existing `server/*.test.js` DO tests. |
-| P2 | No load/concurrency test for rooms or WS connections beyond `socket-limit.test.js`'s cap-enforcement check. | Unknown behavior under realistic concurrent-room load; the cap being enforced doesn't say what happens near it. | M — synthetic multi-room, multi-socket vitest scenario, or a scripted load probe against `wrangler dev`. |
+| P2 | No multi-room load test or latency benchmark; the ten-player private-room test (§7) covers one room's behavior and payload volume. | Unknown behavior under realistic concurrent-room load; a single-room capability regression does not establish service capacity. | M — synthetic multi-room, multi-socket vitest scenario, or a scripted load probe against `wrangler dev`. |
 | P2 | No auth-flow test (better-auth email/password or Google OAuth) beyond incidental route coverage. | An auth regression could ship without any test failing. | M — dedicated `worker/auth.test.js` covering session issuance/expiry paths. |
 | P3 | No standing accessibility audit (axe-core/Lighthouse CI) beyond the two widgets called out in §9. | Contrast/keyboard-nav/ARIA regressions elsewhere in the app (lobby, race screen, results) go uncaught. | M — add axe-core as a dev dependency and a scripted check against key screens, gated manual for now via §6-style checklist as an interim step. |
-| P3 | No performance budget or automated timing assertion (§7). | Animation jank or WS chattiness regressions are caught only if a human happens to notice during a manual sweep. | M — start with a WS-message-count assertion in a `server/*.test.js` DO test (the number is already known and stated in §6). |
+| P3 | No automated timing assertion (§7); the ten-player test bounds message count and bytes only. | Animation jank or slow delivery can escape the functional and payload-volume checks. | M — add frame-timing and delivery-latency measurements. |
 
 ## 12. Running everything headlessly
 
