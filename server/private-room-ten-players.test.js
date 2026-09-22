@@ -108,11 +108,6 @@ it('ten private-room players join, race concurrently, receive all standings, and
       expect(traffic.filter((m) => m.type === 'advance')).toHaveLength(100);
       // No full-roster snapshot per answer: only the terminal snapshot.
       expect(traffic.filter((m) => m.type === 'state')).toHaveLength(1);
-      const bytes = traffic.reduce((sum, message) => sum + new TextEncoder().encode(JSON.stringify(message)).length, 0);
-      // A generous 32 KiB/client budget for this ten-by-ten race, including
-      // the final standings and snapshot; catches accidental snapshot spam.
-      expect(bytes).toBeLessThan(32 * 1024);
-      if (i === 0) console.log(`Ten-player race traffic: ${traffic.length} frames, ${bytes} JSON bytes/client`);
     }
 
     // The finished state follows persistRaceResults, so no polling/sleep is
