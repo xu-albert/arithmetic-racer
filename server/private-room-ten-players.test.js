@@ -91,6 +91,11 @@ it('ten private-room players join, race concurrently, receive all standings, and
     tenth.send({ type: 'answer', value: String(sequence[9].answer + 1) });
     await tenth.wait((m) => m.type === 'wrong' && m.playerId === tenth.playerId);
     // Finish in reverse join order to catch standings keyed by roster position.
+    // All ten cross the line within milliseconds, so this is the prompt-finish
+    // happy path only. Ten-seat straggler handling is untested: the grace the
+    // first finisher arms is raceGraceMs() = 60s for ten problems and is never
+    // extended, so a slow racer past it is DNF'd. Whether that window is right
+    // with nine opponents rather than one is an open product decision.
     const finishOrder = [...clients].reverse();
     for (const [i, client] of finishOrder.entries()) {
       await runInDurableObject(stub, (room) => { room.state.raceStartedAt = Date.now() - 20_000 - i * 1000; });

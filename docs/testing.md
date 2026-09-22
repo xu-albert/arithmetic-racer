@@ -426,12 +426,32 @@ production-code change: ten players already work on the server.
 
 The test also asserts this ten-problem race delivers 100 progress messages and
 just one terminal state snapshot per client, so an accidental per-answer roster
-broadcast fails it. `public/src/lobby-handoff.test.js` and `public/src/ui.test.js` cover the
-ten-row lobby, complete handoff, ten lanes, full standings, and tenth-place banner.
-Browser layout checks use the actual page and remote runner with an injected
-roster; they remain manual, separate from the real-socket server test. At desktop
-and mobile widths the extra lanes and results remain reachable by vertical scrolling.
-Public quickmatch's six-player cap and timing are outside this test's scope.
+broadcast fails it. `public/src/lobby-handoff.test.js` and `public/src/ui.test.js`
+cover the ten-row lobby, complete handoff, ten lanes, full standings, and
+tenth-place banner. Public quickmatch's six-player cap and timing are outside this
+test's scope.
+
+#### Ten-lane visual layout — outstanding manual check
+
+The automated coverage stops at the DOM. The client tests assert that ten lanes
+exist and that all ten podium rows render with the right text; they assert no
+geometry at all — no element height, no overflow, no scroll position. Ten-lane
+layout is therefore **unverified**, and the steps below are the check to run, not
+a record of one that passed.
+
+Run `npx wrangler dev`, create a private room, and fill it to ten seats. Only one
+layout breakpoint exists in `style-a.css` (`max-width: 540px`), so one viewport
+either side of it covers the stylesheet. `.lane` is a fixed 48px tall inside a
+`.track` that sets no `overflow`, so ten lanes are ~590px of track before the HUD,
+problem queue and input: the race screen is expected to run past the fold at both
+widths, with the page itself providing the scroll.
+
+| # | Scenario | Expected |
+|---|---|---|
+| T1 | Desktop 1280×800, racing with ten lanes | All ten lanes render and every one is reachable by page scroll; `.track` neither scrolls nor clips a lane |
+| T2 | Mobile 390×844 (below the 540px breakpoint), same race | Same ten lanes with the narrower 6.5rem handle gutter; no handle is truncated, no car starts under its handle, no horizontal scrollbar |
+| T3 | Either width, after the race ends | All ten `#podium` rows are reachable by page scroll, in finish order, with the local racer's row marked `(you)` |
+| T4 | Resize across 540px mid-race | Lane gutter and car start position switch together between 8rem and 6.5rem; no lane reflow, car overlap, or lost lane at the boundary |
 
 Other performance checks:
 
