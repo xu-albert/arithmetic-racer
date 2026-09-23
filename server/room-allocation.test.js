@@ -129,6 +129,39 @@ describe("allocateRoomId reserves a free name", () => {
     expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
   });
 
+  it("lets an abandoned reservation's alarm expire it on a wake whose id carries no name", async () => {
+    // reserveRoomName() arrives as a bare DO RPC, which never runs partyserver's
+    // initialization, and local workerd hands a later alarm a ctx.id without
+    // .name. Unless the reservation left the name behind, that alarm throws
+    // reading this.name in expireRoom() on every retry and the name is spent.
+    const name = "alloc-nameless-wake-" + crypto.randomUUID();
+    expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
+
+    await runInDurableObject(env.RaceRoom.get(env.RaceRoom.idFromName(name)), async (room) => {
+      const stored = await room.ctx.storage.get("state");
+      stored.lastActivityAt = Date.now() - UNJOINED_ROOM_IDLE_MS - 1000;
+      await room.ctx.storage.put("state", stored);
+
+      // A cold instance over the same storage, woken by its alarm alone, with
+      // the id an alarm wake hands it: no name on it.
+      const cold = new room.constructor(room.ctx, env);
+      const namelessId = { name: undefined, toString: () => room.ctx.id.toString() };
+      Object.defineProperty(cold, "ctx", {
+        value: new Proxy(room.ctx, {
+          get: (target, key) => {
+            if (key === "id") return namelessId;
+            const v = Reflect.get(target, key, target);
+            return typeof v === "function" ? v.bind(target) : v;
+          },
+        }),
+      });
+      await cold.alarm();
+      expect(cold.state.state).toBe(EXPIRED_ROOM_STATE);
+    });
+
+    expect(await allocateRoomId(env, { generate: () => name })).toBe(name);
+  });
+
   it("does not let a bare GET on a room name spend that name for good", async () => {
     const name = "alloc-bare-get-" + crypto.randomUUID();
 

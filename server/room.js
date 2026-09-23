@@ -1222,7 +1222,10 @@ export class RaceRoom extends Server {
     const stored = await this.ctx.storage.get('state');
     if (stored != null && stored.state !== EXPIRED_ROOM_STATE) return false;
     const fresh = { ...this.freshState(this.name), unjoined: true };
-    await this.ctx.storage.put('state', fresh);
+    // A bare RPC skips partyserver's initialization, which is what records the
+    // name for an alarm wake whose ctx.id carries none. Without it the fuse
+    // armed below throws on this.name in expireRoom() and never frees the name.
+    await this.ctx.storage.put({ state: fresh, __ps_name: this.name });
     // If this instance was already running on the tombstone, swap it out too;
     // onStart will not run again to do it.
     if (this.state == null || this.state.state === EXPIRED_ROOM_STATE) {
