@@ -10,6 +10,11 @@ describe("validateUsernameSync — valid", () => {
     ["xu_27"],
     ["albert"],
     ["User_123"],
+    // camelCase names that must NOT trip the boundary-split check
+    ["ClassicAnna"],
+    ["Assassin"],
+    ["Scunthorpe"],
+    ["GrassHopper"],
   ])("accepts %s", (name) => {
     expect(validateUsernameSync(name)).toEqual({ valid: true });
   });
@@ -103,6 +108,19 @@ describe("validateUsernameSync — banned (obscenity)", () => {
     // Format-valid (letters only, starts with a letter, length OK) but
     // contains a banned substring.
     expect(validateUsernameSync("BoobMaster")).toEqual({
+      valid: false,
+      reason: "banned",
+    });
+  });
+
+  // camelCase run-together names: the raw matcher alone misses these
+  // (obscenity only matches at word boundaries), but the dual check in
+  // containsProfanity splits camel case and catches them. Finding WRK-02.
+  test.each([
+    ["SuperShitLord"],
+    ["BigTits99"],
+  ])("rejects camelCase-banned name %s", (name) => {
+    expect(validateUsernameSync(name)).toEqual({
       valid: false,
       reason: "banned",
     });

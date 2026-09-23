@@ -3,8 +3,11 @@
 // Pure-function username validator. Used by the Worker to validate usernames
 // before any DB write. Does NOT check uniqueness — callers must run a separate
 // DB query for that. The client mirror at public/src/username-validator-client.js
-// must produce identical results for identical input so the inline preview in
-// the auth modal matches what the server will say on submit.
+// runs the same format + reserved checks so the inline preview in the auth
+// modal matches the server; its banned-word check uses a compact curated list
+// (every word on it also exists in this file's obscenity dataset, so a name the
+// client rejects the server rejects too), while the full dataset here remains
+// the authority on submit.
 //
 // NOTE on the import: obscenity ships a broken ESM wrapper at `dist/index.mjs`
 // that does `import mod from "./index.js"` and re-exports `mod.X` for each
@@ -107,7 +110,7 @@ export function validateUsernameSync(username) {
   if (RESERVED.has(username.toLowerCase())) {
     return { valid: false, reason: "reserved" };
   }
-  if (matcher.hasMatch(username)) {
+  if (containsProfanity(username)) {
     return { valid: false, reason: "banned" };
   }
   return { valid: true };
