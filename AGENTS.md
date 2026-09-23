@@ -114,7 +114,9 @@ The tombstone answers for the room name for `EXPIRED_ROOM_TTL_MS`, because room
 ids are three words from a ~13k-combination list and a new room really can draw
 an expired one's name. `POST /api/rooms` clears it via the `reserveRoomName()`
 RPC — which runs *before* `onStart()`, so it reads storage itself rather than
-trusting `this.state`. Coverage: `server/room-winddown.test.js` (server) and
+trusting `this.state`, and writes partyserver's `__ps_name` itself: a bare RPC
+skips the initialization that records it, and without it the alarm it arms
+wakes with no `this.name`. Any new RPC that arms an alarm needs the same. Coverage: `server/room-winddown.test.js` (server) and
 `public/src/room-expiry.test.js` (the client contract in `room-expiry.js`).
 
 ## A room name is reserved, never merely drawn
