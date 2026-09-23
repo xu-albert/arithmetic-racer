@@ -57,7 +57,9 @@ are deliberately different mechanisms:
   any *recognized* client message. Alarm ticks are not activity, so a race
   nobody is answering is idle. It ends in `expireRoom()`: state becomes an
   `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped, and everyone attached
-  gets `room-expired` and a closed socket.
+  gets `room-expired` and a closed socket. The same winddown runs on the much
+  shorter `UNJOINED_ROOM_IDLE_MS` while nobody has joined the room at all — see
+  "A room name is reserved, never merely drawn".
 - **Race deadline** — `raceDeadlineAt()`, both rooms. `isRaceComplete()` alone
   never ends a race a connected racer refuses to finish, so two bounds back it:
   the grace the *first* finisher arms (`armRaceGrace()`, value `raceGraceMs()`)
@@ -102,17 +104,70 @@ Traps this arrangement sets:
 For a private room the 5-minute cleanup no longer deletes DO storage — it
 re-mints state and persists it, carrying the idle clock forward — so an expired
 private room leaves a small storage row behind for good. Nothing wakes the DO
-to collect it; it is cleared lazily, by `claimRoomName()` when the name is drawn
-again or by the `EXPIRED_ROOM_TTL_MS` check in `onStart()` if someone connects
-after 24h. That unbounded-but-tiny growth was accepted deliberately: it is the
-price of the expired screen, and a collector alarm would cost more than the row.
+to collect it; it is cleared lazily, by `reserveRoomName()` when the name is
+drawn again or by the `EXPIRED_ROOM_TTL_MS` check in `onStart()` if someone
+connects after 24h. That unbounded-but-tiny growth was accepted deliberately:
+it is the price of the expired screen, and a collector alarm would cost more
+than the row.
 
 The tombstone answers for the room name for `EXPIRED_ROOM_TTL_MS`, because room
 ids are three words from a ~13k-combination list and a new room really can draw
-an expired one's name. `POST /api/rooms` clears it via the `claimRoomName()` RPC
-— which runs *before* `onStart()`, so it reads storage itself rather than
-trusting `this.state`. Coverage: `server/room-winddown.test.js` (server) and
+an expired one's name. `POST /api/rooms` clears it via the `reserveRoomName()`
+RPC — which runs *before* `onStart()`, so it reads storage itself rather than
+trusting `this.state`, and writes partyserver's `__ps_name` itself: a bare RPC
+skips the initialization that records it, and without it the alarm it arms
+wakes with no `this.name`. Any new RPC that arms an alarm needs the same. Coverage: `server/room-winddown.test.js` (server) and
 `public/src/room-expiry.test.js` (the client contract in `room-expiry.js`).
+
+## A room name is reserved, never merely drawn
+
+The 13,248-name list (`public/src/handles.js` × `server/room-id.js`) is small
+enough that collisions are a birthday problem in the number of *live* rooms, not
+a rarity: the chance some pair among 50 allocated names collides is ~8.8%, and
+~31.2% at 100. So `POST /api/rooms` allocates through
+`allocateRoomId()` (`server/room-id.js`), which draws up to `ROOM_ID_ATTEMPTS`
+names and keeps the first whose `reserveRoomName()` says yes. Three things about
+that hold it together:
+
+- **The reservation is the DO's read-then-write, and it has to stay there.** A
+  Durable Object is single-threaded per name and its input gate stays shut
+  across those storage awaits, so two creations that drew the same name
+  serialize inside the RPC and only the first finds it free. The same check
+  hoisted into the Worker — "ask, then return the name" — is not a reservation:
+  both callers see free and both get the name.
+- **A live room is any state that is not a tombstone, occupancy irrelevant.** A
+  room created a moment ago has no players yet, so anything keyed on
+  `players.length` would hand its name to the next caller.
+- **Live state with nobody in it must always carry a fuse, whichever path
+  minted it.** Because a live row is what makes a name unreservable, an unjoined
+  room that nothing will ever wake spends its name permanently. So the two
+  places such state is born both mark `state.unjoined` and arm the alarm:
+  `reserveRoomName()`, and `onStart()` on a fresh mint. The second one is not
+  optional — partyserver runs `onStart` before it looks at the `Upgrade` header,
+  so a plain `GET /parties/race-room/<name>` persists a lobby and then 404s,
+  and unmarked those rows would 503 every real creation for good.
+  An unjoined room winds down after `UNJOINED_ROOM_IDLE_MS` (2 min) instead of
+  `PRIVATE_ROOM_IDLE_MS`, because both paths are unauthenticated and unmetered
+  by design: at a 30-minute hold, a few requests a second would take all 13,248
+  names. Two minutes is generous for the only client that legitimately holds a
+  name it has not joined — the creator's socket is opening while the `POST`
+  response is still in flight. The flag is dropped by the first seat
+  `handleHello()` creates, so the short clock can never shorten a room somebody
+  is in, nor one that emptied out after having someone (the idle-cleanup
+  re-mint carries the clock forward and never re-marks it). The cost accepted in
+  exchange is that every created room — joined or not — leaves a storage row, on
+  the same reasoning as the tombstone row above.
+
+Exhausting the attempts is a `503`, never a fallback to the last name drawn;
+`public/main.js`'s create-room button already surfaces a non-ok response. A
+throwing reservation counts as taken for the same reason — an unproven claim is
+not a name we own. Coverage: `server/room-allocation.test.js`.
+
+Private rooms are **unlisted, not access-controlled**, and that is a deliberate
+product decision rather than a gap to close: the name is the only credential and
+the namespace is cheap to enumerate. Reserving fixes who *creates* a room, not
+who can reach one. Do not add a join capability, invite code or admission check
+without a fresh decision.
 
 ## Every one-shot room broadcast needs a snapshot equivalent
 

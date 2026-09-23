@@ -1,0 +1,3 @@
+commands:
+  prepare: npm ci
+  test: npm test

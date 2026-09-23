@@ -10,7 +10,7 @@
 // falls through to env.ASSETS.
 
 import { routePartykitRequest } from "partyserver";
-import { generateRoomId } from "./room-id.js";
+import { allocateRoomId } from "./room-id.js";
 import { handleRaceResult } from "../worker/routes/race-result.js";
 import { handleGetMe, handleGetMyRaces, handlePostUsername, handleByDevice } from "../worker/routes/me.js";
 import { getAuth } from "../worker/auth.js";
@@ -95,15 +95,21 @@ export default {
 
     // Phase 6 — private multiplayer rooms
     if (request.method === "POST" && pathname === "/api/rooms") {
-      const roomId = generateRoomId();
-      // Creating a room is the one moment we know this name is being claimed
-      // anew, so clear any expired-room tombstone sitting on it — otherwise
-      // the creator opens their brand-new room onto the "room expired" screen.
-      // Best-effort: a failure here costs a confusing screen, not the room.
-      try {
-        await env.RaceRoom.get(env.RaceRoom.idFromName(roomId)).claimRoomName();
-      } catch (e) {
-        logError(KINDS.ROOM_CLAIM_FAILED, e, { roomId });
+      // Creating a room is the one moment we know a name is being claimed
+      // anew, so the name is *reserved* here rather than merely drawn: the
+      // namespace is ~13k words and a draw can land on a live room, whose
+      // lobby the caller must never be handed as their own. Reserving also
+      // clears an expired-room tombstone sitting on the name — otherwise the
+      // creator opens their brand-new room onto the "room expired" screen.
+      const roomId = await allocateRoomId(env, {
+        onError: (e, id) => logError(KINDS.ROOM_CLAIM_FAILED, e, { roomId: id }),
+      });
+      // Every draw was taken. Rare enough to be a load signal rather than a
+      // routine outcome, and the client already surfaces a non-ok response as
+      // "could not create room", so fail loudly instead of returning a name we
+      // could not reserve.
+      if (roomId == null) {
+        return Response.json({ error: "no room name available" }, { status: 503 });
       }
       return Response.json({ roomId });
     }
