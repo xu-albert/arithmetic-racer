@@ -597,8 +597,10 @@ export class RaceRoom extends Server {
     }
 
     // Reconnects returned above, so only a genuinely new seat is refused. A
-    // departed seat is only held for its race row, so it holds no place.
-    const humans = this.state.players.filter((p) => !p.isBot && !p.departed).length;
+    // departed seat still counts: its racer can reclaim it through the
+    // reconnect branch, which is cap-exempt, so releasing its place to a
+    // newcomer would let the room reach eleven. resetForRace prunes it.
+    const humans = this.state.players.filter((p) => !p.isBot).length;
     if (humans >= PRIVATE_ROOM_MAX_PLAYERS) {
       return this.sendError(connection, 'ROOM_FULL',
         `This room is full (${PRIVATE_ROOM_MAX_PLAYERS}/${PRIVATE_ROOM_MAX_PLAYERS}).`);
@@ -1040,8 +1042,9 @@ export class RaceRoom extends Server {
 
     // Mid-race: keep the player in state.players so finishRace persists their
     // row — a DNF for whoever was still answering, a finish for whoever was
-    // not. `departed` marks it as held only for that row: it stops counting
-    // toward PRIVATE_ROOM_MAX_PLAYERS, and resetForRace drops it on rematch.
+    // not. `departed` marks it as held only for that row; it still counts toward
+    // PRIVATE_ROOM_MAX_PLAYERS (its racer may reconnect) until resetForRace
+    // drops it on rematch.
     if (this.state.state === 'racing') {
       player.departed = true;
       this.dropRacer(player);

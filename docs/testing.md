@@ -427,8 +427,9 @@ answer statistics), and reverse-join-order finishes.
 
 The same file covers the cap (`PRIVATE_ROOM_MAX_PLAYERS` in `server/room.js`): an
 11th new racer gets `ROOM_FULL` in the lobby and finished states while a seated
-racerId still reconnects; a seat that left mid-race stops counting toward the cap;
-and a rematch drops such seats, so the next race never exceeds ten lanes.
+racerId still reconnects; a seat that left mid-race keeps counting toward the cap
+(its racer may reconnect), so a replacement is refused until a rematch prunes it,
+and the room never exceeds ten seats across departure, finish, reconnect and rematch.
 
 The test also asserts this ten-problem race delivers 100 progress messages and
 just one terminal state snapshot per client, so an accidental per-answer roster
