@@ -186,19 +186,6 @@ function raceListItem(r) {
 }
 
 /**
- * One page of a user's races, newest first.
- *
- * Reads `limit + 1` rows so `next_cursor` can say whether an older page exists
- * without a second COUNT query; the probe row is never returned.
- *
- * @param {object} env
- * @param {string} userId
- * @param {{difficulty?: string|null, before?: number|null, limit: number}} page
- *   `difficulty` narrows to one tier (null = every tier); `before` is a
- *   race_seq and only races numbered strictly below it are returned.
- * @returns {Promise<{races: object[], next_cursor: number|null}>}
- */
-/**
  * The race-history page query for fetchRaceHistory. `pointsExpr` is "points"
  * on a database at migration 0009 or later, "NULL" on one still behind — see
  * withColumnFallback in ../db.js; raceListItem already reads a NULL points as
@@ -219,6 +206,19 @@ const HISTORY_SQL = (pointsExpr, whereClause) => `WITH ordered AS (
   ORDER BY race_seq DESC
   LIMIT ?`;
 
+/**
+ * One page of a user's races, newest first.
+ *
+ * Reads `limit + 1` rows so `next_cursor` can say whether an older page exists
+ * without a second COUNT query; the probe row is never returned.
+ *
+ * @param {object} env
+ * @param {string} userId
+ * @param {{difficulty?: string|null, before?: number|null, limit: number}} page
+ *   `difficulty` narrows to one tier (null = every tier); `before` is a
+ *   race_seq and only races numbered strictly below it are returned.
+ * @returns {Promise<{races: object[], next_cursor: number|null}>}
+ */
 async function fetchRaceHistory(env, userId, { difficulty = null, before = null, limit }) {
   const where = [];
   const binds = [userId];
