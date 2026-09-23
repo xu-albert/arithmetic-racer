@@ -74,7 +74,7 @@ lint: a stray test file in the wrong directory silently joins the wrong runner (
 | Directory | Runner | What's covered |
 | --- | --- | --- |
 | `public/src/*.test.js` | `node --test` | Client logic: `runner.js`/`remote-runner.js` (race loop), `game.js` (problem generation, difficulty), `bot.js`/`bot-timeline.js`, `handles.js`, `header.js`, `profile.js`, `room-config-rules.js`, `room-expiry.js`, `ui.js` (race screen, over a DOM stub), `lobby.js` (the race-handoff gate, over stubbed PartySocket + DOM), `seeded-rng.js`, `username-validator-client.js`, `recent-finishes.js`, `leaderboard.js`, `leaderboard-period.js`, `bug-report-context.js`, `auto-start.js`, `captcha-session.js` |
-| `server/*.test.js` (vitest) | `vitest` | Room DO behavior: `room-identity.test.js`, `public-room.test.js`, `room-config.test.js`, `room-handles.test.js`, `room-winddown.test.js`, `room-captcha.test.js`, `room-captcha-e2e.test.js`, `room-race-deadline.test.js`, `room-answer-persistence.test.js`, `lobby-router.test.js`, `socket-limit.test.js` |
+| `server/*.test.js` (vitest) | `vitest` | Room DO behavior: `room-identity.test.js`, `public-room.test.js`, `room-config.test.js`, `room-handles.test.js`, `room-winddown.test.js`, `room-captcha.test.js`, `room-captcha-e2e.test.js`, `room-race-deadline.test.js`, `room-answer-persistence.test.js`, `private-room-ten-players.test.js`, `lobby-router.test.js`, `socket-limit.test.js` |
 | `server/room-stats.test.js`, `server/captcha.test.js` | `node --test` | Pure PPM/points math and the captcha helpers (trigger rate, seeded problem set, wire projection), no DO — explicitly carved out of vitest |
 | `worker/*.test.js` | `vitest` | Worker-level helpers with D1/binding dependencies: `email.test.js`, `log-throttle.test.js`, `logger.test.js`, `plausibility.test.js`, `race-result-store.test.js`, `race-score.test.js`, `rate-limit.test.js`, `user-agent.test.js`, `username-validator.test.js`, `version.test.js` |
 | `worker/routes/*.test.js` | `vitest` | Route handlers: `admin.test.js`, `contact.test.js`, `leaderboard.test.js`, `matchmake.test.js` + `matchmake-e2e.test.js`, `me.test.js`, `race-result.test.js`, `recent-finishes.test.js`, `captcha-exclusion.test.js` |
@@ -163,10 +163,11 @@ that way past the PR that introduced the fix is the thing this rule exists to pr
 ## 5. End-to-end and UI tests
 
 There is no automated browser/E2E layer in this project today — no Playwright, no
-Puppeteer, no headless-Chrome suite. The two files named `*-e2e.test.js`
-(`worker/routes/matchmake-e2e.test.js`, `server/room-captcha-e2e.test.js`) are the closest
-thing, but both are vitest tests driving a flow end-to-end at the HTTP/WebSocket/DO level —
-real routing, real sockets, real D1, no browser.
+Puppeteer, no headless-Chrome suite. The closest thing is three vitest files that drive a
+flow end-to-end at the HTTP/WebSocket/DO level — real routing, real sockets, real D1, no
+browser: the two named `*-e2e.test.js` (`worker/routes/matchmake-e2e.test.js`,
+`server/room-captcha-e2e.test.js`) and `server/private-room-ten-players.test.js`, which holds
+ten concurrent sockets through a whole private race (§7).
 
 All *browser* coverage is manual (§6) — the DOM-level exceptions are the race screen and the
 lobby's race-handoff gate, which `public/src/ui.test.js` and `public/src/lobby-handoff.test.js`
@@ -415,20 +416,56 @@ counts — the history is the racer's own log, so solo races are listed, unlike 
 
 ## 7. Performance and load
 
-No formal performance budgets or automated load tests exist today. What's actually measured:
+### Ten-player private-room capability
 
-- **WS message frequency** (§6's WebSocket probes section): manually counted, expected "low
-  (~1–2 per race, only on state transitions)" — this is the closest thing to a performance
-  assertion in the project, and it is manual.
+`npx vitest run server/private-room-ten-players.test.js` creates a private room
+through the Worker and holds ten real WebSockets through hello, lobby, countdown,
+concurrent answer rounds, finish, and D1 persistence. It checks every client's
+complete standings, ten distinct result rows (including the tenth seat's wrong
+answer statistics), and reverse-join-order finishes. This passes without a
+production-code change: ten players already work on the server.
+
+The test also asserts this ten-problem race delivers 100 progress messages and
+just one terminal state snapshot per client, so an accidental per-answer roster
+broadcast fails it. `public/src/lobby-handoff.test.js` and `public/src/ui.test.js`
+cover the ten-row lobby, complete handoff, ten lanes, full standings, and
+tenth-place banner. Public quickmatch's six-player cap and timing are outside this
+test's scope.
+
+#### Ten-lane visual layout — outstanding manual check
+
+The automated coverage stops at the DOM. The client tests assert that ten lanes
+exist and that all ten podium rows render with the right text; they assert no
+geometry at all — no element height, no overflow, no scroll position. Ten-lane
+layout is therefore **unverified**, and the steps below are the check to run, not
+a record of one that passed.
+
+Run `npx wrangler dev`, create a private room, and fill it to ten seats. Only one
+layout breakpoint exists in `style-a.css` (`max-width: 540px`), so one viewport
+either side of it covers the stylesheet. `.lane` is a fixed 48px tall inside a
+`.track` that sets no `overflow`, so ten lanes are ~590px of track before the HUD,
+problem queue and input: the race screen is expected to run past the fold at both
+widths, with the page itself providing the scroll.
+
+| # | Scenario | Expected |
+|---|---|---|
+| T1 | Desktop 1280×800, racing with ten lanes | All ten lanes render and every one is reachable by page scroll; `.track` neither scrolls nor clips a lane |
+| T2 | Mobile 390×844 (below the 540px breakpoint), same race | Same ten lanes with the narrower 6.5rem handle gutter; no handle is truncated, no car starts under its handle, no horizontal scrollbar |
+| T3 | Either width, after the race ends | All ten `#podium` rows are reachable by page scroll, in finish order, with the local racer's row marked `(you)` |
+| T4 | Resize across 540px mid-race | Lane gutter and car start position switch together between 8rem and 6.5rem; no lane reflow, car overlap, or lost lane at the boundary |
+
+Other performance checks:
+
+- **WS state-message frequency** (§6's WebSocket probes section): manual probes
+  supplement the automated ten-player snapshot-count assertion above.
 - **Leaderboard cache**: `s-maxage` (30s) via the Miniflare/Cloudflare Cache API, exercised
   manually in §6 L4 but not asserted as a timing budget by any test.
 - **Animation jank**: called out as a manual regression-sweep item (§6), with no frame-timing
   assertion.
 
-No load test exists for concurrent rooms, concurrent WebSocket connections per room
-(`server/socket-limit.test.js` tests the *limit logic*, not load — it asserts the cap is
-enforced, not how the system behaves near it), or D1 query latency under load. This is a gap
-(§11).
+Beyond the ten-player single-room regression above, there is no concurrent-room
+load test or D1 latency benchmark. `server/socket-limit.test.js` tests limit logic,
+not performance near the cap. These remain gaps (§11).
 
 ## 8. Security and privacy checks
 
@@ -527,10 +564,10 @@ Risk-ordered; effort is rough (S = under an hour, M = a session, L = multi-sessi
 | P1 | Quick Match bot-backfill disclosure copy (§4 #4) has no automated assertion. | The copy could regress to "undisclosed" again with no test catching it. | S — a `public/src/*.test.js` assertion on the disclosure string being present in the relevant template/module. |
 | P2 | `isCreator` badge leak into public lobby (§4 #13) has no isolated regression test. | A future `publicPlayer()`/lobby-render change could reintroduce host-only UI in a public room. | S — extend `server/public-room.test.js` with an explicit assertion that `isCreator` (or equivalent) never appears in a public room's broadcast payload. |
 | P2 | No WebSocket message-shape contract test. | A field rename/removal in `hello`/`youAre`/`state` breaks the client with no test signal until manual §6 catches it. | M — a small schema/shape assertion layered onto existing `server/*.test.js` DO tests. |
-| P2 | No load/concurrency test for rooms or WS connections beyond `socket-limit.test.js`'s cap-enforcement check. | Unknown behavior under realistic concurrent-room load; the cap being enforced doesn't say what happens near it. | M — synthetic multi-room, multi-socket vitest scenario, or a scripted load probe against `wrangler dev`. |
+| P2 | No multi-room load test or latency benchmark; the ten-player private-room test (§7) covers one room's behavior. | Unknown behavior under realistic concurrent-room load; a single-room capability regression does not establish service capacity. | M — synthetic multi-room, multi-socket vitest scenario, or a scripted load probe against `wrangler dev`. |
 | P2 | No auth-flow test (better-auth email/password or Google OAuth) beyond incidental route coverage. | An auth regression could ship without any test failing. | M — dedicated `worker/auth.test.js` covering session issuance/expiry paths. |
 | P3 | No standing accessibility audit (axe-core/Lighthouse CI) beyond the two widgets called out in §9. | Contrast/keyboard-nav/ARIA regressions elsewhere in the app (lobby, race screen, results) go uncaught. | M — add axe-core as a dev dependency and a scripted check against key screens, gated manual for now via §6-style checklist as an interim step. |
-| P3 | No performance budget or automated timing assertion (§7). | Animation jank or WS chattiness regressions are caught only if a human happens to notice during a manual sweep. | M — start with a WS-message-count assertion in a `server/*.test.js` DO test (the number is already known and stated in §6). |
+| P3 | No automated timing assertion (§7); the ten-player test bounds message counts only. | Animation jank or slow delivery can escape the functional and message-count checks. | M — add frame-timing and delivery-latency measurements. |
 
 ## 12. Running everything headlessly
 
