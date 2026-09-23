@@ -115,6 +115,9 @@ function closeQuietly(connection, reason) {
 }
 
 export const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Seats a private room holds. Public rooms pre-gate at auto-start's
+// MAX_PLAYERS (6) before delegating here, so this never binds them.
+export const PRIVATE_ROOM_MAX_PLAYERS = 10;
 export const MAX_HANDLE_LEN = 24;
 export const MIN_RACE_LENGTH = 5;
 export const MAX_RACE_LENGTH = 50;
@@ -590,6 +593,13 @@ export class RaceRoom extends Server {
     // New player — only allowed in lobby or finished (not mid-race).
     if (this.state.state === 'countdown' || this.state.state === 'racing') {
       return this.sendError(connection, 'BAD_STATE', 'Race already in progress');
+    }
+
+    // Reconnects returned above, so only a genuinely new seat is refused.
+    const humans = this.state.players.filter((p) => !p.isBot).length;
+    if (humans >= PRIVATE_ROOM_MAX_PLAYERS) {
+      return this.sendError(connection, 'ROOM_FULL',
+        `This room is full (${PRIVATE_ROOM_MAX_PLAYERS}/${PRIVATE_ROOM_MAX_PLAYERS}).`);
     }
 
     const taken = new Set(this.state.players.map((p) => p.handle));
