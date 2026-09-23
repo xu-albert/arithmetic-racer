@@ -60,8 +60,8 @@ const matcher = new RegExpMatcher({
 });
 
 /**
- * Profanity check with no format opinion, for callers that allow shapes
- * `validateUsernameSync` would reject anyway — room handles permit
+ * Profanity check with no format opinion. `validateUsernameSync` runs it after
+ * its own format gate; room handles call it directly because they permit
  * punctuation, emoji, and 1-24 chars. Shares the matcher above so there's a
  * single source of profanity truth and only one dataset build per isolate.
  *
