@@ -7,7 +7,7 @@
 // inject a user id through that module's _setTestUserId override instead of
 // signing in for real.
 
-import { db } from "../db.js";
+import { db, withColumnFallback } from "../db.js";
 import { validateUsernameSync } from "../username-validator.js";
 import { readUserId } from "../session.js";
 import { runClaim } from "../auth.js";
@@ -25,6 +25,28 @@ function toIso(value) {
   if (value == null) return null;
   return new Date(value).toISOString();
 }
+
+/**
+ * The per-difficulty aggregate query for handleGetMe. `pointsExpr` is "points"
+ * on a database at migration 0009 or later, "NULL" on one still behind — see
+ * withColumnFallback in ../db.js. AVG(CASE WHEN finished = 1 ...) for the
+ * problem-time average is deliberate: a quit race's avg_time_per_problem_ms
+ * is a mandated 0, and counting it would dilute the pace of finished races.
+ */
+const AGGREGATES_SQL = (pointsExpr) => `SELECT difficulty,
+        COUNT(*) AS races_played,
+        SUM(CASE WHEN finished = 1 THEN 1 ELSE 0 END) AS races_finished,
+        MIN(CASE WHEN finished = 1 THEN finish_time_ms END) AS best_time_ms,
+        AVG(accuracy_pct) AS avg_accuracy,
+        AVG(CASE WHEN finished = 1 THEN avg_time_per_problem_ms END) AS avg_problem_time_ms,
+        SUM(${pointsExpr}) AS total_points,
+        AVG(CASE WHEN finished = 1 AND finish_time_ms > 0
+                 THEN problems_correct * 60000.0 / finish_time_ms END) AS avg_ppm,
+        MAX(CASE WHEN finished = 1 AND finish_time_ms > 0
+                 THEN problems_correct * 60000.0 / finish_time_ms END) AS best_ppm
+   FROM race_results
+  WHERE user_id = ?
+  GROUP BY difficulty`;
 
 export async function handleGetMe(request, env) {
   const userId = await readUserId(request, env);
@@ -47,27 +69,22 @@ export async function handleGetMe(request, env) {
   // migrations/0009_race_results_points.sql) because it accumulates and must
   // not be retroactively rewritten by a formula change.
   //
-  // Both PPM aggregates skip unfinished races: a quit race has no rate. That
-  // makes avg_ppm an average over races_finished, not races_played.
-  const { results: aggRows } = await db(env)
-    .prepare(
-      `SELECT difficulty,
-              COUNT(*) AS races_played,
-              SUM(CASE WHEN finished = 1 THEN 1 ELSE 0 END) AS races_finished,
-              MIN(CASE WHEN finished = 1 THEN finish_time_ms END) AS best_time_ms,
-              AVG(accuracy_pct) AS avg_accuracy,
-              AVG(avg_time_per_problem_ms) AS avg_problem_time_ms,
-              SUM(points) AS total_points,
-              AVG(CASE WHEN finished = 1 AND finish_time_ms > 0
-                       THEN problems_correct * 60000.0 / finish_time_ms END) AS avg_ppm,
-              MAX(CASE WHEN finished = 1 AND finish_time_ms > 0
-                       THEN problems_correct * 60000.0 / finish_time_ms END) AS best_ppm
-         FROM race_results
-        WHERE user_id = ?
-        GROUP BY difficulty`
-    )
-    .bind(userId)
-    .all();
+  // Every rate aggregate skips unfinished races: a quit race has no rate. Its
+  // avg_time_per_problem_ms is a mandated 0 (worker/routes/race-result.js,
+  // server/room-stats.js), so including it would report a pace 2-3x faster
+  // than anything the racer ever ran; its PPM is NULL either way. That makes
+  // the averages ones over races_finished, not races_played.
+  //
+  // `points` may not exist while the database is a migration behind
+  // (migrations/README.md), so the aggregate compiles in two forms and reads
+  // NULL for the column in the fallback — which total_points already reports
+  // as 0.
+  const aggRows = await withColumnFallback(
+    env,
+    AGGREGATES_SQL("points"),
+    AGGREGATES_SQL("NULL"),
+    [userId]
+  );
 
   const byDifficulty = new Map((aggRows ?? []).map((r) => [r.difficulty, r]));
   const aggregates = DIFFICULTIES.map((d) => {
@@ -169,6 +186,27 @@ function raceListItem(r) {
 }
 
 /**
+ * The race-history page query for fetchRaceHistory. `pointsExpr` is "points"
+ * on a database at migration 0009 or later, "NULL" on one still behind — see
+ * withColumnFallback in ../db.js; raceListItem already reads a NULL points as
+ * "not scored". PPM is derived from columns that predate 0009, so it always
+ * lands.
+ */
+const HISTORY_SQL = (pointsExpr, whereClause) => `WITH ordered AS (
+   SELECT difficulty, finish_time_ms, accuracy_pct,
+          avg_time_per_problem_ms, played_at, ${pointsExpr} AS points,
+          CASE WHEN finished = 1 AND finish_time_ms > 0
+               THEN problems_correct * 60000.0 / finish_time_ms END AS ppm,
+          ROW_NUMBER() OVER (ORDER BY played_at ASC, id ASC) AS race_seq
+     FROM race_results
+    WHERE user_id = ?
+ )
+ SELECT * FROM ordered
+  ${whereClause}
+  ORDER BY race_seq DESC
+  LIMIT ?`;
+
+/**
  * One page of a user's races, newest first.
  *
  * Reads `limit + 1` rows so `next_cursor` can say whether an older page exists
@@ -194,26 +232,13 @@ async function fetchRaceHistory(env, userId, { difficulty = null, before = null,
   }
   binds.push(limit + 1);
 
-  const { results } = await db(env)
-    .prepare(
-      `WITH ordered AS (
-         SELECT difficulty, finish_time_ms, accuracy_pct,
-                avg_time_per_problem_ms, played_at, points,
-                CASE WHEN finished = 1 AND finish_time_ms > 0
-                     THEN problems_correct * 60000.0 / finish_time_ms END AS ppm,
-                ROW_NUMBER() OVER (ORDER BY played_at ASC, id ASC) AS race_seq
-           FROM race_results
-          WHERE user_id = ?
-       )
-       SELECT * FROM ordered
-        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-        ORDER BY race_seq DESC
-        LIMIT ?`
-    )
-    .bind(...binds)
-    .all();
-
-  const rows = results ?? [];
+  const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const rows = await withColumnFallback(
+    env,
+    HISTORY_SQL("points", whereClause),
+    HISTORY_SQL("NULL", whereClause),
+    binds
+  );
   const races = rows.slice(0, limit).map(raceListItem);
   const hasOlder = rows.length > limit;
   return {

@@ -1,5 +1,6 @@
-// Tiny D1 helper. Centralizes the binding lookup so route handlers don't
-// reach into env directly. Add query helpers here later if patterns repeat.
+// Tiny D1 helpers. Centralizes the binding lookup so route handlers don't
+// reach into env directly, plus the shared missing-column fallback for reads
+// of recently migrated columns (withColumnFallback below).
 export function db(env) {
   return env.DB;
 }
@@ -27,4 +28,34 @@ export function isMissingColumnError(err) {
     e = e.cause;
   }
   return false;
+}
+
+/**
+ * Run a `.all()` query that names a column a recent migration added, retrying
+ * with a column-free statement when the database is still a migration behind.
+ *
+ * Migrations here are applied by hand while the Worker deploys from a push, so
+ * a build can briefly run against a database one migration behind — see
+ * migrations/README.md. Callers that read a newly added column pass both
+ * statement forms and the fallback becomes the default instead of a discipline
+ * each route has to remember. Only a genuinely missing column takes the
+ * fallback; every other failure propagates, so a real database error still
+ * surfaces as one.
+ *
+ * @param {object} env
+ * @param {string} withSql Statement naming the new column.
+ * @param {string} withoutSql The same statement with that column's read
+ *   replaced by a literal (usually NULL) so it compiles without the column.
+ * @param {unknown[]} [binds] Bound parameters, identical for both forms.
+ * @returns {Promise<object[]>} The statement's `results` rows, or [] when none.
+ */
+export async function withColumnFallback(env, withSql, withoutSql, binds = []) {
+  try {
+    const { results } = await db(env).prepare(withSql).bind(...binds).all();
+    return results ?? [];
+  } catch (err) {
+    if (!isMissingColumnError(err)) throw err;
+    const { results } = await db(env).prepare(withoutSql).bind(...binds).all();
+    return results ?? [];
+  }
 }
