@@ -423,8 +423,12 @@ counts — the history is the racer's own log, so solo races are listed, unlike 
 through the Worker and holds ten real WebSockets through hello, lobby, countdown,
 concurrent answer rounds, finish, and D1 persistence. It checks every client's
 complete standings, ten distinct result rows (including the tenth seat's wrong
-answer statistics), and reverse-join-order finishes. This passes without a
-production-code change: ten players already work on the server.
+answer statistics), and reverse-join-order finishes.
+
+The same file covers the cap (`PRIVATE_ROOM_MAX_PLAYERS` in `server/room.js`): an
+11th new racer gets `ROOM_FULL` in the lobby and finished states while a seated
+racerId still reconnects; a seat that left mid-race stops counting toward the cap;
+and a rematch drops such seats, so the next race never exceeds ten lanes.
 
 The test also asserts this ten-problem race delivers 100 progress messages and
 just one terminal state snapshot per client, so an accidental per-answer roster

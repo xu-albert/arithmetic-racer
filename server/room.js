@@ -1040,8 +1040,8 @@ export class RaceRoom extends Server {
 
     // Mid-race: keep the player in state.players so finishRace persists their
     // row — a DNF for whoever was still answering, a finish for whoever was
-    // not. Cleanup happens naturally when the room is destroyed or a rematch
-    // resets per-race fields.
+    // not. `departed` marks it as held only for that row: it stops counting
+    // toward PRIVATE_ROOM_MAX_PLAYERS, and resetForRace drops it on rematch.
     if (this.state.state === 'racing') {
       player.departed = true;
       this.dropRacer(player);
