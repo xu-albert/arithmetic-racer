@@ -171,3 +171,49 @@ it('refuses an 11th new racer in lobby and finished states, but still accepts a 
     for (const c of clients) c.close();
   }
 });
+
+it('a seat that left mid-race stops counting toward the cap, and can still reconnect', async () => {
+  const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
+  const { roomId } = await created.json();
+  const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
+  const clients = [];
+  const racerIds = [];
+  try {
+    for (let i = 0; i < 10; i++) {
+      const c = await connect(roomId);
+      clients.push(c);
+      racerIds.push(crypto.randomUUID());
+      c.send({ type: 'hello', playerId: racerIds[i], handle: `Racer${i + 1}` });
+      c.playerId = (await c.wait((m) => m.type === 'hello-ack')).playerId;
+    }
+    const leaver = clients[9];
+    leaver.close();
+    await runInDurableObject(stub, async (room) => {
+      room.state.state = 'racing';
+      room.state.raceStartedAt = Date.now();
+      await room.onAlarm();
+      expect(room.state.disconnectDeadlines[leaver.playerId]).toBeDefined();
+      room.state.disconnectDeadlines[leaver.playerId] = Date.now() - 1;
+      await room.onAlarm();
+      expect(room.state.players).toHaveLength(10);
+      room.state.state = 'finished';
+    });
+
+    const newcomer = await connect(roomId);
+    clients.push(newcomer);
+    newcomer.send({ type: 'hello', playerId: crypto.randomUUID(), handle: 'Replacement' });
+    await newcomer.wait((m) => m.type === 'hello-ack');
+
+    const extra = await connect(roomId);
+    clients.push(extra);
+    extra.send({ type: 'hello', playerId: crypto.randomUUID(), handle: 'Late' });
+    expect((await extra.wait((m) => m.type === 'error')).code).toBe('ROOM_FULL');
+
+    const back = await connect(roomId);
+    clients.push(back);
+    back.send({ type: 'hello', playerId: racerIds[9], handle: 'Racer10' });
+    expect((await back.wait((m) => m.type === 'hello-ack')).playerId).toBe(leaver.playerId);
+  } finally {
+    for (const c of clients) c.close();
+  }
+}, 20_000);

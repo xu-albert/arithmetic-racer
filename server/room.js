@@ -595,8 +595,9 @@ export class RaceRoom extends Server {
       return this.sendError(connection, 'BAD_STATE', 'Race already in progress');
     }
 
-    // Reconnects returned above, so only a genuinely new seat is refused.
-    const humans = this.state.players.filter((p) => !p.isBot).length;
+    // Reconnects returned above, so only a genuinely new seat is refused. A
+    // departed seat is only held for its race row, so it holds no place.
+    const humans = this.state.players.filter((p) => !p.isBot && !p.departed).length;
     if (humans >= PRIVATE_ROOM_MAX_PLAYERS) {
       return this.sendError(connection, 'ROOM_FULL',
         `This room is full (${PRIVATE_ROOM_MAX_PLAYERS}/${PRIVATE_ROOM_MAX_PLAYERS}).`);
@@ -1041,6 +1042,7 @@ export class RaceRoom extends Server {
     // not. Cleanup happens naturally when the room is destroyed or a rematch
     // resets per-race fields.
     if (this.state.state === 'racing') {
+      player.departed = true;
       this.dropRacer(player);
       const allDone = this.isRaceComplete();
       if (allDone) await this.finishRace();
