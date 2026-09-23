@@ -3,8 +3,11 @@
 // Pure-function username validator. Used by the Worker to validate usernames
 // before any DB write. Does NOT check uniqueness — callers must run a separate
 // DB query for that. The client mirror at public/src/username-validator-client.js
-// must produce identical results for identical input so the inline preview in
-// the auth modal matches what the server will say on submit.
+// runs the same format + reserved checks so the inline preview in the auth
+// modal matches the server; its banned-word check uses a compact curated list
+// (every word on it also exists in this file's obscenity dataset, so a name the
+// client rejects the server rejects too), while the full dataset here remains
+// the authority on submit.
 //
 // NOTE on the import: obscenity ships a broken ESM wrapper at `dist/index.mjs`
 // that does `import mod from "./index.js"` and re-exports `mod.X` for each
@@ -51,14 +54,24 @@ const RESERVED = new Set([
 
 const FORMAT_RE = /^[A-Za-z][A-Za-z0-9_]{2,19}$/;
 
+const dataset = englishDataset.build();
 const matcher = new RegExpMatcher({
-  ...englishDataset.build(),
+  ...dataset,
+  // "shiitake" falsely trips the matcher: the blacklist's collapse-transforms
+  // fold the double i, and the library's own whitelist lists only the
+  // single-i spelling "shitake" — the whitelist is not collapse-transformed,
+  // so it never rescues the mushroom name. Whitelist the double-i spelling
+  // too; without it the username gate newly rejects legitimate names like
+  // "MyShiitake" (room handles predate that gate and had the same hole).
+  // Narrow exception for one word — do not treat this as license to pad the
+  // whitelist every time matching surprises.
+  whitelistedTerms: [...dataset.whitelistedTerms, "shiitake"],
   ...englishRecommendedTransformers,
 });
 
 /**
- * Profanity check with no format opinion, for callers that allow shapes
- * `validateUsernameSync` would reject anyway — room handles permit
+ * Profanity check with no format opinion. `validateUsernameSync` runs it after
+ * its own format gate; room handles call it directly because they permit
  * punctuation, emoji, and 1-24 chars. Shares the matcher above so there's a
  * single source of profanity truth and only one dataset build per isolate.
  *
@@ -107,7 +120,7 @@ export function validateUsernameSync(username) {
   if (RESERVED.has(username.toLowerCase())) {
     return { valid: false, reason: "reserved" };
   }
-  if (matcher.hasMatch(username)) {
+  if (containsProfanity(username)) {
     return { valid: false, reason: "banned" };
   }
   return { valid: true };

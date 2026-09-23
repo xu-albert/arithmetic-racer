@@ -1,16 +1,29 @@
 // Client username-validator tests. Runs under `node --test`.
-// The client validator covers format + reserved only; banned-word checking
-// is server-only (the browser cannot resolve the bare `obscenity` specifier
-// without a bundler, and the server is authoritative anyway). The full set
-// of cases — including banned-word checks — runs in the worker mirror at
-// worker/username-validator.test.js.
+// The client validator covers format + reserved exactly and banned words
+// against a compact curated list (worker/username-validator.js carries the
+// full obscenity dataset and stays authoritative on submit). The full set of
+// cases runs in the worker mirror at worker/username-validator.test.js.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { validateUsernameSync } from "./username-validator-client.js";
 
 describe("validateUsernameSync — valid", () => {
-  for (const name of ["BraveOtter", "xu_27", "albert", "User_123"]) {
+  for (const name of [
+    "BraveOtter",
+    "xu_27",
+    "albert",
+    "User_123",
+    // camelCase names that must NOT trip the boundary-split check
+    "ClassicAnna",
+    "Assassin",
+    "Scunthorpe",
+    "GrassHopper",
+    // shiitake-themed names (the server once falsely banned these; the
+    // client list never contained the mushroom false positive)
+    "MyShiitake",
+    "MushroomShiitake",
+  ]) {
     test(`accepts ${name}`, () => {
       assert.deepEqual(validateUsernameSync(name), { valid: true });
     });
@@ -76,6 +89,31 @@ describe("validateUsernameSync — reserved", () => {
   }
 });
 
-// Banned-word coverage lives in worker/username-validator.test.js. The
-// server runs obscenity at submit time and returns { error: "banned" } to
-// the auth modal, which surfaces it as an inline error.
+describe("validateUsernameSync — banned (curated list)", () => {
+  for (const name of [
+    "shit",
+    "bitch",
+    "BoobMaster",
+    // camelCase run-together names: whole-word matching on the raw string
+    // misses these; the boundary-split form catches them. Finding WRK-02.
+    "SuperShitLord",
+    "BigTits99",
+  ]) {
+    test(`rejects ${name}`, () => {
+      assert.deepEqual(validateUsernameSync(name), {
+        valid: false,
+        reason: "banned",
+      });
+    });
+  }
+
+  // The client list is a subset of the server's obscenity dataset, so the
+  // preview can green-light a name the server rejects — leetspeak like this
+  // passes here and is caught only at submit time. Locks the guarantee the
+  // file header states (never rejects a name the server would accept) and
+  // its documented converse gap.
+  test("accepts leetspeak the server rejects at submit (subset gap)", () => {
+    assert.deepEqual(validateUsernameSync("sh1t"), { valid: true });
+  });
+});
+
