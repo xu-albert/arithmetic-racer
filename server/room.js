@@ -759,6 +759,8 @@ export class RaceRoom extends Server {
       player.attempts += 1;
       player.currentStreak = 0;
       this.broadcast(JSON.stringify({ type: 'wrong', playerId: player.id }));
+      // Public rooms have no activity flush to save these stats before hibernation.
+      await this.persist();
     }
   }
 

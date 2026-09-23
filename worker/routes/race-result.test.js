@@ -4,9 +4,10 @@
 // vitest-pool-workers ships an ephemeral in-memory D1 per test file; the schema
 // is applied from migrations/ by worker/test-setup.js.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { handleRaceResult } from "./race-result.js";
+import { KINDS } from "../logger.js";
 
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
@@ -21,19 +22,20 @@ function makeBody(overrides = {}) {
     finished: true,
     finish_time_ms: 48000,
     problems_total: 20,
-    problems_correct: 18,
+    problems_correct: 20,
     problems_attempted: 20,
     avg_time_per_problem_ms: 2400,
-    accuracy_pct: 90,
+    accuracy_pct: 100,
     longest_streak: 7,
     ...overrides,
   };
 }
 
 function makeRequest(body) {
+  // Isolate the IP budget; per-device rate-limit tests still share their device.
   return new Request("http://x/api/race-result", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "cf-connecting-ip": crypto.randomUUID() },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
@@ -66,21 +68,24 @@ describe("POST /api/race-result — happy path", () => {
     expect(row.finished).toBe(1);
     expect(row.finish_time_ms).toBe(48000);
     expect(row.problems_total).toBe(20);
-    expect(row.problems_correct).toBe(18);
+    expect(row.problems_correct).toBe(20);
     expect(row.problems_attempted).toBe(20);
     expect(row.avg_time_per_problem_ms).toBe(2400);
-    expect(row.accuracy_pct).toBe(90);
+    expect(row.accuracy_pct).toBe(100);
     expect(row.longest_streak).toBe(7);
     expect(typeof row.played_at).toBe("number");
     expect(row.played_at).toBeGreaterThan(0);
     expect(row.room_id).toBeNull();
-    // Scored on the way in: 18 correct in 48s = 22.5 ppm -> 18 x 22.5/60.
-    expect(row.points).toBeCloseTo(6.75, 6);
+    // Scored on the way in: 20 correct in 48s = 25 ppm -> 20 x 25/60.
+    expect(row.points).toBeCloseTo(25 / 3, 6);
   });
 
   it("accepts unfinished races (quit) with finish_time_ms NULL", async () => {
     const res = await handleRaceResult(
-      makeRequest(makeBody({ finished: false, finish_time_ms: null })),
+      makeRequest(makeBody({
+        finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
+        problems_correct: 0, problems_attempted: 0, accuracy_pct: 0, longest_streak: 0,
+      })),
       env
     );
     expect(res.status).toBe(200);
@@ -163,7 +168,7 @@ describe("POST /api/race-result — plausibility", () => {
     const res = await handleRaceResult(
       makeRequest(makeBody({
         problems_total: 10, problems_attempted: 10, problems_correct: 10,
-        accuracy_pct: 100, longest_streak: 10, finish_time_ms: 500,
+        accuracy_pct: 100, longest_streak: 10, finish_time_ms: 500, avg_time_per_problem_ms: 50,
       })),
       env
     );
@@ -180,7 +185,7 @@ describe("POST /api/race-result — plausibility", () => {
 
   it("flags a race that ran implausibly long", async () => {
     const res = await handleRaceResult(
-      makeRequest(makeBody({ finish_time_ms: 31 * 60_000 })),
+      makeRequest(makeBody({ finish_time_ms: 31 * 60_000, avg_time_per_problem_ms: 93000 })),
       env
     );
     expect(res.status).toBe(200);
@@ -286,8 +291,9 @@ describe("POST /api/race-result — validation", () => {
     it("rejects problems_correct greater than problems_total", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
-          problems_total: 1, problems_attempted: 1,
-          problems_correct: 999, accuracy_pct: 100,
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
+          problems_total: 10, problems_attempted: 12,
+          problems_correct: 12, accuracy_pct: 100, longest_streak: 0,
         })),
         env
       );
@@ -295,16 +301,15 @@ describe("POST /api/race-result — validation", () => {
       expect(await res.json()).toEqual({ error: "invalid_body" });
     });
 
-    it("rejects problems_attempted greater than problems_total", async () => {
+    it("accepts an honest race whose wrong-answer retries push attempted past total", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
           problems_total: 10, problems_attempted: 11,
-          problems_correct: 10, accuracy_pct: 90.9,
+          problems_correct: 10, accuracy_pct: 90.9, avg_time_per_problem_ms: 4800,
         })),
         env
       );
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: "invalid_body" });
+      expect(res.status).toBe(200);
     });
 
     it("rejects problems_correct greater than problems_attempted", async () => {
@@ -322,8 +327,9 @@ describe("POST /api/race-result — validation", () => {
     it("rejects accuracy_pct that contradicts the correct/attempted counts", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
           problems_total: 20, problems_attempted: 20,
-          problems_correct: 0, accuracy_pct: 100,
+          problems_correct: 5, accuracy_pct: 100, longest_streak: 0,
         })),
         env
       );
@@ -334,9 +340,9 @@ describe("POST /api/race-result — validation", () => {
     it("rejects a non-zero accuracy_pct when nothing was attempted", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
-          finished: false, finish_time_ms: null,
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
           problems_total: 20, problems_attempted: 0,
-          problems_correct: 0, accuracy_pct: 75,
+          problems_correct: 0, accuracy_pct: 75, longest_streak: 0,
         })),
         env
       );
@@ -347,6 +353,7 @@ describe("POST /api/race-result — validation", () => {
     it("rejects longest_streak greater than problems_correct", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
           problems_total: 20, problems_attempted: 20,
           problems_correct: 5, accuracy_pct: 25, longest_streak: 20,
         })),
@@ -361,6 +368,7 @@ describe("POST /api/race-result — validation", () => {
       // absorb that or honest results get thrown away.
       const res = await handleRaceResult(
         makeRequest(makeBody({
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
           problems_total: 3, problems_attempted: 3,
           problems_correct: 2, accuracy_pct: 66.7, longest_streak: 2,
         })),
@@ -372,13 +380,22 @@ describe("POST /api/race-result — validation", () => {
     it("accepts a quit mid-race where attempted is below total", async () => {
       const res = await handleRaceResult(
         makeRequest(makeBody({
-          finished: false, finish_time_ms: null,
+          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
           problems_total: 20, problems_attempted: 7,
           problems_correct: 6, accuracy_pct: 85.7, longest_streak: 4,
         })),
         env
       );
       expect(res.status).toBe(200);
+
+      // The only accepted shape with three distinct counts, so it is the only
+      // place a swapped INSERT binding between them can be caught.
+      const row = await env.DB.prepare(
+        "SELECT problems_total, problems_correct, problems_attempted FROM race_results"
+      ).first();
+      expect(row.problems_total).toBe(20);
+      expect(row.problems_correct).toBe(6);
+      expect(row.problems_attempted).toBe(7);
     });
   });
 
@@ -403,3 +420,59 @@ describe("POST /api/race-result — validation", () => {
 // Not covered here: a signed-in POST (a real better-auth session, e.g. via
 // auth.api.signUpEmail) stamping user_id on the row while device_id is still
 // recorded. readUserId in worker/session.js is what resolves the cookie.
+
+describe("POST /api/race-result — bounded solo contract", () => {
+  // Every row below is shaped so exactly one rule can reject it: a second
+  // rejector would keep the suite green with the rule under test deleted.
+  const quit = {
+    finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
+    problems_correct: 0, problems_attempted: 0, accuracy_pct: 0, longest_streak: 0,
+  };
+
+  it.each([
+    ["finished with a null finish time", { finish_time_ms: null, avg_time_per_problem_ms: 0, longest_streak: 0 }],
+    ["missing finish time", { finish_time_ms: undefined }],
+    ["zero finish time", { finish_time_ms: 0, avg_time_per_problem_ms: 0 }],
+    ["unfinished with time", { finished: false, problems_correct: 18, accuracy_pct: 90, avg_time_per_problem_ms: 0 }],
+    ["finished before all problems solved", { problems_correct: 18, accuracy_pct: 90, avg_time_per_problem_ms: 2667 }],
+    ["huge race", { ...quit, problems_total: 1e100 }],
+    ["race above maximum", { ...quit, problems_total: 51 }],
+    ["oversized device id", { device_id: "x".repeat(129) }],
+    ["too many attempts", { problems_attempted: 10001, accuracy_pct: 0.2 }],
+    ["unbounded time", { finish_time_ms: 86400001, avg_time_per_problem_ms: 4320000 }],
+    ["contradictory average", { avg_time_per_problem_ms: 100 }],
+    ["quit with nonzero average", { finished: false, finish_time_ms: null, problems_correct: 0, accuracy_pct: 0, longest_streak: 0 }],
+  ])("rejects %s without inserting", async (_name, overrides) => {
+    const res = await handleRaceResult(makeRequest(makeBody(overrides)), env);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_body" });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM race_results").first("n")).toBe(0);
+  });
+
+  it("accepts a rounded client average and bounded device/race sizes", async () => {
+    const res = await handleRaceResult(makeRequest(makeBody({
+      device_id: "x".repeat(128), problems_total: 50, problems_correct: 50,
+      problems_attempted: 50, finish_time_ms: 100023, avg_time_per_problem_ms: 2000,
+    })), env);
+    expect(res.status).toBe(200);
+  });
+
+  it("logs an insert failure while returning only an opaque error", async () => {
+    const failure = new Error("D1 private schema and query details");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await handleRaceResult(makeRequest(makeBody()), {
+        ...env, DB: { prepare() { throw failure; } },
+      });
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "db_error" });
+      expect(log).toHaveBeenCalledTimes(1);
+      const logged = JSON.parse(log.mock.calls[0][0]);
+      expect(logged.kind).toBe(KINDS.RACE_RESULT_DB);
+      expect(logged.context).toEqual({ path: "solo", phase: "insert" });
+      expect(logged.err.message).toBe(failure.message);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
