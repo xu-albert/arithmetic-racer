@@ -217,3 +217,47 @@ it('a seat that left mid-race stops counting toward the cap, and can still recon
     for (const c of clients) c.close();
   }
 }, 20_000);
+
+it('a rematch drops seats that left mid-race, so the next race never exceeds ten lanes', async () => {
+  const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
+  const { roomId } = await created.json();
+  const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
+  const clients = [];
+  try {
+    for (let i = 0; i < 10; i++) {
+      const c = await connect(roomId);
+      clients.push(c);
+      c.send({ type: 'hello', playerId: crypto.randomUUID(), handle: `Racer${i + 1}` });
+      c.playerId = (await c.wait((m) => m.type === 'hello-ack')).playerId;
+    }
+    const leaver = clients[9];
+    leaver.close();
+    await runInDurableObject(stub, async (room) => {
+      room.state.state = 'racing';
+      room.state.raceStartedAt = Date.now();
+      await room.onAlarm();
+      room.state.disconnectDeadlines[leaver.playerId] = Date.now() - 1;
+      await room.onAlarm();
+      room.state.state = 'finished';
+    });
+
+    const newcomer = await connect(roomId);
+    clients.push(newcomer);
+    newcomer.send({ type: 'hello', playerId: crypto.randomUUID(), handle: 'Replacement' });
+    newcomer.playerId = (await newcomer.wait((m) => m.type === 'hello-ack')).playerId;
+
+    await clients[0].wait((m) => m.type === 'state' && m.state.state === 'finished'
+      && m.state.players.some((p) => p.id === newcomer.playerId));
+    clients[0].send({ type: 'rematch' });
+    const lobby = await clients[0].wait((m) => m.type === 'state' && m.state.state === 'lobby');
+    expect(lobby.state.players).toHaveLength(10);
+    expect(lobby.state.players.map((p) => p.id)).not.toContain(leaver.playerId);
+
+    clients[0].send({ type: 'start-race' });
+    const countdown = await clients[0].wait((m) => m.type === 'state' && m.state.state === 'countdown');
+    expect(countdown.state.players).toHaveLength(10);
+    expect(countdown.state.players.map((p) => p.id)).toContain(newcomer.playerId);
+  } finally {
+    for (const c of clients) c.close();
+  }
+}, 20_000);

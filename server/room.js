@@ -199,6 +199,7 @@ export function adoptBroadcastIds(state) {
 }
 
 export function resetForRace(state) {
+  state.players = state.players.filter((p) => !p.departed);
   for (const p of state.players) {
     p.score = 0;
     p.attempts = 0;
