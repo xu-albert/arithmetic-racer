@@ -111,10 +111,17 @@ export default {
     // Stamp the resolved user_id on race-room upgrades so the DO can
     // attribute race-result rows. Cookie-bound auth = unspoofable; we
     // unconditionally overwrite/delete any client-supplied header value.
+    //
+    // partyserver tolerates duplicate slashes, so /parties//race-room/<name>
+    // routes to the same room DO as the canonical path. Matching the raw
+    // pathname would let that form skip the gate and carry a forged header
+    // through, so collapse repeated slashes before the prefix checks — every
+    // path that can reach a room DO then passes the gate.
     let upgradeRequest = request;
+    const normalizedPathname = pathname.replace(/\/{2,}/g, "/");
     if (
-      pathname.startsWith("/parties/race-room/")
-      || pathname.startsWith("/parties/public-race-room/")
+      normalizedPathname.startsWith("/parties/race-room/")
+      || normalizedPathname.startsWith("/parties/public-race-room/")
     ) {
       const userId = await readUserId(request, env);
       const headers = new Headers(request.headers);
