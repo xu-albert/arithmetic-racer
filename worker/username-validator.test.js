@@ -15,6 +15,11 @@ describe("validateUsernameSync — valid", () => {
     ["Assassin"],
     ["Scunthorpe"],
     ["GrassHopper"],
+    // shiitake-themed names: obscenity's blacklist collapse-transforms the
+    // double i and its whitelist only covers the single-i "shitake" spelling,
+    // so without the explicit whitelist entry these were falsely banned.
+    ["MyShiitake"],
+    ["MushroomShiitake"],
   ])("accepts %s", (name) => {
     expect(validateUsernameSync(name)).toEqual({ valid: true });
   });
@@ -121,6 +126,15 @@ describe("validateUsernameSync — banned (obscenity)", () => {
     ["BigTits99"],
   ])("rejects camelCase-banned name %s", (name) => {
     expect(validateUsernameSync(name)).toEqual({
+      valid: false,
+      reason: "banned",
+    });
+  });
+
+  // The shiitake whitelist is surgical: it rescues the mushroom names but
+  // must not rescue actual profanity embedded alongside them.
+  test("rejects profanity embedded next to the whitelisted word", () => {
+    expect(validateUsernameSync("ShiitakeShit")).toEqual({
       valid: false,
       reason: "banned",
     });

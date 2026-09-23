@@ -52,6 +52,19 @@ describe("containsProfanity", () => {
     }
   });
 
+  it("does not trip on the double-i mushroom spelling", () => {
+    // The library whitelists "shitake" (single i) but its blacklist
+    // collapse-transforms make "shiitake" match a banned term anyway; the
+    // matcher adds the double-i spelling to the whitelist. Regression test
+    // for the flagship review finding on the username gate — the same
+    // shared matcher screens room handles here.
+    for (const clean of ["shiitake", "MyShiitake", "MushroomShiitake"]) {
+      expect(containsProfanity(clean), clean).toBe(false);
+    }
+    // Surgical: profanity next to the whitelisted word is still caught.
+    expect(containsProfanity("ShiitakeShit")).toBe(true);
+  });
+
   it("documents the accepted gap: all-lowercase run-on words are not caught", () => {
     // No boundary exists to split on, and substring matching would reject the
     // innocent words above. Deliberate trade-off — see splitWordBoundaries.

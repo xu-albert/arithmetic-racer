@@ -19,6 +19,10 @@ describe("validateUsernameSync — valid", () => {
     "Assassin",
     "Scunthorpe",
     "GrassHopper",
+    // shiitake-themed names (the server once falsely banned these; the
+    // client list never contained the mushroom false positive)
+    "MyShiitake",
+    "MushroomShiitake",
   ]) {
     test(`accepts ${name}`, () => {
       assert.deepEqual(validateUsernameSync(name), { valid: true });
@@ -102,5 +106,14 @@ describe("validateUsernameSync — banned (curated list)", () => {
       });
     });
   }
+
+  // The client list is a subset of the server's obscenity dataset, so the
+  // preview can green-light a name the server rejects — leetspeak like this
+  // passes here and is caught only at submit time. Locks the guarantee the
+  // file header states (never rejects a name the server would accept) and
+  // its documented converse gap.
+  test("accepts leetspeak the server rejects at submit (subset gap)", () => {
+    assert.deepEqual(validateUsernameSync("sh1t"), { valid: true });
+  });
 });
 

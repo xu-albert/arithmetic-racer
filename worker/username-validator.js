@@ -54,8 +54,18 @@ const RESERVED = new Set([
 
 const FORMAT_RE = /^[A-Za-z][A-Za-z0-9_]{2,19}$/;
 
+const dataset = englishDataset.build();
 const matcher = new RegExpMatcher({
-  ...englishDataset.build(),
+  ...dataset,
+  // "shiitake" falsely trips the matcher: the blacklist's collapse-transforms
+  // fold the double i, and the library's own whitelist lists only the
+  // single-i spelling "shitake" — the whitelist is not collapse-transformed,
+  // so it never rescues the mushroom name. Whitelist the double-i spelling
+  // too; without it the username gate newly rejects legitimate names like
+  // "MyShiitake" (room handles predate that gate and had the same hole).
+  // Narrow exception for one word — do not treat this as license to pad the
+  // whitelist every time matching surprises.
+  whitelistedTerms: [...dataset.whitelistedTerms, "shiitake"],
   ...englishRecommendedTransformers,
 });
 

@@ -8,10 +8,11 @@
 // words with the same raw + word-boundary-split matching the server uses.
 //
 // Every word on BANNED_WORDS below also exists in the server's obscenity
-// dataset (verified against the pinned obscenity version), so a name the
-// client rejects is also rejected on submit — the inline preview never
-// green-lights something the server will bounce. The converse does not hold:
-// leetspeak and rarer terms are caught only at submit time, where the server
+// dataset (verified against the pinned obscenity version), so the preview
+// never rejects a name the server would accept. The converse does NOT hold:
+// the client list is a subset of the server's dataset, so the preview can
+// green-light a name the server rejects — leetspeak like "sh1t" and rarer
+// terms pass here and are caught only at submit time, where the server
 // returns { error: "banned" } and the auth modal surfaces it as an inline
 // error.
 //
