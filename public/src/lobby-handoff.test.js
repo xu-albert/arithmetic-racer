@@ -173,3 +173,30 @@ describe('the lobby decides when a race screen may open', () => {
     });
   }
 });
+
+test('private lobby renders all ten seats and hands the complete roster to the race screen', () => {
+  sockets.length = 0;
+  const els = installDom();
+  const handoffs = [];
+  const cleanup = attachLobby({
+    roomId: 'ten-racer-room',
+    screens: { 'lobby-room': fakeEl(), race: fakeEl(), results: fakeEl() },
+    onRaceStart: (args) => handoffs.push(args),
+    deviceId: 'ten-device',
+  });
+  const ws = sockets.at(-1);
+  const players = Array.from({ length: 10 }, (_, i) => ({
+    id: `p-${i + 1}`, handle: `Racer${i + 1}`, isCreator: i === 0,
+    score: 0, finishMs: null, dropped: false, dnf: false,
+  }));
+  const state = racingState({ players, state: 'lobby' });
+  ws.push({ type: 'state', state, youAre: 'p-1' });
+  const rows = els.get('room-players').children;
+  assert.equal(rows.length, 10);
+  assert.deepEqual(rows.map((row) => row.dataset.playerId), players.map((p) => p.id));
+  assert.equal(els.get('start-race-btn').disabled, false);
+  ws.push({ type: 'state', state: { ...state, state: 'countdown', countdownN: 3 }, youAre: 'p-1' });
+  assert.equal(handoffs.length, 1);
+  assert.deepEqual(handoffs[0].initialState.players, players);
+  cleanup.detach();
+});

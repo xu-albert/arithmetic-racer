@@ -394,10 +394,12 @@ already written down:
   direction resolves (see its header).
 - **Reading `points` can 500 the page.** The column arrives in migration 0009, migrations
   are applied by hand while the Worker deploys from a push, so a live build can be one
-  migration ahead of the database. Wrap the read and fall back to selecting `NULL` via
-  `isMissingColumnError` (`worker/db.js`); PPM is derivable from older columns, so only
-  points need the fallback. `worker/routes/recent-finishes.js` is the worked example, and
-  its test drops the column to prove the fallback.
+  migration ahead of the database. New readers of a recently-migrated column should go
+  through `withColumnFallback` in `worker/db.js` — pass two compiled forms and it retries
+  the column-free one only on `isMissingColumnError` — rather than hand-rolling the
+  try/catch a fourth time. PPM is derivable from older columns, so only points need the
+  fallback. `worker/routes/recent-finishes.js` and `worker/routes/me.js` are worked
+  examples, and their tests drop the column to prove the fallback.
 
 Provenance is not the only axis. A rate is only comparable against races of the
 same length, and length is caller-chosen: Quick Match is fixed at ten problems but
