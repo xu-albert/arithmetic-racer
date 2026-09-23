@@ -395,6 +395,125 @@ describe("GET /api/me — points and PPM", () => {
   });
 });
 
+// --- avg problem time --------------------------------------------------------
+
+describe("GET /api/me — avg_problem_time_ms", () => {
+  beforeEach(async () => {
+    await seedUser(env, { id: "u1", email: "u1@example.com", username: "Alice" });
+    _setTestUserId("u1");
+  });
+
+  it("averages over finished races only, not diluted by quits", async () => {
+    // Quit races legitimately carry avg_time_per_problem_ms = 0 (the solo
+    // route requires it, and server/room-stats.js writes it for DNFs) — so
+    // including them dilutes a real pace. One 48 s finish (2400 ms/problem)
+    // plus two quits must report 2400, not 800.
+    const t0 = 1_700_000_000_000;
+    await seedRace(env, {
+      user_id: "u1", difficulty: "medium", finished: 1,
+      finish_time_ms: 48_000, avg_time_per_problem_ms: 2400, played_at: t0 + 1,
+    });
+    await seedRace(env, {
+      user_id: "u1", difficulty: "medium", finished: 0,
+      finish_time_ms: null, avg_time_per_problem_ms: 0, played_at: t0 + 2,
+    });
+    await seedRace(env, {
+      user_id: "u1", difficulty: "medium", finished: 0,
+      finish_time_ms: null, avg_time_per_problem_ms: 0, played_at: t0 + 3,
+    });
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    const medium = body.aggregates.find((a) => a.difficulty === "medium");
+    expect(medium.races_played).toBe(3);
+    expect(medium.races_finished).toBe(1);
+    expect(medium.avg_problem_time_ms).toBe(2400);
+  });
+
+  it("reports 0 (not null) for a difficulty whose races are all unfinished", async () => {
+    await seedRace(env, {
+      user_id: "u1", difficulty: "hard", finished: 0,
+      finish_time_ms: null, avg_time_per_problem_ms: 0,
+    });
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    const hard = body.aggregates.find((a) => a.difficulty === "hard");
+    expect(hard.races_played).toBe(1);
+    expect(hard.races_finished).toBe(0);
+    expect(hard.avg_problem_time_ms).toBe(0);
+  });
+});
+
+// --- points column fallback ---------------------------------------------------
+
+describe("points column fallback (deploy ahead of migration 0009)", () => {
+  beforeEach(async () => {
+    await seedUser(env, { id: "u1", email: "u1@example.com", username: "Alice" });
+    _setTestUserId("u1");
+  });
+
+  it("serves /api/me when race_results.points does not exist", async () => {
+    // Simulates the window where the Worker has deployed but 0009 has not
+    // been applied by hand yet (migrations/README.md). Unguarded, both the
+    // aggregate and the recent-history read are a 500 on the profile screen.
+    const t0 = 1_700_000_000_000;
+    await seedRace(env, {
+      user_id: "u1", difficulty: "medium", finished: 1,
+      finish_time_ms: 60_000, problems_correct: 20, played_at: t0 + 1,
+    });
+    await env.DB.exec("ALTER TABLE race_results DROP COLUMN points");
+    try {
+      const res = await handleGetMe(makeRequest("http://x/api/me"), env);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      const medium = body.aggregates.find((a) => a.difficulty === "medium");
+      expect(medium.total_points).toBe(0);
+      expect(medium.avg_ppm).toBeCloseTo(20, 6);
+      expect(body.recent).toHaveLength(1);
+      expect(body.recent[0].points).toBeNull();
+      expect(body.recent[0].ppm).toBeCloseTo(20, 6);
+    } finally {
+      // The D1 for this file is shared by every test in it, so a case that
+      // mutates the schema has to put it back.
+      await env.DB.exec("ALTER TABLE race_results ADD COLUMN points REAL");
+    }
+  });
+
+  it("serves /api/me/races when race_results.points does not exist", async () => {
+    const t0 = 1_700_000_000_000;
+    await seedRace(env, {
+      user_id: "u1", difficulty: "easy", finished: 1,
+      finish_time_ms: 30_000, problems_correct: 20, played_at: t0 + 1,
+    });
+    await env.DB.exec("ALTER TABLE race_results DROP COLUMN points");
+    try {
+      const res = await handleGetMyRaces(makeRequest("http://x/api/me/races"), env);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.races).toHaveLength(1);
+      expect(body.races[0].points).toBeNull();
+      // PPM is derived from columns that predate 0009, so it still lands.
+      expect(body.races[0].ppm).toBeCloseTo(40, 6);
+    } finally {
+      await env.DB.exec("ALTER TABLE race_results ADD COLUMN points REAL");
+    }
+  });
+
+  it("does not swallow a real database error", async () => {
+    // A missing *table* is not a missing column, so it must propagate rather
+    // than degrade — the fallback exists for one narrow migration window,
+    // not as a blanket catch. Renamed rather than dropped so it can be
+    // restored.
+    await env.DB.exec("ALTER TABLE race_results RENAME TO race_results_away");
+    try {
+      await expect(
+        handleGetMe(makeRequest("http://x/api/me"), env)
+      ).rejects.toThrow();
+    } finally {
+      await env.DB.exec("ALTER TABLE race_results_away RENAME TO race_results");
+    }
+  });
+});
+
 // --- POST /api/me/username --------------------------------------------------
 
 describe("POST /api/me/username", () => {
