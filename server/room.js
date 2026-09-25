@@ -485,6 +485,9 @@ export class RaceRoom extends Server {
           type: 'race-start',
           sequence: this.state.problemSequence,
           raceStartedAt: now,
+          // The room's clock as this left it, which the client reads race
+          // time against instead of its own (remote-runner.js).
+          serverNow: Date.now(),
         }));
       }
       mutated = true;
@@ -1129,8 +1132,10 @@ export class RaceRoom extends Server {
     // Strip server-only Player fields (attempts/streak counters, identity), the
     // captcha table (seeds, answers, held result rows) and the unjoined flag
     // (a lifecycle detail no client acts on) before broadcasting.
+    // `serverNow` is the room's clock at send, for a client reading race time
+    // off `raceStartedAt` (remote-runner.js).
     const { captchaChallenges, unjoined, ...rest } = this.state;
-    return { ...rest, players: this.state.players.map(publicPlayer) };
+    return { ...rest, players: this.state.players.map(publicPlayer), serverNow: Date.now() };
   }
 
   broadcastState() {

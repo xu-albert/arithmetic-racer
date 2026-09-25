@@ -59,6 +59,28 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   let raceStartedAtMs = initialState.raceStartedAt ?? null;
   let lastCountdownN = null;
 
+  // How far the room's clock is ahead of this browser's. Every race time on
+  // the wire — `raceStartedAt`, the bot timelines, the finish the room stamps
+  // — is on the room's clock, so a device whose own clock is a minute fast
+  // would otherwise read the bot timelines a minute ahead and see every bot
+  // finish at once. The room stamps `serverNow` on each message the runner
+  // takes race time from. A stamp left the server a network hop before it
+  // arrived, so each sample undershoots by that hop: the largest is the best
+  // estimate, and one late delivery cannot drag the bots backwards.
+  let clockOffsetMs = null;
+  function observeServerClock(serverNow) {
+    if (!Number.isFinite(serverNow)) return;
+    const sample = serverNow - Date.now();
+    if (clockOffsetMs == null || sample > clockOffsetMs) clockOffsetMs = sample;
+  }
+  observeServerClock(initialState.serverNow);
+
+  // Time since the race started, on the room's clock as best this browser
+  // can tell. Callers check `raceStartedAtMs` first.
+  function raceElapsedMs() {
+    return Date.now() + (clockOffsetMs ?? 0) - raceStartedAtMs;
+  }
+
   // Bot timeline state (public mode only)
   let botTimelines = null;
   let botRafId = null;
@@ -92,7 +114,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
 
   function tickBots() {
     if (!botTimelines || stopped) return;
-    for (const bot of catchUpBots(Date.now() - raceStartedAtMs)) {
+    for (const bot of catchUpBots(raceElapsedMs())) {
       emit('advance', { laneId: bot.id, score: bot.score, finishMs: bot.finishMs });
     }
     if (botStillRunning() && !stopped) {
@@ -135,7 +157,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   function deliverStart() {
     if (startDelivered) return;
     startDelivered = true;
-    if (raceStartedAtMs != null) catchUpBots(Date.now() - raceStartedAtMs);
+    if (raceStartedAtMs != null) catchUpBots(raceElapsedMs());
     const me = racers.find((r) => r.id === PLAYER_ALIAS);
     if (!me?.dropped) emit('start', { problem: currentProblemFor(PLAYER_ALIAS) });
     for (const r of racers) {
@@ -195,6 +217,31 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     return changed;
   }
 
+  // The room's own final rows for the bots, off a `finished` snapshot. The
+  // room strips bots from `state.players` as it ends a Quick Match, so these
+  // ride on `lastRace` instead; they are what the `finish` broadcast ranked,
+  // and they replace whatever the local ticker made of the timelines while
+  // this socket was away — a bot it carried over the line after the race had
+  // already ended included. Applied verbatim, as the `finish` path does.
+  function adoptFinalBotRows(rows) {
+    const changed = [];
+    for (const row of rows ?? []) {
+      const bot = findRacer(row.id);
+      if (!bot?.isBot) continue;
+      const before = { score: bot.score, finishMs: bot.finishMs, dropped: bot.dropped };
+      bot.score = row.score ?? 0;
+      bot.finishMs = row.finishMs ?? null;
+      bot.dropped = !!row.dropped;
+      bot.dnf = !!row.dnf;
+      if (
+        bot.score !== before.score
+        || bot.finishMs !== before.finishMs
+        || bot.dropped !== before.dropped
+      ) changed.push(bot);
+    }
+    return changed;
+  }
+
   function announce(changed) {
     for (const r of changed) {
       emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
@@ -212,13 +259,11 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // dnf rather than a row that keeps crossing it over the results screen.
   //
   // On the `finish` path that loop is a no-op — the payload has already said
-  // so. On the snapshot path it is only a partial match for what the room
-  // recorded: a bot the local ticker carried over the line while the socket was
-  // down keeps its client-side finish and still prints as a finisher, because a
-  // `finished` snapshot carries no bot rows and no race-end offset, so nothing
-  // here can contradict it. The local player's own place is unaffected either
-  // way — such a crossing is always past the race end, hence past every human
-  // finish.
+  // so — and on the snapshot path it is too, whenever the snapshot carries the
+  // room's final bot rows (see adoptFinalBotRows). It still matters against a
+  // room that predates those rows: there a bot the local ticker carried over
+  // the line while the socket was down keeps its client-side finish, because
+  // nothing else here can contradict it.
   function settleRace() {
     if (raceSettled) return;
     raceSettled = true;
@@ -252,7 +297,11 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // snapshot is itself what starts the race, `deliverStart` replays the
         // whole world below and announcing again would double every event.
         const wasMounted = startDelivered;
+        observeServerClock(msg.state.serverNow);
         const changed = reconcilePlayers(msg.state.players, msg.state.state);
+        if (msg.state.state === 'finished' && !raceSettled) {
+          changed.push(...adoptFinalBotRows(msg.state.lastRace?.botRows));
+        }
         if (msg.state.problemSequence?.length) sequence = msg.state.problemSequence;
         // Replay countdown if we joined mid-countdown and haven't seen a countdown event yet.
         if (msg.state.state === 'countdown' && msg.state.countdownN != null && lastCountdownN == null) {
@@ -285,6 +334,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         break;
       }
       case 'race-start': {
+        observeServerClock(msg.serverNow);
         sequence = msg.sequence;
         raceStartedAtMs = msg.raceStartedAt;
         beginRace();
@@ -293,6 +343,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       case 'bot-timelines': {
         // Public-mode only: server sends this right after race-start with precomputed timelines.
         botTimelines = msg.botTimelines;
+        observeServerClock(msg.serverNow);
         if (msg.raceStartedAt) raceStartedAtMs = msg.raceStartedAt;
         if (botRafId) cancelAnimationFrame(botRafId);
         botRafId = requestAnimationFrame(tickBots);
@@ -305,9 +356,10 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // optimistically, and suppressed as such. Two things still come back
         // from the server: a score it is ahead on (a dropped optimistic
         // frame), and `finishMs` — which is the only finish time here measured
-        // on the room's clock. The optimistic one is `Date.now()` minus a
-        // *server* timestamp, so it carries this browser's clock skew, and it
-        // is ranked against opponents' times the room stamped itself.
+        // on the room's clock. The optimistic one is only this browser's
+        // estimate of that clock (see observeServerClock), a network hop out
+        // at best, and it is ranked against opponents' times the room stamped
+        // itself.
         if (r.id === PLAYER_ALIAS) {
           const ahead = msg.score > r.score;
           const restamped = msg.finishMs != null && msg.finishMs !== r.finishMs;
@@ -366,7 +418,10 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
 
   return {
     racers,
-    sequence,
+    // A getter, not a copy: a snapshot or `race-start` replaces the sequence
+    // wholesale, and a value captured here would keep serving the one this
+    // runner was built with.
+    get sequence() { return sequence; },
     raceLength,
     getRankings,
     on(handler) {
@@ -391,10 +446,10 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       if (!problem) return { correct: true };
       if (validateAnswer(problem, raw)) {
         me.score += 1;
-        // Provisional, and on this browser's clock: the room restamps it on
-        // its own the moment its `advance` echoes back.
+        // Provisional, and only an estimate of the room's clock: the room
+        // restamps it on its own the moment its `advance` echoes back.
         if (me.score >= raceLength && me.finishMs == null && raceStartedAtMs != null) {
-          me.finishMs = Date.now() - raceStartedAtMs;
+          me.finishMs = raceElapsedMs();
         }
         emit('advance', { laneId: me.id, score: me.score, finishMs: me.finishMs });
         const next = sequence[me.score] ?? null;

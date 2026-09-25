@@ -17,6 +17,7 @@ import { mountAuthModal } from './src/auth.js';
 import { mountProfile } from './src/profile.js';
 import { mountLeaderboard } from './src/leaderboard.js';
 import { postRaceResult } from './src/stats-api.js';
+import { soloResultPayload } from './src/solo-result.js';
 import { getOrCreateDeviceId } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
@@ -42,35 +43,18 @@ document.addEventListener('session-ready', (e) => {
 
 // ---- Race-result reporting (solo / quickplay) --------------------------
 //
-// Phase A behavior: when the local runner emits `finish`, POST the result
-// so it lands in race_results with the right user_id (or NULL for anon).
+// Phase A behavior: when the local runner emits `finish` for a race the
+// player completed, POST the result so it lands in race_results with the
+// right user_id (or NULL for anon). A quit posts nothing.
 // Room races are NOT handled here — that wiring is commit B (the room
 // Durable Object writes its own result rows).
 
 function reportRaceResult({ runner, difficulty }) {
-  const player = runner.racers.find((r) => !r.isBot);
-  if (!player) return;
-  const finished = player.score >= runner.raceLength;
-  const finishTime = finished ? player.finishMs : null;
-  const attempts = player.attempts || 0;
-  const correct = player.score;
-  const accuracy = attempts > 0 ? (correct / attempts) * 100 : 0;
-  const avgPerProblem = finishTime != null && correct > 0
-    ? Math.round(finishTime / correct)
-    : 0;
+  // Null for a quit: only finished solo races are stored (solo-result.js).
+  const payload = soloResultPayload({ runner, difficulty, deviceId: getOrCreateDeviceId() });
+  if (!payload) return;
 
-  postRaceResult({
-    device_id: getOrCreateDeviceId(),
-    difficulty,
-    finished,
-    finish_time_ms: finishTime,
-    problems_total: runner.raceLength,
-    problems_correct: correct,
-    problems_attempted: attempts,
-    avg_time_per_problem_ms: avgPerProblem,
-    accuracy_pct: accuracy,
-    longest_streak: player.longestStreak || 0,
-  })
+  postRaceResult(payload)
     .then(() => {
       // Tell the header pill to refresh without a page reload.
       document.dispatchEvent(new Event('race-finished'));

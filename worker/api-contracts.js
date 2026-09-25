@@ -15,6 +15,8 @@
  * POST /api/race-result
  * Body: RaceResultInput
  * Response: { id: string, claimed: boolean }
+ * Response (422): { error: 'unfinished_not_stored' } for `finished: false` —
+ *   only finished solo races are stored.
  *
  * @typedef {Object} RaceResultInput
  * @property {string} device_id           UUID v4 from localStorage
@@ -49,6 +51,8 @@
  * @property {Difficulty} difficulty
  * @property {number} races_played
  * @property {number} races_finished
+ * @property {number} room_races_played   multiplayer (room) races only
+ * @property {number} room_races_finished multiplayer (room) races only
  * @property {number|null} best_time_ms
  * @property {number} avg_accuracy        0..100
  * @property {number} avg_problem_time_ms

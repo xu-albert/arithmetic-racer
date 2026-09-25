@@ -80,24 +80,38 @@ describe("POST /api/race-result — happy path", () => {
     expect(row.points).toBeCloseTo(25 / 3, 6);
   });
 
-  it("accepts unfinished races (quit) with finish_time_ms NULL", async () => {
-    const res = await handleRaceResult(
-      makeRequest(makeBody({
-        finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
-        problems_correct: 0, problems_attempted: 0, accuracy_pct: 0, longest_streak: 0,
-      })),
-      env
-    );
-    expect(res.status).toBe(200);
+});
 
-    const { results } = await env.DB.prepare(
-      "SELECT finished, finish_time_ms, points FROM race_results"
-    ).all();
-    expect(results).toHaveLength(1);
-    expect(results[0].finished).toBe(0);
-    expect(results[0].finish_time_ms).toBeNull();
-    // A quit race is unscored, not scored zero.
-    expect(results[0].points).toBeNull();
+// Current clients no longer report a quit solo race at all; these are the
+// requests older ones still send.
+describe("POST /api/race-result — unfinished races are not stored", () => {
+  const quit = {
+    finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
+    problems_total: 20, problems_attempted: 7,
+    problems_correct: 6, accuracy_pct: 85.7, longest_streak: 4,
+  };
+
+  it("refuses a well-formed quit with 422 and inserts nothing", async () => {
+    const res = await handleRaceResult(makeRequest(makeBody(quit)), env);
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: "unfinished_not_stored" });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM race_results").first("n")).toBe(0);
+  });
+
+  it("still reports a malformed quit as invalid, not as refused", async () => {
+    const res = await handleRaceResult(makeRequest(makeBody({ ...quit, avg_time_per_problem_ms: 100 })), env);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_body" });
+  });
+
+  it("does not spend the device's rate budget, so its finished races still land", async () => {
+    const device_id = `device-${crypto.randomUUID()}`;
+    for (let i = 0; i < 8; i++) {
+      const res = await handleRaceResult(makeRequest(makeBody({ ...quit, device_id })), env);
+      expect(res.status).toBe(422);
+    }
+    const res = await handleRaceResult(makeRequest(makeBody({ device_id })), env);
+    expect(res.status).toBe(200);
   });
 });
 
@@ -310,6 +324,16 @@ describe("POST /api/race-result — validation", () => {
         env
       );
       expect(res.status).toBe(200);
+
+      // Only finished races are stored, so total and correct are always equal
+      // and a swap between those two bindings could not change a row; this is
+      // where one involving attempted is caught.
+      const row = await env.DB.prepare(
+        "SELECT problems_total, problems_correct, problems_attempted FROM race_results"
+      ).first();
+      expect(row.problems_total).toBe(10);
+      expect(row.problems_correct).toBe(10);
+      expect(row.problems_attempted).toBe(11);
     });
 
     it("rejects problems_correct greater than problems_attempted", async () => {
@@ -368,34 +392,13 @@ describe("POST /api/race-result — validation", () => {
       // absorb that or honest results get thrown away.
       const res = await handleRaceResult(
         makeRequest(makeBody({
-          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
-          problems_total: 3, problems_attempted: 3,
+          finish_time_ms: 6000, avg_time_per_problem_ms: 3000,
+          problems_total: 2, problems_attempted: 3,
           problems_correct: 2, accuracy_pct: 66.7, longest_streak: 2,
         })),
         env
       );
       expect(res.status).toBe(200);
-    });
-
-    it("accepts a quit mid-race where attempted is below total", async () => {
-      const res = await handleRaceResult(
-        makeRequest(makeBody({
-          finished: false, finish_time_ms: null, avg_time_per_problem_ms: 0,
-          problems_total: 20, problems_attempted: 7,
-          problems_correct: 6, accuracy_pct: 85.7, longest_streak: 4,
-        })),
-        env
-      );
-      expect(res.status).toBe(200);
-
-      // The only accepted shape with three distinct counts, so it is the only
-      // place a swapped INSERT binding between them can be caught.
-      const row = await env.DB.prepare(
-        "SELECT problems_total, problems_correct, problems_attempted FROM race_results"
-      ).first();
-      expect(row.problems_total).toBe(20);
-      expect(row.problems_correct).toBe(6);
-      expect(row.problems_attempted).toBe(7);
     });
   });
 

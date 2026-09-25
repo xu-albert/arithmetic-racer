@@ -106,14 +106,18 @@ function computeOverallAccuracy(aggregates) {
   return weighted / totalRaces;
 }
 
-/** Finish rate as 0..100 percentage. Null if no races. */
+/**
+ * Multiplayer finish rate as 0..100 percentage. Null if no multiplayer races.
+ * Solo races are left out: a quit solo race is never stored, so counting solo
+ * finishes would only pad the rate.
+ */
 function computeFinishRate(aggregates) {
   if (!Array.isArray(aggregates)) return null;
   let played = 0;
   let finished = 0;
   for (const a of aggregates) {
-    played += a?.races_played ?? 0;
-    finished += a?.races_finished ?? 0;
+    played += a?.room_races_played ?? 0;
+    finished += a?.room_races_finished ?? 0;
   }
   if (played === 0) return null;
   return (finished / played) * 100;
@@ -247,7 +251,7 @@ const PROFILE_HTML = `
       <div class="profile__tile"><div class="profile__tile-num" id="t-best-hard">—</div><div class="profile__tile-lbl">Best Hard</div></div>
       <div class="profile__tile"><div class="profile__tile-num" id="t-total">0</div><div class="profile__tile-lbl">Total Races</div></div>
       <div class="profile__tile"><div class="profile__tile-num" id="t-acc">—</div><div class="profile__tile-lbl">Overall Accuracy</div></div>
-      <div class="profile__tile"><div class="profile__tile-num" id="t-finish">—</div><div class="profile__tile-lbl">Finish Rate</div></div>
+      <div class="profile__tile"><div class="profile__tile-num" id="t-finish">—</div><div class="profile__tile-lbl">Multiplayer Finish Rate</div></div>
     </section>
 
     <section class="profile__info-row">

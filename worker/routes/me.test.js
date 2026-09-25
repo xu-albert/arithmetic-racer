@@ -55,6 +55,7 @@ async function seedRace(env, overrides = {}) {
     accuracy_pct: 90,
     longest_streak: 7,
     played_at: Date.now(),
+    room_id: null,
     ...overrides,
   };
   // Seed `points` the way the real writer does (worker/race-result-store.js),
@@ -71,8 +72,9 @@ async function seedRace(env, overrides = {}) {
     `INSERT INTO race_results (
        id, user_id, device_id, difficulty, finished, finish_time_ms,
        problems_total, problems_correct, problems_attempted,
-       avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at, points
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+       avg_time_per_problem_ms, accuracy_pct, longest_streak, played_at, points,
+       room_id
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   )
     .bind(
       r.id,
@@ -88,7 +90,8 @@ async function seedRace(env, overrides = {}) {
       r.accuracy_pct,
       r.longest_streak,
       r.played_at,
-      r.points ?? null
+      r.points ?? null,
+      r.room_id
     )
     .run();
   return r;
@@ -126,6 +129,8 @@ describe("GET /api/me", () => {
     for (const a of body.aggregates) {
       expect(a.races_played).toBe(0);
       expect(a.races_finished).toBe(0);
+      expect(a.room_races_played).toBe(0);
+      expect(a.room_races_finished).toBe(0);
       expect(a.best_time_ms).toBeNull();
       expect(a.avg_accuracy).toBe(0);
       expect(a.avg_problem_time_ms).toBe(0);
@@ -239,6 +244,37 @@ describe("GET /api/me", () => {
     for (const r of body.recent) {
       expect(r.finish_time_ms).not.toBe(1);
     }
+  });
+
+  it("counts multiplayer races on their own, which is all the finish rate reads", async () => {
+    // A solo row is only ever a finish now — the route refuses a quit — so a
+    // finish rate is only meaningful over room rows, and those are counted
+    // apart from the solo ones beside them.
+    await seedUser(env, { id: "u1", email: "u1@example.com", username: "Alice" });
+    _setTestUserId("u1");
+
+    const quit = { finished: 0, finish_time_ms: null, avg_time_per_problem_ms: 0 };
+    await seedRace(env, { user_id: "u1", difficulty: "easy", room_id: "a-b-c" });
+    await seedRace(env, { user_id: "u1", difficulty: "easy", room_id: "d-e-f", ...quit });
+    await seedRace(env, { user_id: "u1", difficulty: "easy", room_id: "g-h-i", ...quit });
+    await seedRace(env, { user_id: "u1", difficulty: "easy" });
+    await seedRace(env, { user_id: "u1", difficulty: "easy" });
+    await seedRace(env, { user_id: "u1", difficulty: "hard" });
+    // Another racer's room race stays theirs.
+    await seedUser(env, { id: "u2", email: "u2@example.com", username: "Bob" });
+    await seedRace(env, { user_id: "u2", difficulty: "hard", room_id: "a-b-c", ...quit });
+
+    const body = await (await handleGetMe(makeRequest("http://x/api/me"), env)).json();
+    const byDiff = Object.fromEntries(body.aggregates.map((a) => [a.difficulty, a]));
+
+    expect(byDiff.easy.races_played).toBe(5);
+    expect(byDiff.easy.races_finished).toBe(3);
+    expect(byDiff.easy.room_races_played).toBe(3);
+    expect(byDiff.easy.room_races_finished).toBe(1);
+    expect(byDiff.hard.races_played).toBe(1);
+    expect(byDiff.hard.room_races_played).toBe(0);
+    expect(byDiff.hard.room_races_finished).toBe(0);
+    expect(byDiff.medium.room_races_played).toBe(0);
   });
 
   it("limits recent to 10 entries when the user has more than 10 races", async () => {

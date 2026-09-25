@@ -1,6 +1,6 @@
 // POST /api/race-result handler.
 //
-// Persists a single race result row to D1. The same endpoint serves both
+// Persists a single finished race result row to D1. The same endpoint serves both
 // anonymous clients (no session cookie) and logged-in users; the handler
 // decides whether to set user_id by reading the session.
 //
@@ -119,6 +119,18 @@ export async function handleRaceResult(request, env) {
 
   if (!isValidBody(body)) {
     return Response.json({ error: "invalid_body" }, { status: 400 });
+  }
+
+  // Only a finished solo race is stored: current clients stop sending quits
+  // (public/src/solo-result.js) and older ones are refused here. The profile's
+  // race count, accuracy and history therefore cover finished solo races only,
+  // and its finish rate reads multiplayer rows alone (worker/routes/me.js).
+  // Checked after validation, so a malformed quit still reads as invalid, and
+  // before the device limit, so a refused quit does not spend its budget.
+  // Rows already stored stay as they are, and room races, which a Durable
+  // Object writes directly, are untouched.
+  if (!body.finished) {
+    return Response.json({ error: "unfinished_not_stored" }, { status: 422 });
   }
 
   // Device is the primary key for limiting — see wrangler.jsonc for why IP

@@ -486,6 +486,93 @@ describe('state snapshots mid-race', () => {
   });
 });
 
+describe('the exposed sequence', () => {
+  test('runner.sequence is the one the room last sent, not the one the runner was built with', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    assert.deepEqual(runner.sequence, []);
+    startRace(client);
+    assert.equal(runner.sequence, SEQ);
+    const other = [{ problem: '5 + 5', answer: 10 }, { problem: '6 + 6', answer: 12 }, { problem: '7 + 7', answer: 14 }];
+    client.receive({ type: 'state', state: lobbyState({ state: 'racing', problemSequence: other }) });
+    assert.equal(runner.sequence, other);
+    assert.deepEqual(runner.currentProblemFor('player'), runner.sequence[0]);
+  });
+});
+
+describe("race time is read on the room's clock", () => {
+  // Every race time on the wire is the room's. These devices' clocks are a
+  // minute off from it, which read naively made every bot finish at once (or
+  // sit at the line for a minute) and put the provisional finish a minute out.
+  const botState = (extra = {}) =>
+    lobbyState({
+      players: [player('p-1'), player(ME), player('bot-1', { isBot: true, tier: 'fast' })],
+      ...extra,
+    });
+  const TIMELINE = [[1000, 2000, 3000]];
+
+  test('a device clock a minute fast still moves the bots on the timeline, not all at once', () => {
+    mock.timers.enable({ apis: ['Date'], now: 70_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: botState(), youAre: ME });
+    client.receive({ type: 'race-start', sequence: SEQ, raceStartedAt: 10_000, serverNow: 10_000 });
+    const events = record(runner);
+    client.receive({ type: 'bot-timelines', botTimelines: TIMELINE, raceStartedAt: 10_000, serverNow: 10_000 });
+
+    flushFrame();
+    assert.deepEqual(events, [], 'nothing has happened a moment into the race');
+
+    mock.timers.setTime(72_100);
+    flushFrame();
+    assert.deepEqual(events, [{ event: 'advance', data: { laneId: 'bot-1', score: 2, finishMs: null } }]);
+    runner.stop();
+  });
+
+  test('a device clock a minute slow catches a reconnecting client up from the snapshot it was built from', () => {
+    mock.timers.enable({ apis: ['Date'], now: 1_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: botState({
+        state: 'racing', problemSequence: SEQ, raceStartedAt: 60_000, serverNow: 62_100, botTimelines: TIMELINE,
+      }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    assert.deepEqual(events, [
+      { event: 'start', data: { problem: SEQ[0] } },
+      { event: 'advance', data: { laneId: 'bot-1', score: 2, finishMs: null } },
+    ]);
+    runner.stop();
+  });
+
+  test('a stamp that arrives late does not drag the estimate, or the bots, backwards', () => {
+    mock.timers.enable({ apis: ['Date'], now: 70_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: botState(), youAre: ME });
+    client.receive({ type: 'race-start', sequence: SEQ, raceStartedAt: 10_000, serverNow: 10_000 });
+    client.receive({ type: 'bot-timelines', botTimelines: TIMELINE, raceStartedAt: 10_000, serverNow: 10_000 });
+    // Stamped at room time 11_000 but delivered 500ms late.
+    mock.timers.setTime(71_500);
+    client.receive({ type: 'state', state: botState({ state: 'racing', problemSequence: SEQ, raceStartedAt: 10_000, serverNow: 11_000 }) });
+
+    mock.timers.setTime(72_100);
+    flushFrame();
+    assert.equal(runner.racers.find((r) => r.id === 'bot-1').score, 2);
+    runner.stop();
+  });
+
+  test("the provisional finish is timed on the room's clock", () => {
+    mock.timers.enable({ apis: ['Date'], now: 70_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    client.receive({ type: 'race-start', sequence: SEQ, raceStartedAt: 10_000, serverNow: 10_000 });
+    mock.timers.setTime(74_250);
+    for (const p of SEQ) runner.submitAnswer(String(p.answer));
+    assert.equal(runner.racers.find((r) => r.id === 'player').finishMs, 4_250);
+  });
+});
+
 describe('bot timelines (Quick Match)', () => {
   const botState = (extra = {}) =>
     lobbyState({
@@ -657,6 +744,47 @@ describe('bot timelines (Quick Match)', () => {
     assert.equal(bot.score, 2);
     assert.equal(bot.finishMs, null);
     assert.equal(events.at(-1), settled, 'nothing moves once the results are up');
+    runner.stop();
+  });
+
+  test("a finished snapshot takes the bots' final rows from the room over the local replay", () => {
+    // The room ended the race at 2.1s with the bot two problems in and a dnf,
+    // but this socket was away for `finish`, and meanwhile the local ticker
+    // carried the bot over the line at 3s. The room's rows ride on `lastRace`
+    // because the bots have left `state.players`, and they are the podium.
+    mock.timers.enable({ apis: ['Date'], now: 10_000 });
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: botState({ state: 'racing', problemSequence: SEQ, raceStartedAt: 10_000, botTimelines: TIMELINE }),
+      youAre: ME,
+    });
+    const events = record(runner);
+    mock.timers.setTime(13_500);
+    flushFrame();
+    const bot = runner.racers.find((r) => r.id === 'bot-1');
+    assert.equal(bot.finishMs, 3_000, 'the local replay has the bot home');
+
+    client.receive({
+      type: 'state',
+      state: botState({
+        state: 'finished',
+        players: [player('p-1'), player(ME, { score: SEQ.length, finishMs: 2_100 })],
+        lastRace: {
+          raceLength: SEQ.length,
+          botRows: [player('bot-1', { isBot: true, tier: 'fast', score: 2, finishMs: null, dnf: true })],
+        },
+      }),
+    });
+
+    assert.deepEqual(
+      { score: bot.score, finishMs: bot.finishMs, dnf: bot.dnf },
+      { score: 2, finishMs: null, dnf: true },
+    );
+    assert.deepEqual(events.at(-2), { event: 'advance', data: { laneId: 'bot-1', score: 2, finishMs: null } });
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['player', 'p-1', 'bot-1']);
     runner.stop();
   });
 
