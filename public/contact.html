@@ -146,7 +146,7 @@
           }),
         });
         if (res.status === 429) {
-          show("error", "That's a few messages in a short time — please try again later.");
+          show("error", "You just sent a message — please wait a minute and try again.");
           return;
         }
         if (!res.ok) {
