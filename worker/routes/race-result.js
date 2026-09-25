@@ -12,7 +12,7 @@
 // Contract: see worker/api-contracts.js (frozen).
 
 import { readUserId } from "../session.js";
-import { insertRaceResult } from "../race-result-store.js";
+import { insertRaceResult, MAX_DEVICE_ID_LENGTH } from "../race-result-store.js";
 import { allowRequest } from "../rate-limit.js";
 import { logError, KINDS } from "../logger.js";
 
@@ -31,7 +31,6 @@ function rateLimited() {
 // bounding storage inputs. Attempts include retries, not just solved problems.
 const MAX_PROBLEMS = 50;
 const MAX_ATTEMPTS = 10_000;
-const MAX_DEVICE_ID_LENGTH = 128;
 // Generous hard ceiling for an abandoned tab; the existing 30-minute soft
 // plausibility threshold still flags long races below this boundary.
 const MAX_RESULT_TIME_MS = 24 * 60 * 60_000;

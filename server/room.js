@@ -3,7 +3,7 @@ import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
 import { isConfigurableState } from '../public/src/room-config-rules.js';
 import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE } from '../public/src/room-expiry.js';
-import { insertRaceResult } from '../worker/race-result-store.js';
+import { insertRaceResult, MAX_DEVICE_ID_LENGTH } from '../worker/race-result-store.js';
 import { CAPTCHA_PROBLEM_COUNT } from '../worker/plausibility.js';
 import { containsProfanity } from '../worker/username-validator.js';
 import { logError, KINDS } from '../worker/logger.js';
@@ -221,7 +221,7 @@ export function resetForRace(state) {
 }
 
 function isValidDeviceId(s) {
-  return typeof s === 'string' && s.length > 0 && s.length <= 128;
+  return typeof s === 'string' && s.length > 0 && s.length <= MAX_DEVICE_ID_LENGTH;
 }
 
 export function isValidHandle(s) {

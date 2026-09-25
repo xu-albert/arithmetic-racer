@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env } from "cloudflare:test";
 import { getAuth, runClaim, CLAIM_WINDOW_MS } from "./auth.js";
+import { MAX_DEVICE_ID_LENGTH } from "./race-result-store.js";
 import { handlePostUsername } from "./routes/me.js";
 import { _setTestUserId } from "./session.js";
 
@@ -96,7 +97,8 @@ describe("runClaim window", () => {
 
   it("is a no-op, and logs nothing, without a usable device id", async () => {
     await seedUser("u1");
-    for (const deviceId of [undefined, "", 42, { id: "dev-1" }]) {
+    const tooLong = "d".repeat(MAX_DEVICE_ID_LENGTH + 1);
+    for (const deviceId of [undefined, "", 42, { id: "dev-1" }, tooLong]) {
       expect(await runClaim(env, "u1", deviceId, { source: "signup", now: NOW })).toEqual({ claimed: 0 });
     }
     expect(await claimRows()).toEqual([]);
@@ -125,6 +127,17 @@ describe("runClaim log", () => {
       created_at: NOW,
     });
     expect(typeof rows[0].id).toBe("string");
+  });
+
+  it("logs a device id at the stored length limit", async () => {
+    await seedUser("u1");
+    const longest = "d".repeat(MAX_DEVICE_ID_LENGTH);
+
+    await runClaim(env, "u1", longest, { source: "signup", now: NOW });
+
+    const rows = await claimRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].device_id).toBe(longest);
   });
 
   it("logs a claim that matched nothing", async () => {

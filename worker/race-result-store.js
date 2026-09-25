@@ -9,6 +9,8 @@ import { db } from "./db.js";
 import { assessPlausibility } from "./plausibility.js";
 import { computePoints } from "./race-score.js";
 
+export const MAX_DEVICE_ID_LENGTH = 128;
+
 export async function insertRaceResult(env, payload, plausibilityOverride) {
   const id = crypto.randomUUID();
   const playedAt = Date.now();
