@@ -45,7 +45,9 @@
 //         second argument.
 //    We use `databaseHooks.user.create.before` for username validation
 //    (so we reject before the DB insert) and `databaseHooks.user.create.after`
-//    for claim + welcome email.
+//    for claim + welcome email. `databaseHooks.account.create.before` refuses
+//    an OAuth link into an unverified user, and the single `hooks.after` names
+//    that refusal on the error redirect (see `linksIntoUnverifiedUser`).
 //
 // 3. PASSWORD-RESET ROUTES (verified against
 //    node_modules/better-auth/dist/api/routes/password.mjs in v1.6.9):
