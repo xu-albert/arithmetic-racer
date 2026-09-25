@@ -21,9 +21,11 @@ const UNCONFIRMED = 'Verification couldn\'t be confirmed for this race.';
 /** What the player is told about a verdict the server sent. */
 export function verdictMessage({ verified, reason }) {
   if (verified) return 'Verified — your race counts.';
-  return reason === 'captcha_timeout'
-    ? 'Verification timed out — this race won\'t appear on leaderboards.'
-    : 'Verification failed — this race won\'t appear on leaderboards.';
+  if (reason === 'captcha_timeout') return 'Verification timed out — this race won\'t appear on leaderboards.';
+  if (reason === 'captcha_superseded') {
+    return 'A new race started before you finished verifying — the last race won\'t appear on leaderboards.';
+  }
+  return 'Verification failed — this race won\'t appear on leaderboards.';
 }
 
 /**

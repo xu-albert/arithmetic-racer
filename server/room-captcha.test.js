@@ -408,7 +408,7 @@ describe("private room — one row per racer per race, whenever the challenge se
 });
 
 describe("private room — a superseded challenge", () => {
-  it("records captcha_superseded (not captcha_timeout) and carries answered progress into the reissue", async () => {
+  it("records captcha_superseded (not captcha_timeout) and reissues three fresh problems on a full budget", async () => {
     const fast = makeConn("fast");
     const slow = makeConn("slow");
     await withRoom([fast, slow], async (room) => {
@@ -450,22 +450,25 @@ describe("private room — a superseded challenge", () => {
       expect(fast.sent.filter((m) => m.type === "captcha-result"))
         .toContainEqual({ type: "captcha-result", verified: false, reason: "captcha_superseded" });
 
-      // The answered count carries: two problems still owed, and two
-      // problems' worth of budget rather than a fresh full one.
+      // Progress on the superseded challenge does not carry: the reissue is
+      // three fresh problems with the full budget, like any other challenge.
       const second = challengeFor(room, fast);
       expect(second).toBeTruthy();
-      expect(second.index).toBe(1);
+      expect(second.index).toBe(0);
       expect(second.count).toBe(CAPTCHA_PROBLEM_COUNT);
       const budgetLeft = second.deadline - Date.now();
-      expect(budgetLeft).toBeGreaterThan((CAPTCHA_PROBLEM_COUNT - 2) * CAPTCHA_MS_PER_PROBLEM);
-      expect(budgetLeft).toBeLessThanOrEqual((CAPTCHA_PROBLEM_COUNT - 1) * CAPTCHA_MS_PER_PROBLEM);
-      expect(fast.lastOf("captcha").problems).toHaveLength(CAPTCHA_PROBLEM_COUNT - 1);
+      expect(budgetLeft).toBeGreaterThan((CAPTCHA_PROBLEM_COUNT - 1) * CAPTCHA_MS_PER_PROBLEM);
+      expect(budgetLeft).toBeLessThanOrEqual(CAPTCHA_PROBLEM_COUNT * CAPTCHA_MS_PER_PROBLEM);
+      expect(fast.lastOf("captcha").problems).toHaveLength(CAPTCHA_PROBLEM_COUNT);
 
-      // Answering just the remaining two passes the reissued challenge, and
-      // the second race's row records clean.
+      // All three must be answered to pass, and the second race's row then
+      // records clean.
       const problems = problemsOf(room, second);
-      await room.handleCaptchaAnswer(fast, { type: "captcha-answer", value: String(problems[1].answer) });
-      await room.handleCaptchaAnswer(fast, { type: "captcha-answer", value: String(problems[2].answer) });
+      await answerCaptcha(room, fast, second, CAPTCHA_PROBLEM_COUNT - 1);
+      expect(challengeFor(room, fast)).toBeTruthy();
+      await room.handleCaptchaAnswer(fast, {
+        type: "captcha-answer", value: String(problems[CAPTCHA_PROBLEM_COUNT - 1].answer),
+      });
       expect(fast.lastOf("captcha-result")).toMatchObject({ verified: true });
       expect(challengeFor(room, fast)).toBeNull();
 

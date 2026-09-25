@@ -9,7 +9,8 @@
 // removePlayer, and at the latest by finishRace: a finished room whose only
 // creator is gone can never rematch (NOT_CREATOR), the dead-end the ten-seat
 // re-review found on main. Succession is final: a reconnecting ex-host returns
-// as an ordinary player.
+// as an ordinary player — unless nobody present held the flag, in which case it
+// was parked on a remaining seat and the first seat back takes it.
 //
 // Harness mirrors server/room-race-deadline.test.js: fake connections, handlers
 // called directly, real D1 via cloudflare:test.
@@ -313,6 +314,61 @@ describe("creator succession — the next-longest-present player inherits the ho
       await room.handleRematch(fresh);
       expect(fresh.errors()).toEqual([]);
       expect(room.state.state).toBe("lobby");
+    });
+  });
+
+  describe("the successor leaving a finished room with only a departed seat behind", () => {
+    async function hostDepartsThenSuccessorLeaves(room, host, guest) {
+      const hostRacer = await join(room, host, "Host");
+      await join(room, guest, "Guest");
+      await room.handleStartRace(host);
+      await runCountdown(room);
+      await expireReconnectGrace(room, host);
+      expect(creators(room).map((p) => p.handle)).toEqual(["Guest"]);
+      await raceToFinish(room, [guest]);
+      expect(room.state.state).toBe("finished");
+
+      await room.handleQuit(guest);
+      expect(room.state.players.map((p) => p.handle)).toEqual(["Host"]);
+      // Nobody present to receive it, but the flag must not leave the room.
+      expect(creators(room).map((p) => p.handle)).toEqual(["Host"]);
+      return hostRacer;
+    }
+
+    it("hands the room back to the departed host when they reconnect", async () => {
+      const host = makeConn("host");
+      const guest = makeConn("guest");
+      const conns = [host, guest];
+      await withRoom(conns, async (room) => {
+        const hostRacer = await hostDepartsThenSuccessorLeaves(room, host, guest);
+
+        const hostBack = makeConn("host-back");
+        conns.push(hostBack);
+        await room.handleHello(hostBack, { type: "hello", playerId: hostRacer, handle: "Host", deviceId: "dev-Host" });
+        expect(creators(room).map((p) => p.handle)).toEqual(["Host"]);
+
+        await room.handleRematch(hostBack);
+        expect(hostBack.errors()).toEqual([]);
+        expect(room.state.state).toBe("lobby");
+      });
+    });
+
+    it("hands the room to a fresh join", async () => {
+      const host = makeConn("host");
+      const guest = makeConn("guest");
+      const conns = [host, guest];
+      await withRoom(conns, async (room) => {
+        await hostDepartsThenSuccessorLeaves(room, host, guest);
+
+        const fresh = makeConn("fresh");
+        conns.push(fresh);
+        await join(room, fresh, "Fresh");
+        expect(creators(room).map((p) => p.handle)).toEqual(["Fresh"]);
+
+        await room.handleRematch(fresh);
+        expect(fresh.errors()).toEqual([]);
+        expect(room.state.state).toBe("lobby");
+      });
     });
   });
 });
