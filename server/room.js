@@ -486,6 +486,10 @@ export class RaceRoom extends Server {
           sequence: this.state.problemSequence,
           raceStartedAt: now,
         }));
+        // After the race-start frame so a subclass's own start-of-race
+        // messages keep their wire order, and before the persist below so
+        // whatever it derives lands in the same write as the transition.
+        this.onRaceStarted();
       }
       mutated = true;
     }
@@ -570,6 +574,11 @@ export class RaceRoom extends Server {
       // departure so the race end could still write its row; it is attached
       // again, so it is no longer something to prune there.
       existing.departed = false;
+      // ...and it is present again, which is exactly what succession keys on:
+      // a reconnecting host keeps the flag (cleared departed reads as present
+      // here), while a room whose host departed for good hands it to whoever
+      // came back. Runs after departed clears so the two order themselves.
+      this.ensureLiveCreator();
       // Refresh identity from this connection (cookie may have changed).
       if (isValidDeviceId(msg.deviceId)) existing.deviceId = msg.deviceId;
       existing.userId = currentConnState.userId ?? null;
@@ -645,6 +654,11 @@ export class RaceRoom extends Server {
     // Somebody is in the room now, so it graduates off the reservation's short
     // fuse onto the ordinary idle clock, for good.
     delete this.state.unjoined;
+
+    // A finished room can hold a departed host nobody succeeded (everyone else
+    // was gone at finishRace). A fresh join is the first live seat since — it
+    // must inherit the flag or the room still cannot rematch.
+    this.ensureLiveCreator();
 
     connection.setState({ ...currentConnState, playerId: player.id, racerId });
     connection.send(JSON.stringify({ type: 'hello-ack', playerId: player.id, handle }));
@@ -861,6 +875,11 @@ export class RaceRoom extends Server {
     // next one. Taken before the `finish` broadcast, so nothing a client sends
     // in reply to it can reach the room first.
     this.state.lastRace = { difficulty: this.state.difficulty, raceLength: this.state.raceLength };
+    // A host who departed mid-race still holds isCreator on their kept seat.
+    // The finished room is exactly where the host's one remaining power
+    // (rematch) matters, so succession cannot wait past this point — and the
+    // finish broadcast below carries the new flag to every client.
+    this.ensureLiveCreator();
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
@@ -891,21 +910,31 @@ export class RaceRoom extends Server {
 
     // Racing again without answering abandons the previous challenge, and this
     // key is about to be overwritten, so settle it rather than lose the row it
-    // holds. Fire-and-forget: the finish path must not suspend on a database
-    // write, and resolveCaptchaChallenge takes the challenge out of state
-    // before it does anything asynchronous.
-    if (this.state.captchaChallenges?.[player.id]) {
-      this.resolveCaptchaChallenge(player.id, 'timeout')
+    // holds. The outcome is 'superseded', not 'timeout': the old budget was
+    // still live and the racer may have been mid-answer, and the stored reason
+    // has to say what actually happened or captcha_timeout rows stop
+    // distinguishing genuine abandonments. Fire-and-forget: the finish path
+    // must not suspend on a database write, and resolveCaptchaChallenge takes
+    // the challenge out of state before it does anything asynchronous.
+    const superseded = this.state.captchaChallenges?.[player.id];
+    if (superseded) {
+      this.resolveCaptchaChallenge(player.id, 'superseded')
         .catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: player.id, phase: 'captcha_reissue' }));
     }
 
+    // Problems already answered correctly carry into the new challenge: a host
+    // rematching into someone's verification window must not make a racer who
+    // was cooperating start over. The deadline covers only the problems still
+    // owed. A pending challenge always has index < count (reaching count is a
+    // pass, which deletes it), so at least one problem remains.
+    const answered = superseded?.index ?? 0;
     const challenge = {
       playerId: player.id,
       seed: newCaptchaSeed(),
       difficulty: race.difficulty,
       count: CAPTCHA_PROBLEM_COUNT,
-      index: 0,
-      deadline: captchaDeadline(Date.now()),
+      index: answered,
+      deadline: captchaDeadline(Date.now(), CAPTCHA_PROBLEM_COUNT - answered),
       // Snapshot the result row now: the build-before-insert rule from
       // persistRaceResults applies equally to a row that inserts later — a
       // reconfigured or restarted room must not rewrite a held payload.
@@ -938,10 +967,12 @@ export class RaceRoom extends Server {
 
   /**
    * Settle a challenge. 'pass' records the held row normally (the passive
-   * plausibility bounds still apply to it); 'failed'/'timeout' records it as
-   * suspect with a captcha_* reason, which is what excludes it from
-   * leaderboards and recent-finishes. Never a ban — the player keeps the row
-   * in their own history.
+   * plausibility bounds still apply to it); every other outcome records it as
+   * suspect with a `captcha_<outcome>` reason, which is what excludes it from
+   * leaderboards and recent-finishes: 'failed' (wrong answer), 'timeout' (the
+   * racer's own deadline passed) and 'superseded' (a reissue settled it while
+   * its budget was still live — see issueCaptchaChallenge). Never a ban — the
+   * player keeps the row in their own history.
    */
   async resolveCaptchaChallenge(playerId, outcome) {
     const challenge = this.state.captchaChallenges?.[playerId];
@@ -957,7 +988,7 @@ export class RaceRoom extends Server {
         logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'captcha_pass_insert' });
       }
     } else {
-      const reason = outcome === 'timeout' ? 'captcha_timeout' : 'captcha_failed';
+      const reason = `captcha_${outcome}`;
       this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: false, reason }));
       try {
         await insertRaceResult(this.env, challenge.payload, { suspect: 1, reason });
@@ -1048,20 +1079,30 @@ export class RaceRoom extends Server {
     if (this.state.state === 'racing') {
       player.departed = true;
       this.dropRacer(player);
+      // A departed host seat keeps its result row but must not keep the host
+      // flag — a finished room whose only creator is gone can never rematch.
+      this.ensureLiveCreator(player);
       const allDone = this.isRaceComplete();
       if (allDone) await this.finishRace();
       return true;
     }
 
     // Non-racing (lobby / countdown / finished): actually remove.
-    const wasCreator = player.isCreator;
     this.state.players.splice(idx, 1);
 
-    // Promote next-joined player if creator left.
-    if (wasCreator && this.state.players.length > 0) {
-      this.state.players.sort((a, b) => a.joinedAt - b.joinedAt);
-      this.state.players[0].isCreator = true;
+    // A countdown that lost its last player has nobody to race: cancel it back
+    // to the lobby rather than let onAlarm tick a ghost race into being — one
+    // that runs for minutes, burning alarm wake-ups and showing every
+    // reconnector a live race that means nothing, until idle cleanup ends it.
+    if (this.state.state === 'countdown' && this.state.players.length === 0) {
+      this.state.state = 'lobby';
+      this.state.countdownN = null;
+      this.state.countdownAt = null;
     }
+
+    // The departed seat is already spliced, so its flag is only visible here
+    // by being handed over explicitly.
+    this.ensureLiveCreator(player);
 
     this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
 
@@ -1069,6 +1110,45 @@ export class RaceRoom extends Server {
       this.state.idleCleanupAt = Date.now() + IDLE_CLEANUP_MS;
     }
     return true;
+  }
+
+  /**
+   * Hand the host flag on when the seat holding it is no longer in the room.
+   *
+   * Start, config and rematch all gate on isCreator, so a room whose host seat
+   * is gone is a dead end — nobody can start or replay a race. The flag moves
+   * to the next-longest-present player: the earliest joinedAt among seats still
+   * in the room. "Gone" means spliced (a lobby/finished departure, already done
+   * by the caller) or marked departed (a mid-race one, where the seat is kept
+   * for its result row). A seat whose socket dropped inside its reconnect
+   * grace still counts as present — the grace exists so a blip costs nothing,
+   * and that includes the host badge; if the grace expires unclaimed,
+   * removePlayer runs this again on the way out, so a promoted host who also
+   * left passes the flag onward in turn.
+   *
+   * Succession is final: a reconnecting ex-host comes back as an ordinary
+   * player. But the flag only moves when there is someone to receive it — a
+   * departed host in an emptied room keeps it, so a later reconnect (the only
+   * path back) still lands on a host.
+   *
+   * Public rooms never mint a creator (PublicRaceRoom.handleHello clears it),
+   * so the first check keeps this a no-op there.
+   */
+  ensureLiveCreator(departedSeat = null) {
+    const players = this.state.players;
+    // The caller may have just spliced the departing seat; its flag is the
+    // proof this room ever had a host even when no remaining seat carries it.
+    if (!players.some((p) => p.isCreator) && !departedSeat?.isCreator) return;
+    const present = (p) => !p.isBot && !p.departed && p.id !== departedSeat?.id;
+    if (players.some((p) => p.isCreator && present(p))) return;
+    let next = null;
+    for (const p of players) {
+      if (!present(p)) continue;
+      if (!next || p.joinedAt < next.joinedAt) next = p;
+    }
+    if (!next) return;
+    for (const p of players) p.isCreator = false;
+    next.isCreator = true;
   }
 
   playerFor(connection) {
@@ -1124,6 +1204,14 @@ export class RaceRoom extends Server {
   isRaceComplete() {
     return this.state.players.every((p) => p.dropped || p.score >= this.state.raceLength);
   }
+
+  /**
+   * Hook: runs synchronously inside onAlarm's countdown→racing branch, after
+   * the race-start broadcast and before the transition's persist, so anything
+   * a subclass derives here rides the same storage write as the racing
+   * snapshot. PublicRaceRoom computes its bot timelines here.
+   */
+  onRaceStarted() {}
 
   publicState() {
     // Strip server-only Player fields (attempts/streak counters, identity), the

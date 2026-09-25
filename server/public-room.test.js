@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 
 describe("PublicRaceRoom — scaffold", () => {
@@ -339,6 +339,7 @@ describe("PublicRaceRoom.isRaceComplete", () => {
 });
 
 import { computeBotTimelines } from "../public/src/bot-timeline.js";
+import { RACE_MAX_MS_PER_PROBLEM } from "./room.js";
 
 describe("PublicRaceRoom auto-start sequence", () => {
   it("fires auto-start when autoStartDeadline elapses: bots added, router released, state→countdown", async () => {
@@ -415,6 +416,83 @@ describe("PublicRaceRoom auto-start sequence", () => {
         raceLength: room.state.raceLength,
       });
       expect(room.state.botTimelines).toEqual(expected);
+    });
+  });
+});
+
+describe("PublicRaceRoom bot timelines — one write, self-healing", () => {
+  it("lands the timelines in the same storage write as the racing snapshot", async () => {
+    const stub = env.PublicRaceRoom.get(env.PublicRaceRoom.idFromName("m-onewrite-" + crypto.randomUUID()));
+    await runInDurableObject(stub, async (room, ctx) => {
+      if (!room.state) await room.onStart();
+      room.broadcast = () => {};
+      room.broadcastState = () => {};
+      room.getConnections = () => [];
+      room.releaseLobby = async () => {};
+      await room.handleHello(makeConn(), {
+        type: "hello", playerId: crypto.randomUUID(), handle: "A", difficulty: "medium",
+      });
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+      // Drive to the last countdown tick, then watch the transition wake.
+      while (room.state.state === "countdown" && room.state.countdownN > 0) {
+        room.state.countdownAt = Date.now() - 10;
+        await room.onAlarm();
+      }
+      const put = vi.spyOn(ctx.storage, "put");
+      try {
+        room.state.countdownAt = Date.now() - 10;
+        await room.onAlarm();
+        expect(room.state.state).toBe("racing");
+        // One write, and it already holds the timelines: there is no
+        // racing-with-empty-timelines snapshot for a restart to strand on.
+        expect(put).toHaveBeenCalledTimes(1);
+        const stored = await ctx.storage.get("state");
+        expect(stored.state).toBe("racing");
+        expect(stored.botTimelines.length).toBe(5);
+      } finally {
+        put.mockRestore();
+        await ctx.storage.deleteAlarm();
+      }
+    });
+  });
+
+  it("re-derives timelines a lost write dropped, before finishRace reads them", async () => {
+    await withRoom("test-timeline-heal-" + crypto.randomUUID(), async (room) => {
+      const broadcasts = [];
+      room.broadcast = (s) => broadcasts.push(JSON.parse(s));
+      await room.handleHello(makeConn(), {
+        type: "hello", playerId: crypto.randomUUID(), handle: "A", difficulty: "medium",
+      });
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+      while (room.state.state === "countdown") {
+        room.state.countdownAt = Date.now() - 10;
+        await room.onAlarm();
+      }
+      expect(room.state.state).toBe("racing");
+
+      // What an older build could leave behind: a racing snapshot whose
+      // timelines never landed (the second write died with the DO).
+      room.state.botTimelines = [];
+      await room.persist();
+      broadcasts.length = 0;
+
+      // The next wake — here the race ceiling — must heal the timelines before
+      // finishRace reads them, or every bot of the match records score 0.
+      room.state.raceStartedAt = Date.now() - (RACE_MAX_MS_PER_PROBLEM * room.state.raceLength + 1000);
+      await room.onAlarm();
+
+      expect(room.state.state).toBe("finished");
+      expect(broadcasts.some((m) => m.type === "bot-timelines")).toBe(true);
+      const finish = broadcasts.find((m) => m.type === "finish");
+      expect(finish).toBeTruthy();
+      const bots = finish.rankings.filter((p) => p.isBot);
+      expect(bots.length).toBe(5);
+      for (const b of bots) {
+        expect(b.score).toBe(room.state.raceLength);
+        expect(b.finishMs).toBeGreaterThan(0);
+      }
     });
   });
 });
