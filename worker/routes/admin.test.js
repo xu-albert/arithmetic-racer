@@ -887,19 +887,6 @@ describe("admin dashboard — database still on the pre-0008 schema", () => {
 });
 
 describe("admin dashboard — history claims", () => {
-  // Single-line: D1's exec() runs one statement per line. Same shape as
-  // migrations/0010_history_claims.sql, restored after the missing-table case.
-  const HISTORY_CLAIMS_DDL =
-    "CREATE TABLE IF NOT EXISTS history_claims (" +
-    "id TEXT PRIMARY KEY, " +
-    `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
-    "device_id TEXT NOT NULL, " +
-    "source TEXT NOT NULL CHECK (source IN ('signup', 'first_username_set')), " +
-    "claimed INTEGER NOT NULL, " +
-    "left_unclaimed INTEGER NOT NULL, " +
-    "created_at INTEGER NOT NULL" +
-    ")";
-
   beforeEach(async () => {
     await env.DB.exec("DELETE FROM history_claims");
   });
@@ -949,14 +936,14 @@ describe("admin dashboard — history claims", () => {
 
   it("still renders the dashboard before migration 0010 is applied", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await env.DB.exec("DROP TABLE history_claims");
+    await env.DB.exec("ALTER TABLE history_claims RENAME TO history_claims_hidden");
     try {
       const res = await handleAdminIndex(new Request("https://x/admin/?token=t"), { ...env, ADMIN_TOKEN: "t" });
       expect(res.status).toBe(200);
       expect(claimsSection(await res.text())).toContain("No history claims");
       expect(warn.mock.calls.some(([line]) => String(line).includes(KINDS.CLAIM_LOG_DB))).toBe(true);
     } finally {
-      await env.DB.exec(HISTORY_CLAIMS_DDL);
+      await env.DB.exec("ALTER TABLE history_claims_hidden RENAME TO history_claims");
       warn.mockRestore();
     }
   });

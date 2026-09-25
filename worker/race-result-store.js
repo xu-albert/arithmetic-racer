@@ -9,6 +9,8 @@ import { db } from "./db.js";
 import { assessPlausibility } from "./plausibility.js";
 import { computePoints } from "./race-score.js";
 
+export const MAX_DEVICE_ID_LENGTH = 128;
+
 export async function insertRaceResult(env, payload, plausibilityOverride, raceAt) {
   const id = crypto.randomUUID();
   // A room row lands from the room's durable outbox (server/room.js), and a

@@ -67,6 +67,7 @@ import { APIError } from "better-auth/api";
 import { sendResetEmail, sendWelcomeEmail } from "./email.js";
 import { validateUsernameSync } from "./username-validator.js";
 import { logError, KINDS } from "./logger.js";
+import { MAX_DEVICE_ID_LENGTH } from "./race-result-store.js";
 
 /**
  * Build the auth instance against the Worker's D1 binding and env secrets.
@@ -226,7 +227,9 @@ export const CLAIM_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  * @param {{ source: 'signup' | 'first_username_set', now?: number }} opts
  */
 export async function runClaim(env, userId, deviceId, { source, now = Date.now() } = {}) {
-  if (typeof deviceId !== "string" || !deviceId || !userId) return { claimed: 0 };
+  if (typeof deviceId !== "string" || !deviceId || deviceId.length > MAX_DEVICE_ID_LENGTH || !userId) {
+    return { claimed: 0 };
+  }
   const [update] = await env.DB.batch([
     env.DB
       .prepare(
