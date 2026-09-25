@@ -19,6 +19,10 @@ const NEW_PASSWORD = "owner-password-456";
 const GOOGLE_SUB = "google-sub-victim";
 const GOOGLE_RETURN_URL = "/?auth=google";
 const RESET_TEMPLATE = "test-reset-template";
+// Every password hash or check is a scrypt run of well over a second under
+// workerd, so a test that signs up, resets and signs in twice outlasts
+// vitest's 5s default.
+const PASSWORD_TEST_TIMEOUT_MS = 30_000;
 
 const authEnv = {
   ...env,
@@ -207,7 +211,7 @@ async function userRow(email = EMAIL) {
 
 // --- tests -----------------------------------------------------------------
 
-describe("Google sign-in into a pre-registered unverified account", () => {
+describe("Google sign-in into a pre-registered unverified account", { timeout: PASSWORD_TEST_TIMEOUT_MS }, () => {
   it("refuses the link: no Google account, no verified flag, no session", async () => {
     // A stranger registers the victim's address with a password and never
     // verifies it; later the victim signs in with Google.
@@ -246,7 +250,7 @@ describe("Google sign-in into a pre-registered unverified account", () => {
   });
 });
 
-describe("the owner taking a squatted address back with a password reset", () => {
+describe("the owner taking a squatted address back with a password reset", { timeout: PASSWORD_TEST_TIMEOUT_MS }, () => {
   it("verifies the email, so the owner's Google sign-in then joins the account", async () => {
     const squatter = await signUpWithPassword();
 
@@ -275,7 +279,7 @@ describe("the owner taking a squatted address back with a password reset", () =>
   });
 });
 
-describe("Google sign-in that must keep working", () => {
+describe("Google sign-in that must keep working", { timeout: PASSWORD_TEST_TIMEOUT_MS }, () => {
   it("creates a new verified user on first sign-in", async () => {
     const { res, jar } = await googleRoundTrip({ sub: GOOGLE_SUB, email: EMAIL });
 
