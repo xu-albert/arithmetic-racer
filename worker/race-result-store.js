@@ -36,6 +36,49 @@ export async function insertRaceResult(env, payload, plausibilityOverride) {
   // rate, not an earning, so nothing accumulates from it.
   const points = computePoints(payload);
 
+  // A room-counted row is written from the room's durable outbox
+  // (server/room.js), which retries until the insert lands — and a retry can
+  // follow a write that actually succeeded, when the DO crashed between the
+  // D1 response and recording the settle. A replayed race end rebuilds a
+  // bit-identical payload, so the (room, device, result) fingerprint of the
+  // earlier row identifies it and the retry stands down instead of
+  // double-counting the race. Solo rows (room_id NULL) are one-shot client
+  // POSTs with no retry loop behind them and skip the check.
+  //
+  // The fingerprint cannot tell a replay apart from two genuinely identical
+  // races: same room, same device, same finish time to the millisecond, same
+  // score. For a finisher that coincidence is effectively impossible; a
+  // zero-attempt DNF can repeat across a rematch, and then costs the player
+  // one indistinguishable row in their own history. Accepted — the
+  // alternative (a stored dedupe key under a unique index) is a migration
+  // plus a census of pre-existing duplicates.
+  if (payload.room_id != null) {
+    const existing = await db(env)
+      .prepare(
+        `SELECT id FROM race_results
+         WHERE room_id = ? AND device_id = ? AND finished = ?
+           AND problems_total = ? AND problems_correct = ? AND problems_attempted = ?
+           AND longest_streak = ?
+           AND (finish_time_ms = ? OR (finish_time_ms IS NULL AND ? IS NULL))
+         LIMIT 1`
+      )
+      .bind(
+        payload.room_id,
+        payload.device_id,
+        payload.finished ? 1 : 0,
+        payload.problems_total,
+        payload.problems_correct,
+        payload.problems_attempted,
+        payload.longest_streak ?? 0,
+        payload.finish_time_ms,
+        payload.finish_time_ms
+      )
+      .first();
+    if (existing) {
+      return { id: existing.id, played_at: null, suspect, suspect_reason: reason, points, duplicate: true };
+    }
+  }
+
   await db(env)
     .prepare(
       `INSERT INTO race_results (

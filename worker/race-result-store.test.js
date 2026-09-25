@@ -155,4 +155,56 @@ describe("insertRaceResult", () => {
     const b = await insertRaceResult(env, basePayload());
     expect(a.id).not.toBe(b.id);
   });
+
+  // Room-counted rows are written from the room's durable outbox, which
+  // retries — and a retry can follow a write that secretly succeeded. The
+  // (room, device, result) fingerprint makes the retry stand down. Solo rows
+  // (room_id NULL) are one-shot POSTs and are never deduped (see above).
+  describe("room-row dedupe", () => {
+    const roomPayload = (overrides = {}) =>
+      basePayload({ room_id: "room-dedupe-test", ...overrides });
+
+    it("skips a replayed insert of the same room row", async () => {
+      const a = await insertRaceResult(env, roomPayload());
+      const b = await insertRaceResult(env, roomPayload());
+      expect(b.duplicate).toBe(true);
+      expect(b.id).toBe(a.id);
+      const { results } = await env.DB.prepare(
+        "SELECT id FROM race_results WHERE room_id = ?"
+      ).bind("room-dedupe-test").all();
+      expect(results).toHaveLength(1);
+    });
+
+    it("does not merge two different races in the same room", async () => {
+      await insertRaceResult(env, roomPayload({ finish_time_ms: 30000 }));
+      await insertRaceResult(env, roomPayload({ finish_time_ms: 41234 }));
+      const { results } = await env.DB.prepare(
+        "SELECT id FROM race_results WHERE room_id = ?"
+      ).bind("room-dedupe-test").all();
+      expect(results).toHaveLength(2);
+    });
+
+    it("fingerprints unfinished rows too (finish_time_ms NULL)", async () => {
+      const dnf = roomPayload({
+        finished: false, finish_time_ms: null, problems_correct: 3,
+        problems_attempted: 5, avg_time_per_problem_ms: 0,
+      });
+      const a = await insertRaceResult(env, dnf);
+      const b = await insertRaceResult(env, dnf);
+      expect(b.duplicate).toBe(true);
+      const { results } = await env.DB.prepare(
+        "SELECT id FROM race_results WHERE room_id = ?"
+      ).bind("room-dedupe-test").all();
+      expect(results).toHaveLength(1);
+    });
+
+    it("does not merge the same result raced under two different rooms", async () => {
+      await insertRaceResult(env, roomPayload());
+      await insertRaceResult(env, roomPayload({ room_id: "room-dedupe-other" }));
+      const { results } = await env.DB.prepare(
+        "SELECT id FROM race_results WHERE device_id = ?"
+      ).bind("device-xyz").all();
+      expect(results).toHaveLength(2);
+    });
+  });
 });
