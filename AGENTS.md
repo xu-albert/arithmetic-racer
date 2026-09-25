@@ -194,15 +194,19 @@ that was away misses it and reconnects into a `finished` snapshot instead.
 `settleRace()` is that one-time transition however it is learned. It ranks from
 the local `racers`, never from the snapshot's player list: `PublicRaceRoom`
 strips bots and departed seats from `state.players` as it ends the race, so that
-list is not the podium.
+list is not the podium. The bots' final rows ride `lastRace.botRows` instead,
+and `adoptFinalBotRows()` lays them over the local replay before settling.
 
 Bots are the sharpest case of that rebuild, because they have no snapshot state
-at all: `PublicRaceRoom` holds every bot row at `score: 0, finishMs: null` until
-`finishRace()` finalizes it, so mid-race bot progress exists only on the client,
-derived from the timelines. The replay therefore catches them up from
-`botTimelines` before it emits anything — the race screen ranks the local player
-against whatever `runner.racers` says at that moment, and a bot still on the
-start line is a first place the player did not earn.
+until the race ends: `PublicRaceRoom` holds every bot row at `score: 0,
+finishMs: null` until `finishRace()` finalizes it, so mid-race bot progress
+exists only on the client, derived from the timelines. Those are on the room's
+clock, so the client reads them through `raceElapsedMs()` (offset by the
+`serverNow` the room stamps), never through its own `Date.now()`. The replay
+therefore catches them up from `botTimelines` before it emits anything — the
+race screen ranks the local player against whatever `runner.racers` says at
+that moment, and a bot still on the start line is a first place the player did
+not earn.
 
 The client's own handoff order is the trap, twice over.
 
