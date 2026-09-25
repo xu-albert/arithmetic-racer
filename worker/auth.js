@@ -60,7 +60,7 @@
 //    and persisted on user creation; we then validate it in the create hook.
 
 import { betterAuth } from "better-auth";
-import { APIError } from "better-auth/api";
+import { APIError, getOAuthState } from "better-auth/api";
 import { sendResetEmail, sendWelcomeEmail } from "./email.js";
 import { validateUsernameSync } from "./username-validator.js";
 import { logError, KINDS } from "./logger.js";
@@ -176,7 +176,66 @@ export function getAuth(env) {
           },
         },
       },
+      account: {
+        create: {
+          before: async (account) => {
+            await refuseLinkIntoUnverifiedUser(env, account);
+          },
+        },
+      },
     },
+  });
+}
+
+/**
+ * Refuse to attach an OAuth identity to an existing user whose email was never
+ * verified.
+ *
+ * better-auth 1.6.9 signs a Google user in by email: if a user row already has
+ * that address, it links the Google account into it and marks the email
+ * verified (`handleOAuthUserInfo` in oauth2/link-account.mjs), trusting only
+ * Google's claim and never the local row's. Nothing here verifies email on
+ * sign-up, so anyone can register a password account under someone else's
+ * address, wait for the owner to sign in with Google, and keep a password that
+ * opens the owner's account. 1.7 closes this upstream with
+ * `accountLinking.requireLocalEmailVerified` (default on); 1.6.9 has no such
+ * setting, and `disableImplicitLinking` would also refuse verified users.
+ *
+ * Throwing is the refusal: the link sits in a try/catch that returns "unable
+ * to link account" before the emailVerified update or any session is created.
+ * Returning `false` would not do — 1.6.9 ignores a null link and signs in anyway.
+ *
+ * Passed through:
+ *   - credential accounts (email sign-up, password reset) — not an OAuth join;
+ *   - explicit linking (`/link-social`), where the user is signed in to the
+ *     target account and better-auth demands the provider email match it;
+ *   - a user with no accounts yet, which is `createOAuthUser` minting a new
+ *     user and its first account in the same request.
+ */
+async function refuseLinkIntoUnverifiedUser(env, account) {
+  if (account.providerId === "credential") return;
+
+  let oauthState = null;
+  try {
+    oauthState = await getOAuthState();
+  } catch {
+    // No request state (not inside an auth endpoint): not an explicit link.
+  }
+  if (oauthState?.link) return;
+
+  const target = await env.DB
+    .prepare(
+      `SELECT u."emailVerified" AS verified,
+              (SELECT COUNT(*) FROM account a WHERE a."userId" = u.id) AS accounts
+         FROM "user" u WHERE u.id = ?`,
+    )
+    .bind(account.userId)
+    .first();
+  if (target && (target.verified || target.accounts === 0)) return;
+
+  throw new APIError("FORBIDDEN", {
+    message: "account_link_requires_verified_email",
+    code: "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL",
   });
 }
 
