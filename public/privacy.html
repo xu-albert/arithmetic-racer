@@ -127,9 +127,10 @@
               without an account. Sending the form also means
               <span data-collects="session_cookie">your sign-in cookie travels with
               the request</span>, which is how the account id is known, and
-              <span data-collects="rate_limit_ip">your IP address is counted for an
-              hour</span> so the form cannot be flooded — the address and a number,
-              nothing else, expiring on its own. Kept until the request is dealt with.
+              <span data-collects="rate_limit_ip">your IP address is counted by
+              Cloudflare's rate-limiting service over a one-minute window</span> so the
+              form cannot be flooded — the address and a number, nothing else, expiring
+              on its own. Kept until the request is dealt with.
             </td>
           </tr>
           <tr>
@@ -158,10 +159,10 @@
               what a report carries. Sending one also means
               <span data-collects="session_cookie">your sign-in cookie travels with the
               request</span>, which is how the account id is known, and
-              <span data-collects="rate_limit_ip">your IP address is counted for an
-              hour</span> so the form cannot be flooded — that record holds the address
-              and a number, nothing else, and expires on its own. Kept until the bug is
-              dealt with.
+              <span data-collects="rate_limit_ip">your IP address is counted by
+              Cloudflare's rate-limiting service over a one-minute window</span> so the
+              form cannot be flooded — that record holds the address and a number,
+              nothing else, and expires on its own. Kept until the bug is dealt with.
             </td>
           </tr>
         </tbody>

@@ -44,9 +44,9 @@ const MAX_BUG_WHERE_LEN = 200;
 // Cap from the same declaration as the rest of the snapshot.
 const MAX_DEVICE_ID_LEN = bugContextField("device_id").maxLength;
 
-// The native rate-limit binding only offers 10s or 60s windows, so this is
-// restated per minute (CONTACT_IP_LIMIT in wrangler.jsonc): 3 messages a minute
-// per IP is still far above any genuine use.
+// The native rate-limit binding only offers 10s or 60s windows, so the old
+// three-an-hour cap is restated as the strictest per-minute value
+// (CONTACT_IP_LIMIT in wrangler.jsonc): one message a minute per IP.
 const RATE_LIMIT_WINDOW_S = 60;
 
 // Deliberately permissive: this only catches obvious typos so we can tell the

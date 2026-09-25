@@ -27,8 +27,8 @@
  * @property {"context"|"column"|"request"|"rate-limit"} storedIn Where the
  *   value ends up. `context` is a key in the row's JSON blob and `column` is a
  *   column of its own; `request` travels with the request but is never written
- *   to the row, and `rate-limit` is held in Workers KV by the limiter rather
- *   than in D1. Only `context` entries can ever be read from the request body
+ *   to the row, and `rate-limit` is held by Cloudflare's rate-limiting service
+ *   rather than in D1. Only `context` entries can ever be read from the request body
  *   — see CLIENT_CONTEXT_FIELDS.
  * @property {number} [maxLength] Cap the server applies to a text field.
  * @property {boolean} [pathOnly] Strip query string and fragment before storing.
@@ -171,9 +171,10 @@ export const BUG_CONTEXT_FIELDS = [
     storedIn: "request",
   },
   {
-    // Also not on the row: the per-IP counter the rate limiter writes to
-    // Workers KV with a one-hour TTL. It outlives the request, so it belongs on
-    // the same list as everything else the reporter is entitled to know about.
+    // Also not on the row: the per-IP counter Cloudflare's rate-limiting
+    // service keeps over a one-minute window. It outlives the request, so it
+    // belongs on the same list as everything else the reporter is entitled to
+    // know about.
     key: "rate_limit_ip",
     source: "server",
     type: "text",

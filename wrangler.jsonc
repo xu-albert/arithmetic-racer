@@ -102,11 +102,11 @@
       "namespace_id": "1004",
       "simple": { "limit": 3, "period": 60 }
     },
-    // Contact form: per IP, restated per minute (the binding has no hourly window).
+    // Contact form: 1 message per IP per minute (the binding has no hourly window).
     {
       "name": "CONTACT_IP_LIMIT",
       "namespace_id": "1005",
-      "simple": { "limit": 3, "period": 60 }
+      "simple": { "limit": 1, "period": 60 }
     }
   ],
   // obscenity ships a broken ESM wrapper at dist/index.mjs (does
@@ -172,7 +172,7 @@
           "simple": { "limit": 900, "period": 60 }
         },
         { "name": "MATCHMAKING_LIMIT", "namespace_id": "2004", "simple": { "limit": 3, "period": 60 } },
-        { "name": "CONTACT_IP_LIMIT", "namespace_id": "2005", "simple": { "limit": 3, "period": 60 } }
+        { "name": "CONTACT_IP_LIMIT", "namespace_id": "2005", "simple": { "limit": 1, "period": 60 } }
       ],
       "alias": {
         "obscenity": "./node_modules/obscenity/dist/index.js"

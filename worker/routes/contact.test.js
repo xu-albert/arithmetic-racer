@@ -69,7 +69,7 @@ function post(body, headers = {}) {
   });
 }
 
-/** env with notification configured and a stub limiter allowing 3 per key. */
+/** env with notification configured and a stub limiter allowing 1 per key, like CONTACT_IP_LIMIT. */
 function testEnv(overrides = {}) {
   const counts = new Map();
   return {
@@ -80,7 +80,7 @@ function testEnv(overrides = {}) {
       limit: async ({ key }) => {
         const n = (counts.get(key) ?? 0) + 1;
         counts.set(key, n);
-        return { success: n <= 3 };
+        return { success: n <= 1 };
       },
     },
     ...overrides,
@@ -309,11 +309,9 @@ describe("POST /api/contact — bug reports", () => {
 
   it("is rate limited on the same counter as every other submission", async () => {
     const e = testEnv();
-    for (let i = 0; i < 3; i++) {
-      expect((await handleContact(post(bugBody()), e)).status).toBe(200);
-    }
+    expect((await handleContact(post({ message: "hi" }), e)).status).toBe(200);
     expect((await handleContact(post(bugBody()), e)).status).toBe(429);
-    expect(await rows()).toHaveLength(3);
+    expect(await rows()).toHaveLength(1);
   });
 
   it("still stores the report when the notification email fails", async () => {
@@ -570,20 +568,18 @@ describe("POST /api/contact — captured context", () => {
 });
 
 describe("POST /api/contact — rate limiting", () => {
-  it("blocks the fourth submission from one IP in a window", async () => {
+  it("blocks the second submission from one IP in a window", async () => {
     const e = testEnv();
-    for (let i = 0; i < 3; i++) {
-      expect((await handleContact(post({ message: `m${i}` }), e)).status).toBe(200);
-    }
+    expect((await handleContact(post({ message: "first" }), e)).status).toBe(200);
     const res = await handleContact(post({ message: "spam" }), e);
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBeTruthy();
-    expect(await rows()).toHaveLength(3);
+    expect(await rows()).toHaveLength(1);
   });
 
   it("tracks each IP separately", async () => {
     const e = testEnv();
-    for (let i = 0; i < 3; i++) await handleContact(post({ message: `m${i}` }), e);
+    await handleContact(post({ message: "first" }), e);
     const other = await handleContact(post({ message: "hi" }, { "cf-connecting-ip": "198.51.100.4" }), e);
     expect(other.status).toBe(200);
   });
