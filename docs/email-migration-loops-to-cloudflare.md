@@ -73,8 +73,8 @@ Three send paths, all funnelling through `worker/email.js`:
 
 | Path | Caller | Template var | Notes |
 |---|---|---|---|
-| Welcome | `worker/auth.js:172` | `LOOPS_TEMPLATE_WELCOME` | signup, no variables |
-| Password reset | `worker/auth.js:93` | `LOOPS_TEMPLATE_RESET` | better-auth callback, passes `resetUrl` |
+| Welcome | `worker/auth.js:176` | `LOOPS_TEMPLATE_WELCOME` | signup, no variables |
+| Password reset | `worker/auth.js:97` | `LOOPS_TEMPLATE_RESET` | better-auth callback, passes `resetUrl` |
 | Contact notification | `worker/routes/contact.js:255-261` | `LOOPS_TEMPLATE_CONTACT` | to `CONTACT_EMAIL`, body deliberately excluded |
 
 Files in scope:
@@ -82,7 +82,7 @@ Files in scope:
 - `worker/email.js` — the whole wrapper. `sendTransactional` + `sendWelcomeEmail` +
   `sendResetEmail` + the `sendEmail` back-compat alias.
 - `worker/email.test.js` — 9 tests, all built on mocking `globalThis.fetch`.
-- `worker/auth.js:64` — imports `sendResetEmail`, `sendWelcomeEmail`.
+- `worker/auth.js:67` — imports `sendResetEmail`, `sendWelcomeEmail`.
 - `worker/routes/contact.js:167` — DI seam: `const sendMail = deps.sendMail ?? sendTransactional`.
 - `worker/routes/contact.test.js:97,195` — asserts on `LOOPS_TEMPLATE_CONTACT`.
 

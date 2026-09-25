@@ -74,8 +74,9 @@
 /**
  * POST /api/me/username  (requires session cookie)
  * Body: { username: string, deviceId?: string }
- *   The optional deviceId is used by the OAuth signup flow to claim anon
- *   races on first-username-set; ignored on subsequent renames.
+ *   The optional deviceId is used by the OAuth signup flow to claim recent
+ *   anon races (runClaim in worker/auth.js) on first-username-set; ignored on
+ *   subsequent renames.
  * Response (200): { username: string }
  * Response (400): { error: 'taken' | 'banned' | 'reserved' | 'invalid_format' }
  * Response (401): if no session.
@@ -161,7 +162,9 @@
 /**
  * GET /api/stats/by-device/:device_id   (no auth)
  * Counts only rows with user_id IS NULL — i.e., still-anonymous races.
- * After a claim, those rows have user_id set and stop counting here.
+ * After a claim, the rows it moved have user_id set and stop counting here;
+ * rows older than the claim window (CLAIM_WINDOW_MS) stay anonymous and still
+ * count.
  *
  * @typedef {Object} ByDeviceStats
  * @property {number} total_races

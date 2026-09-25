@@ -367,9 +367,9 @@ export async function handleByDevice(request, env) {
     return Response.json({ total_races: 0, best_time_ms: null, best_difficulty: null });
   }
 
-  // Only count anon rows (user_id IS NULL). After a claim, the same
-  // device's old rows have user_id set, and the header pills should reflect
-  // only what the *current anonymous* session has accumulated since.
+  // Only count anon rows (user_id IS NULL). After a claim, the rows it moved
+  // have user_id set and drop out of the header pills; rows older than
+  // CLAIM_WINDOW_MS (worker/auth.js) were never claimed, so they still count.
   const row = await db(env)
     .prepare(
       `SELECT COUNT(*) AS total_races,
