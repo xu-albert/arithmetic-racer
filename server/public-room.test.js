@@ -281,6 +281,27 @@ describe("PublicRaceRoom.removePlayer", () => {
     });
   });
 
+  it("last human leaving a countdown cancels it instead of racing the bots", async () => {
+    await withRoomNPlayers("test-countdown-cancel-" + crypto.randomUUID(), 1, async (room, [pid]) => {
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+      expect(room.state.state).toBe("countdown");
+      expect(room.state.players.filter((p) => p.isBot).length).toBe(MAX_PLAYERS - 1);
+
+      await room.removePlayer(pid);
+      expect(room.state.state).toBe("lobby");
+      expect(room.state.players).toEqual([]);
+      expect(room.state.countdownAt).toBeNull();
+      expect(room.state.countdownN).toBeNull();
+      expect(room.state.idleCleanupAt).toBeGreaterThan(Date.now());
+
+      // No amount of alarm ticks turns it into a bots-only race.
+      for (let i = 0; i < 6; i++) await room.onAlarm();
+      expect(room.state.state).toBe("lobby");
+      expect(room.state.raceStartedAt).toBeNull();
+    });
+  });
+
   it("last player leaving does not release router when difficulty is null", async () => {
     await withRoom("test-no-difficulty-" + crypto.randomUUID(), async (room) => {
       // Simulate a misrouted connection that landed on a room whose name has

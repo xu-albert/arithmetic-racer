@@ -916,25 +916,18 @@ export class RaceRoom extends Server {
     // distinguishing genuine abandonments. Fire-and-forget: the finish path
     // must not suspend on a database write, and resolveCaptchaChallenge takes
     // the challenge out of state before it does anything asynchronous.
-    const superseded = this.state.captchaChallenges?.[player.id];
-    if (superseded) {
+    if (this.state.captchaChallenges?.[player.id]) {
       this.resolveCaptchaChallenge(player.id, 'superseded')
         .catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: player.id, phase: 'captcha_reissue' }));
     }
 
-    // Problems already answered correctly carry into the new challenge: a host
-    // rematching into someone's verification window must not make a racer who
-    // was cooperating start over. The deadline covers only the problems still
-    // owed. A pending challenge always has index < count (reaching count is a
-    // pass, which deletes it), so at least one problem remains.
-    const answered = superseded?.index ?? 0;
     const challenge = {
       playerId: player.id,
       seed: newCaptchaSeed(),
       difficulty: race.difficulty,
       count: CAPTCHA_PROBLEM_COUNT,
-      index: answered,
-      deadline: captchaDeadline(Date.now(), CAPTCHA_PROBLEM_COUNT - answered),
+      index: 0,
+      deadline: captchaDeadline(Date.now()),
       // Snapshot the result row now: the build-before-insert rule from
       // persistRaceResults applies equally to a row that inserts later — a
       // reconfigured or restarted room must not rewrite a held payload.
@@ -1089,16 +1082,7 @@ export class RaceRoom extends Server {
 
     // Non-racing (lobby / countdown / finished): actually remove.
     this.state.players.splice(idx, 1);
-
-    // A countdown that lost its last player has nobody to race: cancel it back
-    // to the lobby rather than let onAlarm tick a ghost race into being — one
-    // that runs for minutes, burning alarm wake-ups and showing every
-    // reconnector a live race that means nothing, until idle cleanup ends it.
-    if (this.state.state === 'countdown' && this.state.players.length === 0) {
-      this.state.state = 'lobby';
-      this.state.countdownN = null;
-      this.state.countdownAt = null;
-    }
+    this.cancelAbandonedCountdown();
 
     // The departed seat is already spliced, so its flag is only visible here
     // by being handed over explicitly.
@@ -1110,6 +1094,23 @@ export class RaceRoom extends Server {
       this.state.idleCleanupAt = Date.now() + IDLE_CLEANUP_MS;
     }
     return true;
+  }
+
+  /**
+   * A countdown whose last human left has nobody to race: cancel it back to an
+   * empty lobby rather than let onAlarm tick a ghost race into being — one that
+   * runs for minutes, burning alarm wake-ups and showing every reconnector a
+   * live race that means nothing, until idle cleanup ends it. Any bots the
+   * countdown seated go with it, so the caller's empty-room gates see a real
+   * headcount.
+   */
+  cancelAbandonedCountdown() {
+    if (this.state.state !== 'countdown') return;
+    if (this.state.players.some((p) => !p.isBot)) return;
+    this.state.players = [];
+    this.state.state = 'lobby';
+    this.state.countdownN = null;
+    this.state.countdownAt = null;
   }
 
   /**
@@ -1126,10 +1127,12 @@ export class RaceRoom extends Server {
    * removePlayer runs this again on the way out, so a promoted host who also
    * left passes the flag onward in turn.
    *
-   * Succession is final: a reconnecting ex-host comes back as an ordinary
-   * player. But the flag only moves when there is someone to receive it — a
-   * departed host in an emptied room keeps it, so a later reconnect (the only
-   * path back) still lands on a host.
+   * While any human seat remains, one of them holds the flag. With nobody
+   * present to receive it, it is parked on the earliest remaining seat even
+   * though that seat is departed, and the next seat to become present — a
+   * reconnect or a fresh join, both of which run this — takes it from there.
+   * Succession is otherwise final: a reconnecting ex-host comes back as an
+   * ordinary player whenever someone present already holds the flag.
    *
    * Public rooms never mint a creator (PublicRaceRoom.handleHello clears it),
    * so the first check keeps this a no-op there.
@@ -1141,11 +1144,14 @@ export class RaceRoom extends Server {
     if (!players.some((p) => p.isCreator) && !departedSeat?.isCreator) return;
     const present = (p) => !p.isBot && !p.departed && p.id !== departedSeat?.id;
     if (players.some((p) => p.isCreator && present(p))) return;
-    let next = null;
-    for (const p of players) {
-      if (!present(p)) continue;
-      if (!next || p.joinedAt < next.joinedAt) next = p;
-    }
+    const earliest = (eligible) => {
+      let next = null;
+      for (const p of players) {
+        if (eligible(p) && (!next || p.joinedAt < next.joinedAt)) next = p;
+      }
+      return next;
+    };
+    const next = earliest(present) ?? earliest((p) => !p.isBot);
     if (!next) return;
     for (const p of players) p.isCreator = false;
     next.isCreator = true;

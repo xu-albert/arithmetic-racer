@@ -340,6 +340,7 @@ export class PublicRaceRoom extends RaceRoom {
     }
 
     this.state.players.splice(idx, 1);
+    this.cancelAbandonedCountdown();
     this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
 
     // Mid-race: treat removed unfinished player as drop for ranking.
