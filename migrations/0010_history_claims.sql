@@ -5,8 +5,8 @@
 -- anyone can protect — whoever gets hold of it can claim the races behind it —
 -- so the claim is narrowed to recent races and every claim leaves a row here
 -- for the admin dashboard. A row is written for every claim that runs, even
--- one that found nothing: an account presenting a device that other accounts
--- have also presented is the pattern worth reviewing, whatever it matched.
+-- one that found nothing: presenting the device is what is being recorded,
+-- whatever it matched.
 --
 -- The row is written in the same D1 batch as the claim's UPDATE, so there is
 -- no claim without its record: if this table is missing, the claim fails too.
@@ -21,7 +21,5 @@ CREATE TABLE history_claims (
   created_at INTEGER NOT NULL
 );
 
--- The dashboard lists newest-first; the device index answers "who else has
--- claimed this device", which the dashboard shows beside each row.
+-- The dashboard lists newest-first.
 CREATE INDEX idx_history_claims_created ON history_claims (created_at DESC, id DESC);
-CREATE INDEX idx_history_claims_device ON history_claims (device_id);

@@ -56,7 +56,7 @@
     <a class="back" href="/">&larr; Back to Arithmetic Racer</a>
 
     <h1>Privacy</h1>
-    <p class="updated">Last updated 11 August 2026</p>
+    <p class="updated">Last updated 24 September 2026</p>
 
     <p>
       Arithmetic Racer is a small math racing game. This page describes exactly what it
@@ -107,6 +107,17 @@
           <tr>
             <td>Login session records, which include your <strong>IP address</strong> and <strong>browser user-agent</strong></td>
             <td>While you are signed in. Created and expired by the authentication library.</td>
+          </tr>
+          <tr>
+            <td>
+              A record of each time anonymous races are moved to an account — the
+              account id, the device ID, how many races moved, how many were left
+              behind as too old, and when
+            </td>
+            <td>
+              When you create an account, even if no races moved. Kept after the
+              account is deleted, with the account id removed.
+            </td>
           </tr>
           <tr>
             <td>Room handles and chat-free game messages</td>
@@ -169,8 +180,9 @@
       </table>
     </div>
     <p>
-      If you create an account after playing anonymously, races previously tied to your
-      device ID are re-attributed to your account so your history carries over.
+      If you create an account after playing anonymously, races from the last 7 days that
+      are tied to your device ID are re-attributed to your account so your recent history
+      carries over. Older races stay anonymous.
     </p>
 
     <h2>Who else sees it</h2>

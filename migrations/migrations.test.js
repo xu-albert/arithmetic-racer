@@ -295,14 +295,13 @@ describe("0010 — history_claims", () => {
     return row;
   }
 
-  test("creates the table with both review indexes", () => {
+  test("creates the table with its dashboard index", () => {
     const db = migrate();
     assert.deepEqual(columnNames(db, "history_claims"), [
       "id", "user_id", "device_id", "source", "claimed", "left_unclaimed", "created_at",
     ]);
     assert.deepEqual(indexNames(db, "history_claims"), [
       "idx_history_claims_created",
-      "idx_history_claims_device",
     ]);
     db.close();
   });

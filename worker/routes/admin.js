@@ -540,20 +540,14 @@ const CLAIMS_LIMIT = 50;
 
 /**
  * Newest anonymous-history claims (migrations/0010_history_claims.sql), capped
- * like the contact list. `other_accounts` counts the *other* accounts that have
- * presented the same device: the deviceId is the claim's only credential, so a
- * device turning up under more than one account is the thing to look at.
+ * like the contact list.
  */
 async function loadHistoryClaims(env, limit = CLAIMS_LIMIT) {
   try {
     const { results } = await env.DB
       .prepare(
         `SELECT hc.id, hc.user_id, hc.device_id, hc.source, hc.claimed, hc.left_unclaimed,
-                hc.created_at, u.username AS username, u.name AS name,
-                (SELECT COUNT(DISTINCT other.user_id) FROM history_claims other
-                  WHERE other.device_id = hc.device_id
-                    AND other.user_id IS NOT hc.user_id
-                    AND other.user_id IS NOT NULL) AS other_accounts
+                hc.created_at, u.username AS username, u.name AS name
            FROM history_claims hc LEFT JOIN "user" u ON u.id = hc.user_id
           ORDER BY hc.created_at DESC, hc.id DESC
           LIMIT ?`
@@ -575,11 +569,10 @@ function renderClaimsTable(claims, now, token) {
     .map((c) => {
       const whenIso = new Date(c.created_at).toISOString();
       const who = c.user_id ? whoCell(c, token).__html : escapeHtml("(deleted account)");
-      const shared = Number(c.other_accounts) || 0;
-      return `<tr class="${shared ? "claim-row shared" : "claim-row"}">
+      return `<tr>
       <td><span title="${escapeHtml(whenIso)}">${escapeHtml(relativeTime(now, c.created_at))}</span></td>
       <td>${who}</td>
-      <td><code>${escapeHtml(c.device_id)}</code>${shared ? ` <span class="shared-note">also claimed by ${shared} other account${shared === 1 ? "" : "s"}</span>` : ""}</td>
+      <td><code>${escapeHtml(c.device_id)}</code></td>
       <td>${escapeHtml(c.source)}</td>
       <td class="n">${escapeHtml(c.claimed)}</td>
       <td class="n">${escapeHtml(c.left_unclaimed)}</td>
@@ -655,7 +648,6 @@ export async function handleAdminIndex(request, env) {
           table.claims th, table.claims td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
           table.claims th { color: #888; font-weight: 500; }
           table.claims .n { font-variant-numeric: tabular-nums; }
-          table.claims .shared-note { color: #a3231a; font-weight: 600; }
         </style>
       </head>
       <body>
