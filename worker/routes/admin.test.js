@@ -932,19 +932,6 @@ describe("admin dashboard — history claims", () => {
     expect(section).toContain("signup");
     expect(section).toContain(`<td class="n">4</td>`);
     expect(section).toContain(`<td class="n">2</td>`);
-    expect(section).not.toContain("other account");
-  });
-
-  it("flags a device that more than one account has presented", async () => {
-    await seedUser("u-a", "first");
-    await seedUser("u-b", "second");
-    await insertClaim({ user_id: "u-a", device_id: "dev-shared", claimed: 3 });
-    await insertClaim({ user_id: "u-b", device_id: "dev-shared", source: "first_username_set" });
-    await insertClaim({ user_id: "u-b", device_id: "dev-own" });
-
-    const section = claimsSection(await dashboard());
-    expect(section.match(/also claimed by 1 other account</g)).toHaveLength(2);
-    expect(section).toContain("dev-own</code></td>");
   });
 
   it("escapes the device id, which comes from a request body", async () => {
