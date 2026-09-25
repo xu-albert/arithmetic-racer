@@ -19,6 +19,7 @@ export const KINDS = {
   ROOM_MESSAGE: "room_message",
   ROOM_CLAIM_FAILED: "room_claim_failed",
   CLAIM_FAILED: "claim_failed",
+  CLAIM_LOG_DB: "claim_log_db",
   WELCOME_EMAIL_FAILED: "welcome_email_failed",
   EMAIL_SEND_FAILED: "email_send_failed",
   LOBBY_RELEASE_FAILED: "lobby_release_failed",
