@@ -1,9 +1,9 @@
-// Pure-helper tests for profile.js. DOM/event tests are skipped — those
-// belong in an integration suite once the integrator wires things together.
+// Tests for profile.js: the pure helpers, plus the stat tiles as mountProfile
+// paints them from /api/me over a DOM stub.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { _internals } from "./profile.js";
+import { _internals, mountProfile } from "./profile.js";
 
 const {
   fmtMs,
@@ -190,17 +190,20 @@ test("computeOverallAccuracy is null with no races", () => {
 
 // ---------- computeFinishRate ----------
 
-test("computeFinishRate is finished/played * 100", () => {
+test("computeFinishRate is multiplayer finished/played * 100, solo left out", () => {
   const aggs = [
-    { races_played: 4, races_finished: 3 },
-    { races_played: 6, races_finished: 6 },
+    { races_played: 9, races_finished: 8, room_races_played: 4, room_races_finished: 3 },
+    { races_played: 6, races_finished: 6, room_races_played: 6, room_races_finished: 6 },
   ];
-  // 9/10 * 100 = 90
+  // 9/10 * 100 = 90, not the 14/15 the solo finishes would make it.
   assert.equal(computeFinishRate(aggs), 90);
 });
 
-test("computeFinishRate is null with no races", () => {
-  assert.equal(computeFinishRate([{ races_played: 0, races_finished: 0 }]), null);
+test("computeFinishRate is null with no multiplayer races, however many solo", () => {
+  assert.equal(
+    computeFinishRate([{ races_played: 5, races_finished: 5, room_races_played: 0, room_races_finished: 0 }]),
+    null,
+  );
 });
 
 // ---------- findAgg ----------
@@ -295,4 +298,86 @@ test("olderRacesCursor is the oldest race_seq on the page, or null at race #1", 
   // Defensive: it finds the minimum rather than trusting the ordering.
   assert.equal(olderRacesCursor(seqs([3, 9, 4])), 3);
   assert.equal(olderRacesCursor([{ race_seq: "nope" }]), null);
+});
+
+// ---------- mountProfile: the stat tiles ----------
+
+// Just enough DOM for mountProfile: every selector resolves to one element the
+// test can read back, and the host keeps the markup it was given.
+function fakeEl() {
+  const classes = new Set();
+  const found = new Map();
+  return {
+    textContent: "",
+    innerHTML: "",
+    hidden: false,
+    dataset: {},
+    classList: {
+      add: (...c) => c.forEach((x) => classes.add(x)),
+      remove: (...c) => c.forEach((x) => classes.delete(x)),
+      contains: (c) => classes.has(c),
+    },
+    addEventListener: () => {},
+    setAttribute: () => {},
+    querySelector(sel) {
+      if (!found.has(sel)) found.set(sel, fakeEl());
+      return found.get(sel);
+    },
+    querySelectorAll: () => [],
+  };
+}
+
+async function openProfile(me) {
+  const listeners = new Map();
+  globalThis.document = {
+    addEventListener: (type, fn) => listeners.set(type, fn),
+    dispatchEvent: () => true,
+    getElementById: () => null,
+  };
+  globalThis.fetch = async (url) => {
+    assert.equal(url, "/api/me");
+    return { ok: true, status: 200, json: async () => me };
+  };
+  const host = fakeEl();
+  mountProfile(host);
+  listeners.get("open-profile")();
+  // getMe's fetch and json, then render.
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+  return host;
+}
+
+const ME = {
+  username: "Alice",
+  email: "a@example.com",
+  created_at: "2026-01-02T00:00:00.000Z",
+  recent: [],
+};
+
+test("the finish-rate tile counts multiplayer races only, and says so", async () => {
+  const host = await openProfile({
+    ...ME,
+    aggregates: [
+      { difficulty: "easy", races_played: 6, races_finished: 5, room_races_played: 2, room_races_finished: 1, avg_accuracy: 90 },
+      { difficulty: "medium", races_played: 2, races_finished: 2, room_races_played: 2, room_races_finished: 2, avg_accuracy: 80 },
+      { difficulty: "hard", races_played: 0, races_finished: 0, room_races_played: 0, room_races_finished: 0, avg_accuracy: 0 },
+    ],
+  });
+  // 3 of 4 multiplayer races, where every race would have made it 7 of 8.
+  assert.equal(host.querySelector("#t-finish").textContent, "75%");
+  // The tiles beside it still count every stored race.
+  assert.equal(host.querySelector("#t-total").textContent, "8");
+  // The label is part of the markup mountProfile renders into the host.
+  const label = host.innerHTML.match(/id="t-finish">[^<]*<\/div><div class="profile__tile-lbl">([^<]*)</)?.[1];
+  assert.equal(label, "Multiplayer Finish Rate");
+});
+
+test("the finish-rate tile is a dash for a racer who has only raced solo", async () => {
+  const host = await openProfile({
+    ...ME,
+    aggregates: [
+      { difficulty: "easy", races_played: 3, races_finished: 3, room_races_played: 0, room_races_finished: 0, avg_accuracy: 100 },
+    ],
+  });
+  assert.equal(host.querySelector("#t-finish").textContent, "—");
+  assert.equal(host.querySelector("#t-total").textContent, "3");
 });

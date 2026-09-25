@@ -32,10 +32,15 @@ function toIso(value) {
  * withColumnFallback in ../db.js. AVG(CASE WHEN finished = 1 ...) for the
  * problem-time average is deliberate: a quit race's avg_time_per_problem_ms
  * is a mandated 0, and counting it would dilute the pace of finished races.
+ * The room_* counts are what the profile's finish rate reads: a solo race is
+ * only stored once finished (worker/routes/race-result.js), so only a room
+ * race can record a quit.
  */
 const AGGREGATES_SQL = (pointsExpr) => `SELECT difficulty,
         COUNT(*) AS races_played,
         SUM(CASE WHEN finished = 1 THEN 1 ELSE 0 END) AS races_finished,
+        SUM(CASE WHEN room_id IS NOT NULL THEN 1 ELSE 0 END) AS room_races_played,
+        SUM(CASE WHEN room_id IS NOT NULL AND finished = 1 THEN 1 ELSE 0 END) AS room_races_finished,
         MIN(CASE WHEN finished = 1 THEN finish_time_ms END) AS best_time_ms,
         AVG(accuracy_pct) AS avg_accuracy,
         AVG(CASE WHEN finished = 1 THEN avg_time_per_problem_ms END) AS avg_problem_time_ms,
@@ -94,6 +99,8 @@ export async function handleGetMe(request, env) {
         difficulty: d,
         races_played: 0,
         races_finished: 0,
+        room_races_played: 0,
+        room_races_finished: 0,
         best_time_ms: null,
         avg_accuracy: 0,
         avg_problem_time_ms: 0,
@@ -106,6 +113,8 @@ export async function handleGetMe(request, env) {
       difficulty: d,
       races_played: Number(r.races_played) || 0,
       races_finished: Number(r.races_finished) || 0,
+      room_races_played: Number(r.room_races_played) || 0,
+      room_races_finished: Number(r.room_races_finished) || 0,
       best_time_ms: r.best_time_ms == null ? null : Number(r.best_time_ms),
       avg_accuracy: r.avg_accuracy == null ? 0 : Number(r.avg_accuracy),
       avg_problem_time_ms: Math.round(Number(r.avg_problem_time_ms) || 0),

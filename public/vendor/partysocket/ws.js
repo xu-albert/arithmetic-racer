@@ -386,18 +386,12 @@ const partysocket = new PartySocket({
     this._uptimeTimeout = setTimeout(() => this._acceptOpen(), minUptime);
     assert(this._ws, "WebSocket is not defined");
     this._ws.binaryType = this._binaryType;
-    // arithmetic-racer patch: upstream flushes the queue *before* the open
-    // handlers run. Ours is where room-client.js sends `hello`, the message
-    // that gives this socket a seat, so on a reconnect every answer typed while
-    // offline reached the room ahead of it and was dropped for having no seat.
-    // Open handlers first, then the queue. `npm run vendor` overwrites this
-    // file; public/src/partysocket-flush-order.test.js fails if it does.
-    if (this.onopen) this.onopen(event);
-    this.dispatchEvent(cloneEvent(event));
     this._messageQueue.forEach((message) => {
       this._ws?.send(message);
     });
     this._messageQueue = [];
+    if (this.onopen) this.onopen(event);
+    this.dispatchEvent(cloneEvent(event));
   };
   _handleMessage = (event) => {
     this._debug("message event");

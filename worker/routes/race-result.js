@@ -121,9 +121,10 @@ export async function handleRaceResult(request, env) {
     return Response.json({ error: "invalid_body" }, { status: 400 });
   }
 
-  // Only a finished solo race is stored. Quit rows were history nobody read —
-  // the profile already leaves them out of its stats — so current clients stop
-  // sending them (public/src/solo-result.js) and older ones are refused here.
+  // Only a finished solo race is stored: current clients stop sending quits
+  // (public/src/solo-result.js) and older ones are refused here. The profile's
+  // race count, accuracy and history therefore cover finished solo races only,
+  // and its finish rate reads multiplayer rows alone (worker/routes/me.js).
   // Checked after validation, so a malformed quit still reads as invalid, and
   // before the device limit, so a refused quit does not spend its budget.
   // Rows already stored stay as they are, and room races, which a Durable

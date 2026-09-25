@@ -51,6 +51,8 @@
  * @property {Difficulty} difficulty
  * @property {number} races_played
  * @property {number} races_finished
+ * @property {number} room_races_played   multiplayer (room) races only
+ * @property {number} room_races_finished multiplayer (room) races only
  * @property {number|null} best_time_ms
  * @property {number} avg_accuracy        0..100
  * @property {number} avg_problem_time_ms

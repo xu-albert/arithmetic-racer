@@ -1,6 +1,16 @@
 import PartySocket from 'partysocket';
 import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDeviceId } from './identity.js';
 
+// The room reads at most 20 messages per socket per second and drops the rest
+// unread (MAX_MESSAGES_PER_WINDOW / WINDOW_MS in server/socket-limit.js, which
+// the browser cannot import). A reconnect is the one burst this client makes:
+// everything sent while the socket was down goes out at once. So every send is
+// paced here, on the same fixed-window rule, at half the room's budget — two of
+// our windows can land in one of the room's when latency shifts, and twice
+// this still fits.
+export const SEND_BUDGET = 10;
+export const SEND_WINDOW_MS = 1000;
+
 /**
  * @param {object} opts
  * @param {string} opts.roomId
@@ -22,6 +32,32 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
   // the racerId we send in `hello` is a secret and never comes back out.
   let myPlayerId = null;
 
+  // Everything not yet handed to an open socket, oldest first. Held here rather
+  // than in PartySocket's own queue, which flushes on open ahead of `hello` and
+  // all at once: the room drops a message that arrives before `hello` has
+  // seated its socket, and one past the rate limit.
+  const outbox = [];
+  let windowStart = -Infinity;
+  let sentInWindow = 0;
+  let flushTimer = null;
+
+  function flush() {
+    flushTimer = null;
+    while (outbox.length > 0 && ws.readyState === PartySocket.OPEN) {
+      const now = Date.now();
+      if (now - windowStart >= SEND_WINDOW_MS) {
+        windowStart = now;
+        sentInWindow = 0;
+      }
+      if (sentInWindow >= SEND_BUDGET) {
+        flushTimer = setTimeout(flush, windowStart + SEND_WINDOW_MS - now);
+        return;
+      }
+      sentInWindow += 1;
+      ws.send(outbox.shift());
+    }
+  }
+
   ws.addEventListener('open', () => {
     const helloMsg = {
       type: 'hello',
@@ -35,7 +71,11 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
       deviceId: deviceId ?? getOrCreateDeviceId(),
       ...(mode === 'public' && { difficulty }),
     };
-    ws.send(JSON.stringify(helloMsg));
+    // A new socket is a new budget on the room's side, and `hello` leads it.
+    clearTimeout(flushTimer);
+    windowStart = -Infinity;
+    outbox.unshift(JSON.stringify(helloMsg));
+    flush();
   });
 
   ws.addEventListener('message', (e) => {
@@ -57,9 +97,12 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
       return () => listeners.delete(handler);
     },
     send(msg) {
-      ws.send(JSON.stringify(msg));
+      outbox.push(JSON.stringify(msg));
+      if (flushTimer == null) flush();
     },
     close() {
+      clearTimeout(flushTimer);
+      flushTimer = null;
       ws.close();
     },
     get readyState() {

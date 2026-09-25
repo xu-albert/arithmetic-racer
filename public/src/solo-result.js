@@ -2,11 +2,12 @@
 // (RaceResultInput in worker/api-contracts.js), built from the solo runner's
 // state at its `finish` event.
 //
-// A quit reports nothing. The profile already leaves quit races out of its
-// stats, so a solo quit row is history nobody reads, and the route refuses
-// unfinished solo bodies now anyway (worker/routes/race-result.js). Room races
-// are not reported here at all — their rooms write their own rows, quits
-// included.
+// A quit reports nothing: only finished solo races are stored, and the route
+// refuses unfinished solo bodies (worker/routes/race-result.js). So solo quits
+// never reach the profile — its race count, accuracy and history cover the
+// solo races that were finished, and its finish rate counts multiplayer races
+// only. Room races are not reported here at all — their rooms write their own
+// rows, quits included.
 export function soloResultPayload({ runner, difficulty, deviceId }) {
   const player = runner.racers.find((r) => !r.isBot);
   if (!player || player.score < runner.raceLength) return null;
