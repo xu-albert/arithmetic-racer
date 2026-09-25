@@ -130,3 +130,114 @@ it('ten private-room players join, race concurrently, receive all standings, and
     for (const client of clients) client.close();
   }
 }, 20_000);
+
+it('refuses an 11th new racer in lobby and finished states, but still accepts a seated reconnect', async () => {
+  const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
+  const { roomId } = await created.json();
+  const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
+  const clients = [];
+  const racerIds = [];
+  try {
+    for (let i = 0; i < 10; i++) {
+      const c = await connect(roomId);
+      clients.push(c);
+      racerIds.push(crypto.randomUUID());
+      c.send({ type: 'hello', playerId: racerIds[i], handle: `Racer${i + 1}` });
+      await c.wait((m) => m.type === 'hello-ack');
+    }
+    const refuse = async () => {
+      const extra = await connect(roomId);
+      extra.send({ type: 'hello', playerId: crypto.randomUUID(), handle: 'Late' });
+      const err = await extra.wait((m) => m.type === 'error');
+      expect(err.code).toBe('ROOM_FULL');
+      expect(extra.messages.some((m) => m.type === 'hello-ack')).toBe(false);
+      extra.close();
+    };
+    await refuse();
+    await runInDurableObject(stub, async (room) => {
+      expect(room.state.players).toHaveLength(10);
+      room.state.state = 'finished';
+    });
+    await refuse();
+
+    const again = await connect(roomId);
+    again.send({ type: 'hello', playerId: racerIds[3], handle: 'Racer4' });
+    await again.wait((m) => m.type === 'hello-ack');
+    await runInDurableObject(stub, async (room) => {
+      expect(room.state.players).toHaveLength(10);
+    });
+    again.close();
+  } finally {
+    for (const c of clients) c.close();
+  }
+});
+
+it('a departed seat keeps its place until rematch: replacement refused, original reconnects, never more than ten seats', async () => {
+  const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
+  const { roomId } = await created.json();
+  const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
+  const clients = [];
+  const racerIds = [];
+  try {
+    for (let i = 0; i < 10; i++) {
+      const c = await connect(roomId);
+      clients.push(c);
+      racerIds.push(crypto.randomUUID());
+      c.send({ type: 'hello', playerId: racerIds[i], handle: `Racer${i + 1}` });
+      c.playerId = (await c.wait((m) => m.type === 'hello-ack')).playerId;
+    }
+    const leaver = clients[9];
+    leaver.close();
+    await runInDurableObject(stub, async (room) => {
+      room.state.state = 'racing';
+      room.state.raceStartedAt = Date.now();
+      await room.onAlarm();
+      room.state.disconnectDeadlines[leaver.playerId] = Date.now() - 1;
+      await room.onAlarm();
+      room.state.state = 'finished';
+    });
+
+    // The departed seat still holds its place: a replacement is refused.
+    const newcomer = await connect(roomId);
+    clients.push(newcomer);
+    newcomer.send({ type: 'hello', playerId: crypto.randomUUID(), handle: 'Replacement' });
+    expect((await newcomer.wait((m) => m.type === 'error')).code).toBe('ROOM_FULL');
+
+    // Its racer reconnects (cap-exempt) into the same seat.
+    const back = await connect(roomId);
+    clients.push(back);
+    back.send({ type: 'hello', playerId: racerIds[9], handle: 'Racer10' });
+    expect((await back.wait((m) => m.type === 'hello-ack')).playerId).toBe(leaver.playerId);
+    await runInDurableObject(stub, async (room) => {
+      expect(room.state.players).toHaveLength(10);
+    });
+
+    clients[0].send({ type: 'rematch' });
+    await clients[0].wait((m) => m.type === 'state' && m.state.state === 'lobby'
+      && m.state.players.length === 10);
+    clients[0].send({ type: 'start-race' });
+    const countdown = await clients[0].wait((m) => m.type === 'state' && m.state.state === 'countdown');
+    expect(countdown.state.players).toHaveLength(10);
+
+    // A seat that never returns is pruned on rematch, freeing its place.
+    await runInDurableObject(stub, async (room) => {
+      room.state.state = 'racing';
+      room.state.raceStartedAt = Date.now();
+      room.state.disconnectDeadlines[leaver.playerId] = Date.now() - 1;
+      await room.onAlarm();
+      room.state.state = 'finished';
+      expect(room.state.players).toHaveLength(10);
+    });
+    clients[0].send({ type: 'rematch' });
+    const lobby2 = await clients[0].wait((m) => m.type === 'state' && m.state.state === 'lobby'
+      && m.state.players.length === 9);
+    expect(lobby2.state.players.map((p) => p.id)).not.toContain(leaver.playerId);
+    newcomer.close();
+    const fresh = await connect(roomId);
+    clients.push(fresh);
+    fresh.send({ type: 'hello', playerId: crypto.randomUUID(), handle: 'Replacement' });
+    await fresh.wait((m) => m.type === 'hello-ack');
+  } finally {
+    for (const c of clients) c.close();
+  }
+}, 20_000);
