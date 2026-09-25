@@ -316,7 +316,7 @@ export async function handlePostUsername(request, env) {
   }
   const username = body && typeof body === "object" ? body.username : undefined;
   // deviceId is optional; only sent on first-username-set after Google OAuth
-  // signup. Used to attribute prior anon races to this user (the email/password
+  // signup. Used to attribute recent anon races to this user (the email/password
   // signup path runs the claim from auth.js's databaseHooks instead).
   const deviceId = body && typeof body === "object" ? body.deviceId : undefined;
 
@@ -350,7 +350,7 @@ export async function handlePostUsername(request, env) {
 
   if (wasUnset && deviceId) {
     try {
-      await runClaim(env, userId, deviceId);
+      await runClaim(env, userId, deviceId, { source: "first_username_set" });
     } catch (err) {
       // Don't fail the rename on a claim hiccup; the user has their name set.
       logError(KINDS.CLAIM_FAILED, err, { trigger: "first_username_set", userId });

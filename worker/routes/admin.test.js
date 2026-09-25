@@ -885,3 +885,92 @@ describe("admin dashboard — database still on the pre-0008 schema", () => {
     }
   });
 });
+
+describe("admin dashboard — history claims", () => {
+  // Single-line: D1's exec() runs one statement per line. Same shape as
+  // migrations/0010_history_claims.sql, restored after the missing-table case.
+  const HISTORY_CLAIMS_DDL =
+    "CREATE TABLE IF NOT EXISTS history_claims (" +
+    "id TEXT PRIMARY KEY, " +
+    `user_id TEXT REFERENCES "user"(id) ON DELETE SET NULL, ` +
+    "device_id TEXT NOT NULL, " +
+    "source TEXT NOT NULL CHECK (source IN ('signup', 'first_username_set')), " +
+    "claimed INTEGER NOT NULL, " +
+    "left_unclaimed INTEGER NOT NULL, " +
+    "created_at INTEGER NOT NULL" +
+    ")";
+
+  beforeEach(async () => {
+    await env.DB.exec("DELETE FROM history_claims");
+  });
+
+  async function seedUser(id, username) {
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", username) VALUES (?, ?, ?, 0, ?, ?, ?)`
+    ).bind(id, username, `${id}@example.com`, now, now, username).run();
+  }
+
+  async function insertClaim({ user_id, device_id, source = "signup", claimed = 0, left_unclaimed = 0, created_at = Date.now() }) {
+    await env.DB.prepare(
+      "INSERT INTO history_claims (id, user_id, device_id, source, claimed, left_unclaimed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).bind(crypto.randomUUID(), user_id, device_id, source, claimed, left_unclaimed, created_at).run();
+  }
+
+  function claimsSection(body) {
+    return body.slice(body.indexOf("<h2>History claims</h2>"));
+  }
+
+  it("lists a claim with its account, device, source and counts", async () => {
+    await seedUser("u-claim", "claimer");
+    await insertClaim({ user_id: "u-claim", device_id: "dev-abc", claimed: 4, left_unclaimed: 2 });
+
+    const section = claimsSection(await dashboard());
+    expect(section).toContain("claimer");
+    expect(section).toContain("/admin/users/u-claim?token=t");
+    expect(section).toContain("dev-abc");
+    expect(section).toContain("signup");
+    expect(section).toContain(`<td class="n">4</td>`);
+    expect(section).toContain(`<td class="n">2</td>`);
+    expect(section).not.toContain("other account");
+  });
+
+  it("flags a device that more than one account has presented", async () => {
+    await seedUser("u-a", "first");
+    await seedUser("u-b", "second");
+    await insertClaim({ user_id: "u-a", device_id: "dev-shared", claimed: 3 });
+    await insertClaim({ user_id: "u-b", device_id: "dev-shared", source: "first_username_set" });
+    await insertClaim({ user_id: "u-b", device_id: "dev-own" });
+
+    const section = claimsSection(await dashboard());
+    expect(section.match(/also claimed by 1 other account</g)).toHaveLength(2);
+    expect(section).toContain("dev-own</code></td>");
+  });
+
+  it("escapes the device id, which comes from a request body", async () => {
+    await seedUser("u-x", "xss");
+    await insertClaim({ user_id: "u-x", device_id: "<script>alert(1)</script>" });
+
+    const section = claimsSection(await dashboard());
+    expect(section).not.toContain("<script>alert(1)</script>");
+    expect(section).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+  });
+
+  it("renders an empty state rather than failing", async () => {
+    expect(claimsSection(await dashboard())).toContain("No history claims");
+  });
+
+  it("still renders the dashboard before migration 0010 is applied", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await env.DB.exec("DROP TABLE history_claims");
+    try {
+      const res = await handleAdminIndex(new Request("https://x/admin/?token=t"), { ...env, ADMIN_TOKEN: "t" });
+      expect(res.status).toBe(200);
+      expect(claimsSection(await res.text())).toContain("No history claims");
+      expect(warn.mock.calls.some(([line]) => String(line).includes(KINDS.CLAIM_LOG_DB))).toBe(true);
+    } finally {
+      await env.DB.exec(HISTORY_CLAIMS_DDL);
+      warn.mockRestore();
+    }
+  });
+});
