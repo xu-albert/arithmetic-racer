@@ -41,14 +41,6 @@
     { "tag": "v1", "new_sqlite_classes": ["RaceRoom"] },
     { "tag": "v2", "new_sqlite_classes": ["PublicRaceRoom", "LobbyRouter"] }
   ],
-  // CONTACT_LIMITS deliberately points at the same namespace as
-  // MATCHMAKING_LIMITS: the two use disjoint key prefixes (`rl:`/`queue-lock:`
-  // vs `contact-rl:`), and a second binding avoids provisioning a namespace for
-  // what is a handful of keys. Split them if contact volume ever warrants it.
-  "kv_namespaces": [
-    { "binding": "MATCHMAKING_LIMITS", "id": "11bbfc11f5504dab944ebc4d69bb91f0" },
-    { "binding": "CONTACT_LIMITS", "id": "11bbfc11f5504dab944ebc4d69bb91f0" }
-  ],
   // Rate limiting for the public routes — POST /api/race-result and, further
   // down, GET /api/leaderboard. `period` accepts only 10 or 60, and counters
   // are per-colo — so these are floors on what a distributed client can send,
@@ -103,6 +95,18 @@
       "name": "LEADERBOARD_IP_LIMIT",
       "namespace_id": "1003",
       "simple": { "limit": 900, "period": 60 }
+    },
+    // Quick-match join throttle: 3 joins per device per minute.
+    {
+      "name": "MATCHMAKING_LIMIT",
+      "namespace_id": "1004",
+      "simple": { "limit": 3, "period": 60 }
+    },
+    // Contact form: 1 message per IP per minute (the binding has no hourly window).
+    {
+      "name": "CONTACT_IP_LIMIT",
+      "namespace_id": "1005",
+      "simple": { "limit": 1, "period": 60 }
     }
   ],
   // obscenity ships a broken ESM wrapper at dist/index.mjs (does
@@ -148,10 +152,6 @@
         { "tag": "v1", "new_sqlite_classes": ["RaceRoom"] },
         { "tag": "v2", "new_sqlite_classes": ["PublicRaceRoom", "LobbyRouter"] }
       ],
-      "kv_namespaces": [
-        { "binding": "MATCHMAKING_LIMITS", "id": "89de56ccf71f43da91064d59d010f2c1" },
-        { "binding": "CONTACT_LIMITS", "id": "89de56ccf71f43da91064d59d010f2c1" }
-      ],
       // Repeated for the same reason as observability above: named envs do not
       // inherit top-level config, so omitting this ships preview with no
       // limiter and — worse — makes the seam fail open there silently.
@@ -170,7 +170,9 @@
           "name": "LEADERBOARD_IP_LIMIT",
           "namespace_id": "2003",
           "simple": { "limit": 900, "period": 60 }
-        }
+        },
+        { "name": "MATCHMAKING_LIMIT", "namespace_id": "2004", "simple": { "limit": 3, "period": 60 } },
+        { "name": "CONTACT_IP_LIMIT", "namespace_id": "2005", "simple": { "limit": 1, "period": 60 } }
       ],
       "alias": {
         "obscenity": "./node_modules/obscenity/dist/index.js"

@@ -4,8 +4,6 @@ import { handleMatchmakeJoin } from "./matchmake.js";
 
 describe("matchmaking e2e — POST → router → PublicRaceRoom", () => {
   beforeEach(async () => {
-    const list = await env.MATCHMAKING_LIMITS.list();
-    for (const k of list.keys) await env.MATCHMAKING_LIMITS.delete(k.name);
     await env.DB.exec("DELETE FROM race_results");
   });
 

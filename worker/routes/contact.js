@@ -23,6 +23,7 @@
 
 import { readUserId } from "../session.js";
 import { sendTransactional } from "../email.js";
+import { allowRequest } from "../rate-limit.js";
 import { isMissingColumnError } from "../db.js";
 import { logError, logWarn, KINDS } from "../logger.js";
 import { describeUserAgent } from "../user-agent.js";
@@ -43,10 +44,10 @@ const MAX_BUG_WHERE_LEN = 200;
 // Cap from the same declaration as the rest of the snapshot.
 const MAX_DEVICE_ID_LEN = bugContextField("device_id").maxLength;
 
-// Workers KV requires expirationTtl >= 60s. Three messages an hour per IP is
-// far above any genuine use and well below what makes spamming worthwhile.
-const RATE_LIMIT_MAX = 3;
-const RATE_LIMIT_WINDOW_S = 3600;
+// The native rate-limit binding only offers 10s or 60s windows, so the old
+// three-an-hour cap is restated as the strictest per-minute value
+// (CONTACT_IP_LIMIT in wrangler.jsonc): one message a minute per IP.
+const RATE_LIMIT_WINDOW_S = 60;
 
 // Deliberately permissive: this only catches obvious typos so we can tell the
 // user immediately. Real validation of an address is whether mail to it works.
@@ -220,8 +221,9 @@ export async function handleContact(request, env, deps = {}) {
   }
 
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-  const limited = await isRateLimited(env, ip);
-  if (limited) {
+  // Fails open: contact is the only route for deletion requests, so dropping a
+  // message because the limiter is unavailable is worse than letting one through.
+  if (!(await allowRequest(env.CONTACT_IP_LIMIT, `contact-rl:${ip}`, "CONTACT_IP_LIMIT"))) {
     return Response.json(
       { error: "rate_limited" },
       { status: 429, headers: { "retry-after": String(RATE_LIMIT_WINDOW_S) } }
@@ -269,24 +271,4 @@ export async function handleContact(request, env, deps = {}) {
   }
 
   return Response.json({ id, ok: true });
-}
-
-/**
- * Per-IP counter in KV. Fails **open**: contact is the only route for deletion
- * requests, so dropping a message because the limiter is unavailable is worse
- * than letting an extra one through.
- */
-async function isRateLimited(env, ip) {
-  const store = env.CONTACT_LIMITS;
-  if (!store) return false;
-  const key = `contact-rl:${ip}`;
-  try {
-    const count = parseInt((await store.get(key)) || "0", 10);
-    if (count >= RATE_LIMIT_MAX) return true;
-    await store.put(key, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_S });
-    return false;
-  } catch (err) {
-    logWarn(KINDS.CONTACT_RATE_LIMIT, err, { outcome: "failed_open" });
-    return false;
-  }
 }
