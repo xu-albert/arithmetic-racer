@@ -60,10 +60,14 @@
 //    and persisted on user creation; we then validate it in the create hook.
 
 import { betterAuth } from "better-auth";
-import { APIError, getOAuthState } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { sendResetEmail, sendWelcomeEmail } from "./email.js";
 import { validateUsernameSync } from "./username-validator.js";
 import { logError, KINDS } from "./logger.js";
+
+// The error code a refused Google link reaches the client with. The client's
+// mapAuthError (public/src/auth.js) turns it into the explanation.
+const LINK_REFUSED = "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL";
 
 /**
  * Build the auth instance against the Worker's D1 binding and env secrets.
@@ -73,6 +77,10 @@ import { logError, KINDS } from "./logger.js";
  * @returns {ReturnType<typeof betterAuth>}
  */
 export function getAuth(env) {
+  // Requests whose OAuth link the account hook refused, so the after hook can
+  // name the reason better-auth's own error redirect drops.
+  const refusedLinks = new WeakSet();
+
   return betterAuth({
     // The kysely-adapter auto-detects a Cloudflare D1 binding (objects with
     // `batch`, `exec`, and `prepare`) and uses its built-in D1SqliteDialect.
@@ -92,6 +100,18 @@ export function getAuth(env) {
       sendResetPassword: async ({ user, url }) => {
         await sendResetEmail(env, { to: user.email, resetUrl: url });
       },
+      // Only whoever reads the address can use a reset link, so a completed
+      // reset is the proof of ownership sign-up never asked for. It is what
+      // lets the owner of a squatted address take it back: the reset verifies
+      // the email (opening Google sign-in to this account) and ends every
+      // session, the squatter's included.
+      onPasswordReset: async ({ user }) => {
+        await env.DB
+          .prepare(`UPDATE "user" SET "emailVerified" = 1 WHERE id = ?`)
+          .bind(user.id)
+          .run();
+      },
+      revokeSessionsOnPasswordReset: true,
     },
 
     socialProviders: {
@@ -178,50 +198,62 @@ export function getAuth(env) {
       },
       account: {
         create: {
-          before: async (account) => {
-            await refuseLinkIntoUnverifiedUser(env, account);
+          before: async (account, ctx) => {
+            if (!(await linksIntoUnverifiedUser(env, account))) return;
+            if (ctx?.request) refusedLinks.add(ctx.request);
+            throw new APIError("FORBIDDEN", {
+              message: "account_link_requires_verified_email",
+              code: LINK_REFUSED,
+            });
           },
         },
       },
+    },
+
+    hooks: {
+      // better-auth reports the refusal above as a generic
+      // `error=unable_to_link_account` on its error redirect. Name the real
+      // reason instead, so the client can tell the user what to do.
+      after: createAuthMiddleware(async (ctx) => {
+        if (!refusedLinks.has(ctx.request)) return;
+        const location = ctx.context.responseHeaders?.get("location");
+        if (!location) return;
+        const url = new URL(location, ctx.context.baseURL);
+        url.searchParams.set("error", LINK_REFUSED);
+        throw ctx.redirect(url.href);
+      }),
     },
   });
 }
 
 /**
- * Refuse to attach an OAuth identity to an existing user whose email was never
- * verified.
+ * Whether creating this account would attach an OAuth identity to an existing
+ * user whose email was never verified — the join the account hook refuses.
  *
  * better-auth 1.6.9 signs a Google user in by email: if a user row already has
  * that address, it links the Google account into it and marks the email
  * verified (`handleOAuthUserInfo` in oauth2/link-account.mjs), trusting only
- * Google's claim and never the local row's. Nothing here verifies email on
- * sign-up, so anyone can register a password account under someone else's
- * address, wait for the owner to sign in with Google, and keep a password that
- * opens the owner's account. 1.7 closes this upstream with
+ * Google's claim and never the local row's. Nothing verifies email on sign-up,
+ * so anyone can register a password account under someone else's address,
+ * wait for the owner to sign in with Google, and keep a password that opens
+ * the owner's account. 1.7 closes this upstream with
  * `accountLinking.requireLocalEmailVerified` (default on); 1.6.9 has no such
  * setting, and `disableImplicitLinking` would also refuse verified users.
  *
- * Throwing is the refusal: the link sits in a try/catch that returns "unable
- * to link account" before the emailVerified update or any session is created.
- * Returning `false` would not do — 1.6.9 ignores a null link and signs in anyway.
+ * The hook's throw is the refusal: the link sits in a try/catch that returns
+ * "unable to link account" before the emailVerified update or any session is
+ * created. Returning `false` from the hook would not do — 1.6.9 ignores a null
+ * link and signs in anyway.
  *
- * Passed through:
- *   - credential accounts (email sign-up, password reset) — not an OAuth join;
- *   - explicit linking (`/link-social`), where the user is signed in to the
- *     target account and better-auth demands the provider email match it;
+ * Not a join:
+ *   - credential accounts (email sign-up, password reset);
  *   - a user with no accounts yet, which is `createOAuthUser` minting a new
  *     user and its first account in the same request.
+ * The only way into a squatted address is a password reset, which verifies it
+ * (`onPasswordReset` above).
  */
-async function refuseLinkIntoUnverifiedUser(env, account) {
-  if (account.providerId === "credential") return;
-
-  let oauthState = null;
-  try {
-    oauthState = await getOAuthState();
-  } catch {
-    // No request state (not inside an auth endpoint): not an explicit link.
-  }
-  if (oauthState?.link) return;
+async function linksIntoUnverifiedUser(env, account) {
+  if (account.providerId === "credential") return false;
 
   const target = await env.DB
     .prepare(
@@ -231,12 +263,7 @@ async function refuseLinkIntoUnverifiedUser(env, account) {
     )
     .bind(account.userId)
     .first();
-  if (target && (target.verified || target.accounts === 0)) return;
-
-  throw new APIError("FORBIDDEN", {
-    message: "account_link_requires_verified_email",
-    code: "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL",
-  });
+  return !(target && (target.verified || target.accounts === 0));
 }
 
 /**
