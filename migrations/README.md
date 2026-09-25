@@ -15,12 +15,12 @@ The preview deploy that Cloudflare Workers Builds runs on every PR
 
 ## Adding a migration
 
-1. Add the new numbered file, e.g. `0010_add_thing.sql`.
+1. Add the new numbered file, e.g. `0011_add_thing.sql`.
 2. Apply it to **both** databases:
 
    ```sh
-   npm run migrate:prod    -- --file=migrations/0010_add_thing.sql
-   npm run migrate:preview -- --file=migrations/0010_add_thing.sql
+   npm run migrate:prod    -- --file=migrations/0011_add_thing.sql
+   npm run migrate:preview -- --file=migrations/0011_add_thing.sql
    ```
 
 3. Confirm both databases match this directory:
