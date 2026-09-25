@@ -938,10 +938,11 @@ export class RaceRoom extends Server {
     // next one. Taken before the `finish` broadcast, so nothing a client sends
     // in reply to it can reach the room first.
     this.state.lastRace = { difficulty: this.state.difficulty, raceLength: this.state.raceLength };
-    // A host who departed mid-race still holds isCreator on their kept seat.
-    // The finished room is exactly where the host's one remaining power
-    // (rematch) matters, so succession cannot wait past this point — and the
-    // finish broadcast below carries the new flag to every client.
+    // Not a succession point: every live transition (reconnect, fresh join,
+    // mid-race departure, splice) already hands the flag on. This migrates a
+    // room the previous build persisted mid-race, whose departed host seat
+    // still carries isCreator — the finished room is where rematch needs a
+    // live host, and the finish broadcast below carries the flag to clients.
     this.ensureLiveCreator();
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
