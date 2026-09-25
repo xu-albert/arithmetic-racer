@@ -398,6 +398,29 @@ describe("PublicRaceRoom auto-start sequence", () => {
     });
   });
 
+  it("stamps the room's clock on race-start, bot-timelines and every state snapshot", async () => {
+    // Clients read race time off raceStartedAt, which is on this clock, not
+    // their own; serverNow is what they estimate the difference from.
+    await withRoom("test-server-now-" + crypto.randomUUID(), async (room) => {
+      const broadcasts = [];
+      room.broadcast = (s) => broadcasts.push(JSON.parse(s));
+      await room.handleHello(makeConn(), { type: "hello", playerId: crypto.randomUUID(), handle: "A", difficulty: "medium" });
+      room.state.autoStartDeadline = Date.now() - 10;
+      await room.onAlarm();
+      while (room.state.state === "countdown") {
+        room.state.countdownAt = Date.now() - 10;
+        await room.onAlarm();
+      }
+      for (const type of ["race-start", "bot-timelines"]) {
+        const msg = broadcasts.find((m) => m.type === type);
+        expect(msg.serverNow).toBeGreaterThanOrEqual(room.state.raceStartedAt);
+        expect(msg.serverNow).toBeLessThanOrEqual(Date.now());
+      }
+      const before = Date.now();
+      expect(room.publicState().serverNow).toBeGreaterThanOrEqual(before);
+    });
+  });
+
   it("computed botTimelines match the pure helper", async () => {
     await withRoom("test-match-" + crypto.randomUUID(), async (room) => {
       const playerId = crypto.randomUUID();
@@ -450,6 +473,38 @@ describe("PublicRaceRoom.finishRace — bot finalization", () => {
       expect(b2.finishMs).toBeNull();
       expect(b2.dnf).toBe(true);
       expect(room.state.state).toBe("finished");
+    });
+  });
+
+  it("keeps the bots' final rows on lastRace, so a finished snapshot still carries the podium", async () => {
+    // A socket that misses `finish` reconnects into the snapshot, and the bots
+    // have left state.players by then; without these rows the client can only
+    // guess at them from its own replay of the timelines.
+    await withRoom("test-finish-botrows-" + crypto.randomUUID(), async (room) => {
+      const broadcasts = [];
+      room.broadcast = (s) => broadcasts.push(JSON.parse(s));
+      room.state.raceLength = 10;
+      room.state.raceStartedAt = 1000;
+      room.state.state = "racing";
+      room.state.botTimelines = [
+        [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+        [200, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000],
+      ];
+      room.state.players = [
+        { id: "h-1", isBot: false, score: 10, dropped: false, finishMs: 1100, dnf: false },
+        { id: "b-1", isBot: true, tier: "fast", handle: "Bot One", score: 0, dropped: false, finishMs: null, dnf: false },
+        { id: "b-2", isBot: true, tier: "slow", handle: "Bot Two", score: 0, dropped: false, finishMs: null, dnf: false },
+      ];
+      room.finishRace(1100);
+
+      const snapshot = room.publicState();
+      expect(snapshot.players.map((p) => p.id)).toEqual(["h-1"]);
+      const finish = broadcasts.find((m) => m.type === "finish");
+      const finishBots = finish.rankings.filter((p) => p.isBot);
+      expect(snapshot.lastRace.botRows).toEqual(expect.arrayContaining(finishBots));
+      expect(snapshot.lastRace.botRows).toHaveLength(2);
+      expect(snapshot.lastRace.botRows.find((p) => p.id === "b-2"))
+        .toMatchObject({ isBot: true, tier: "slow", score: 5, finishMs: null, dnf: true });
     });
   });
 

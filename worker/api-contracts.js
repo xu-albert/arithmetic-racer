@@ -15,6 +15,8 @@
  * POST /api/race-result
  * Body: RaceResultInput
  * Response: { id: string, claimed: boolean }
+ * Response (422): { error: 'unfinished_not_stored' } for `finished: false` —
+ *   only finished solo races are stored.
  *
  * @typedef {Object} RaceResultInput
  * @property {string} device_id           UUID v4 from localStorage

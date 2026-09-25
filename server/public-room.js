@@ -145,6 +145,7 @@ export class PublicRaceRoom extends RaceRoom {
         botTiers: this.state.botTiers,
         botTimelines: this.state.botTimelines,
         raceStartedAt: this.state.raceStartedAt,
+        serverNow: Date.now(),
       }));
     }
   }
@@ -225,7 +226,15 @@ export class PublicRaceRoom extends RaceRoom {
     // Same pin as the base room: what this race actually was, taken before the
     // `finish` broadcast. Config is locked here, but persistResults reads the
     // pin like every other writer rather than trusting live state.
-    this.state.lastRace = { difficulty: this.state.difficulty, raceLength: this.state.raceLength };
+    this.state.lastRace = {
+      difficulty: this.state.difficulty,
+      raceLength: this.state.raceLength,
+      // The bots' final rows, as `finish` ranks them. The bots leave
+      // `state.players` below, so a socket that missed `finish` and reconnects
+      // into the `finished` snapshot would otherwise have only its own replay
+      // of the timelines to put them on the podium with.
+      botRows: bots.map(publicPlayer),
+    };
     const rankings = rankPlayers(this.state.players);
     // Mirror the base RaceRoom: strip identity (deviceId/userId, and the
     // racerId reconnect secret) plus server-only counters before the rankings
