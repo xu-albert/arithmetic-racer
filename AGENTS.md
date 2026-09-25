@@ -316,7 +316,8 @@ whole shape of the lifecycle, and every part of it follows:
   so the budget runs from *their* finish. Issuing at race end would aim the
   clock at whoever waited longest for the stragglers — which is always the fast
   racer the feature exists to check.
-- Only their own answers or their own deadline settle it. `handleRematch`,
+- Only their own answers, their own deadline, or their own next challenge
+  (settled as `captcha_superseded`) settle it. `handleRematch`,
   `removePlayer` and a room reset all leave it alone; `resetForRace` explicitly
   does not clear `captchaChallenges`. A host must not be able to fail a guest's
   verification by clicking Race Again.
