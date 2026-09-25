@@ -69,16 +69,19 @@ function post(body, headers = {}) {
   });
 }
 
-/** env with notification configured and a stub KV that never rate-limits. */
+/** env with notification configured and a stub limiter allowing 3 per key. */
 function testEnv(overrides = {}) {
-  const store = new Map();
+  const counts = new Map();
   return {
     ...env,
     LOOPS_TEMPLATE_CONTACT: "contact-notification",
     CONTACT_EMAIL: "owner@example.test",
-    CONTACT_LIMITS: {
-      get: async (k) => store.get(k) ?? null,
-      put: async (k, v) => void store.set(k, v),
+    CONTACT_IP_LIMIT: {
+      limit: async ({ key }) => {
+        const n = (counts.get(key) ?? 0) + 1;
+        counts.set(key, n);
+        return { success: n <= 3 };
+      },
     },
     ...overrides,
   };
@@ -585,14 +588,11 @@ describe("POST /api/contact — rate limiting", () => {
     expect(other.status).toBe(200);
   });
 
-  it("accepts the submission when the rate-limit store is unavailable", async () => {
-    // Failing open: a KV outage should not silently swallow contact messages,
+  it("accepts the submission when the limiter is unavailable", async () => {
+    // Failing open: a limiter outage should not silently swallow contact messages,
     // which are the only channel for deletion requests.
     const e = testEnv({
-      CONTACT_LIMITS: {
-        get: async () => { throw new Error("kv down"); },
-        put: async () => { throw new Error("kv down"); },
-      },
+      CONTACT_IP_LIMIT: { limit: async () => { throw new Error("limiter down"); } },
     });
     const res = await handleContact(post({ message: "hi" }), e);
     expect(res.status).toBe(200);

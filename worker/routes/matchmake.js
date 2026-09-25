@@ -2,20 +2,20 @@
 //
 // Flow:
 //   1. Validate body { difficulty, device_id }.
-//   2. Rate-limit per device_id via KV (3 calls per 60s window).
-//   3. Check KV queue-lock for this device; if set, return cached roomId.
-//   4. Call LobbyRouter.pick() for the difficulty's router DO.
-//   5. Set KV queue-lock with 60s TTL.
-//   6. Return { roomId, mode: 'public', difficulty }.
+//   2. Rate-limit per device_id via the MATCHMAKING_LIMIT binding (3 per 60s).
+//   3. Ask the difficulty's LobbyRouter DO for the current open room.
+//   4. Return { roomId, mode: 'public', difficulty }.
+//
+// There is deliberately no per-device "queue-lock". It used to cache the last
+// roomId in KV and return it only when it equalled the router's fresh pick —
+// which is the value returned anyway, so it changed no response and cost a KV
+// read+write per join against the free daily quota.
 
-import { logWarn, KINDS } from "../logger.js";
+import { allowRequest } from "../rate-limit.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
-const RATE_LIMIT_MAX = 3;
-// Workers KV requires expirationTtl >= 60s. 3 joins per minute per device is
-// well below any legitimate user pattern and still throttles abuse.
+// Native rate-limit binding periods are 10 or 60s only; must match wrangler.jsonc.
 const RATE_LIMIT_WINDOW_S = 60;
-const QUEUE_LOCK_TTL_S = 60;
 
 export async function handleMatchmakeJoin(request, env) {
   let body;
@@ -33,27 +33,14 @@ export async function handleMatchmakeJoin(request, env) {
   }
   const { difficulty, device_id } = body;
 
-  // Rate limit
-  const rlKey = `rl:${device_id}`;
-  try {
-    const count = parseInt((await env.MATCHMAKING_LIMITS.get(rlKey)) || "0", 10);
-    if (count >= RATE_LIMIT_MAX) {
-      return new Response(JSON.stringify({ error: "rate_limited" }), {
-        status: 429,
-        headers: { "content-type": "application/json", "retry-after": String(RATE_LIMIT_WINDOW_S) },
-      });
-    }
-    await env.MATCHMAKING_LIMITS.put(rlKey, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_S });
-  } catch (e) {
-    logWarn(KINDS.MATCHMAKING_KV, e, { op: "rate_limit", device_id, outcome: "proceeding" });
+  // Fails open (allowRequest): a missing or broken limiter must not block play.
+  if (!(await allowRequest(env.MATCHMAKING_LIMIT, `rl:${device_id}`, "MATCHMAKING_LIMIT"))) {
+    return new Response(JSON.stringify({ error: "rate_limited" }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": String(RATE_LIMIT_WINDOW_S) },
+    });
   }
 
-  // Queue-lock — keyed by (device, difficulty) so picking a different
-  // difficulty after cancelling doesn't route back to the old room and
-  // trigger BAD_DIFFICULTY at the WS layer (bug_001).
-  const lockKey = `queue-lock:${device_id}:${difficulty}`;
-
-  // Router pick — call first so we have the authoritative current room.
   let roomId;
   try {
     const stub = env.LobbyRouter.get(env.LobbyRouter.idFromName(difficulty));
@@ -61,25 +48,6 @@ export async function handleMatchmakeJoin(request, env) {
     roomId = result.roomId;
   } catch (e) {
     return Response.json({ error: "router_unavailable" }, { status: 503, headers: { "retry-after": "1" } });
-  }
-
-  // Revalidate any cached lock against the router's current pick. If the
-  // cached roomId differs, it's stale (room auto-started, filled to 6,
-  // or emptied) and the router already gave us the fresh roomId — use it.
-  try {
-    const cached = await env.MATCHMAKING_LIMITS.get(lockKey);
-    if (cached && cached === roomId) {
-      return Response.json({ roomId: cached, mode: "public", difficulty });
-    }
-  } catch (e) {
-    logWarn(KINDS.MATCHMAKING_KV, e, { op: "queue_lock_get", device_id, difficulty, outcome: "proceeding" });
-  }
-
-  // Set queue-lock (best-effort)
-  try {
-    await env.MATCHMAKING_LIMITS.put(lockKey, roomId, { expirationTtl: QUEUE_LOCK_TTL_S });
-  } catch (e) {
-    logWarn(KINDS.MATCHMAKING_KV, e, { op: "queue_lock_put", device_id, difficulty, roomId });
   }
 
   return Response.json({ roomId, mode: "public", difficulty });
