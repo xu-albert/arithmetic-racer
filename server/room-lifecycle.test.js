@@ -6,7 +6,7 @@
 // finished departure) or marked departed (mid-race, where the seat is kept for
 // its result row) — not a socket inside its 30s reconnect grace, which keeps
 // everything about the seat, badge included. A mid-race departure succeeds at
-// removePlayer, and at the latest by finishRace: a finished room whose only
+// removePlayer, before the race ends: a finished room whose only
 // creator is gone can never rematch (NOT_CREATOR), the dead-end the ten-seat
 // re-review found on main. Succession is final: a reconnecting ex-host returns
 // as an ordinary player — unless nobody present held the flag, in which case it
@@ -177,7 +177,7 @@ describe("creator succession — the next-longest-present player inherits the ho
     });
   });
 
-  it("a mid-race departure succeeds by finishRace, so the finished room can rematch (E1)", async () => {
+  it("a mid-race departure succeeds at once, so the finished room can rematch (E1)", async () => {
     const host = makeConn("host");
     const guest = makeConn("guest");
     await withRoom([host, guest], async (room) => {
