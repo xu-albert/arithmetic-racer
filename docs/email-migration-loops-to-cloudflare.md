@@ -73,8 +73,8 @@ Three send paths, all funnelling through `worker/email.js`:
 
 | Path | Caller | Template var | Notes |
 |---|---|---|---|
-| Welcome | `worker/auth.js:176` | `LOOPS_TEMPLATE_WELCOME` | signup, no variables |
-| Password reset | `worker/auth.js:97` | `LOOPS_TEMPLATE_RESET` | better-auth callback, passes `resetUrl` |
+| Welcome | `worker/auth.js:227` | `LOOPS_TEMPLATE_WELCOME` | signup, no variables |
+| Password reset | `worker/auth.js:114` | `LOOPS_TEMPLATE_RESET` | better-auth callback, passes `resetUrl` |
 | Contact notification | `worker/routes/contact.js:255-261` | `LOOPS_TEMPLATE_CONTACT` | to `CONTACT_EMAIL`, body deliberately excluded |
 
 Files in scope:
