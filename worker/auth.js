@@ -65,9 +65,10 @@ import { sendResetEmail, sendWelcomeEmail } from "./email.js";
 import { validateUsernameSync } from "./username-validator.js";
 import { logError, KINDS } from "./logger.js";
 
-// The error code a refused Google link reaches the client with. The client's
-// mapAuthError (public/src/auth.js) turns it into the explanation.
+// The error codes a refused Google sign-in reaches the client with. The
+// client's mapAuthError (public/src/auth.js) turns each into the explanation.
 const LINK_REFUSED = "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL";
+const SIGNUP_REFUSED = "OAUTH_EMAIL_NOT_VERIFIED";
 
 /**
  * Build the auth instance against the Worker's D1 binding and env secrets.
@@ -77,9 +78,14 @@ const LINK_REFUSED = "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL";
  * @returns {ReturnType<typeof betterAuth>}
  */
 export function getAuth(env) {
-  // Requests whose OAuth link the account hook refused, so the after hook can
-  // name the reason better-auth's own error redirect drops.
-  const refusedLinks = new WeakSet();
+  // Requests whose OAuth sign-in a create hook refused, mapped to the reason,
+  // so the after hook can name the reason better-auth's own error redirect drops.
+  const refusals = new WeakMap();
+
+  function refuse(ctx, code, message) {
+    if (ctx?.request) refusals.set(ctx.request, code);
+    throw new APIError("FORBIDDEN", { message, code });
+  }
 
   return betterAuth({
     // The kysely-adapter auto-detects a Cloudflare D1 binding (objects with
@@ -104,12 +110,23 @@ export function getAuth(env) {
       // reset is the proof of ownership sign-up never asked for. It is what
       // lets the owner of a squatted address take it back: the reset verifies
       // the email (opening Google sign-in to this account) and ends every
-      // session, the squatter's included.
+      // session, the squatter's included. On a user that was still unverified
+      // it also detaches every OAuth identity, since each was attached without
+      // that proof and would otherwise keep signing its holder in; the owner
+      // can link Google again afterwards.
       onPasswordReset: async ({ user }) => {
-        await env.DB
-          .prepare(`UPDATE "user" SET "emailVerified" = 1 WHERE id = ?`)
-          .bind(user.id)
-          .run();
+        await env.DB.batch([
+          env.DB
+            .prepare(
+              `DELETE FROM account
+                WHERE "userId" = ?1 AND "providerId" != 'credential'
+                  AND (SELECT "emailVerified" FROM "user" WHERE id = ?1) = 0`,
+            )
+            .bind(user.id),
+          env.DB
+            .prepare(`UPDATE "user" SET "emailVerified" = 1 WHERE id = ?`)
+            .bind(user.id),
+        ]);
       },
       revokeSessionsOnPasswordReset: true,
     },
@@ -140,7 +157,18 @@ export function getAuth(env) {
           // Validate before insert. For OAuth signups, ctx.body has no
           // `username` field — we let those through (the user will set
           // username later via the modal + /api/me/username).
+          //
+          // An OAuth signup must come with an email its provider verified, or
+          // a stranger's Google identity could hold someone else's address.
+          // It has to be refused here, before the insert: D1 has no
+          // transactions, so a later refusal would leave the user row behind.
+          // Password sign-up is exempt; the address's owner can always reset
+          // that password away.
           before: async (user, ctx) => {
+            if (!user.emailVerified && ctx?.path !== "/sign-up/email") {
+              refuse(ctx, SIGNUP_REFUSED, "oauth_email_not_verified");
+            }
+
             const incoming = ctx?.body?.username;
             if (typeof incoming === "string" && incoming.length > 0) {
               const v = validateUsernameSync(incoming);
@@ -200,26 +228,23 @@ export function getAuth(env) {
         create: {
           before: async (account, ctx) => {
             if (!(await linksIntoUnverifiedUser(env, account))) return;
-            if (ctx?.request) refusedLinks.add(ctx.request);
-            throw new APIError("FORBIDDEN", {
-              message: "account_link_requires_verified_email",
-              code: LINK_REFUSED,
-            });
+            refuse(ctx, LINK_REFUSED, "account_link_requires_verified_email");
           },
         },
       },
     },
 
     hooks: {
-      // better-auth reports the refusal above as a generic
-      // `error=unable_to_link_account` on its error redirect. Name the real
-      // reason instead, so the client can tell the user what to do.
+      // better-auth reports the refusals above generically on its error
+      // redirect (a link refusal as `error=unable_to_link_account`). Name the
+      // real reason instead, so the client can tell the user what to do.
       after: createAuthMiddleware(async (ctx) => {
-        if (!refusedLinks.has(ctx.request)) return;
+        const code = refusals.get(ctx.request);
+        if (!code) return;
         const location = ctx.context.responseHeaders?.get("location");
         if (!location) return;
         const url = new URL(location, ctx.context.baseURL);
-        url.searchParams.set("error", LINK_REFUSED);
+        url.searchParams.set("error", code);
         throw ctx.redirect(url.href);
       }),
     },
@@ -245,10 +270,9 @@ export function getAuth(env) {
  * created. Returning `false` from the hook would not do — 1.6.9 ignores a null
  * link and signs in anyway.
  *
- * Not a join:
- *   - credential accounts (email sign-up, password reset);
- *   - a user with no accounts yet, which is `createOAuthUser` minting a new
- *     user and its first account in the same request.
+ * Credential accounts (email sign-up, password reset) are not a join. Neither
+ * is `createOAuthUser` minting a new user with its first account: the user
+ * create hook only lets that user in with a verified email.
  * The only way into a squatted address is a password reset, which verifies it
  * (`onPasswordReset` above).
  */
@@ -256,14 +280,10 @@ async function linksIntoUnverifiedUser(env, account) {
   if (account.providerId === "credential") return false;
 
   const target = await env.DB
-    .prepare(
-      `SELECT u."emailVerified" AS verified,
-              (SELECT COUNT(*) FROM account a WHERE a."userId" = u.id) AS accounts
-         FROM "user" u WHERE u.id = ?`,
-    )
+    .prepare(`SELECT "emailVerified" AS verified FROM "user" WHERE id = ?`)
     .bind(account.userId)
     .first();
-  return !(target && (target.verified || target.accounts === 0));
+  return !target?.verified;
 }
 
 /**

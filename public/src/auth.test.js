@@ -2,9 +2,9 @@
 //
 // Runs on `node --test` with no DOM, so what is exercised here is the request
 // that starts Google sign-in and the reading of the page it comes back to. The
-// server half — that a refused link redirects to errorCallbackURL with
-// `error=ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL` — is tested against the real
-// better-auth handler in worker/auth.test.js.
+// server half — that a refused sign-in redirects to errorCallbackURL with
+// `error=ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL` or `error=OAUTH_EMAIL_NOT_VERIFIED`
+// — is tested against the real better-auth handler in worker/auth.test.js.
 
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -53,6 +53,20 @@ test("a refused link comes back explaining the existing account", async () => {
   assert.equal(
     mapAuthError(googleReturn.error),
     "An account with this email already exists. Log in with its password, or reset the password if you didn't set it.",
+  );
+});
+
+test("a refused sign-up from an unverified Google email comes back explaining why", async () => {
+  const { sent } = await startSignIn();
+  const back = new URL(sent.errorCallbackURL, "http://localhost");
+  back.searchParams.set("error", "OAUTH_EMAIL_NOT_VERIFIED");
+
+  const googleReturn = readGoogleReturn(back.search);
+
+  assert.deepEqual(googleReturn, { error: "OAUTH_EMAIL_NOT_VERIFIED", query: "" });
+  assert.equal(
+    mapAuthError(googleReturn.error),
+    "Google hasn't verified this email address, so it can't be used to create an account. Verify it with Google, or sign up with email and password.",
   );
 });
 

@@ -187,6 +187,9 @@ export function mapAuthError(code) {
     // whose email was never verified; a password reset verifies it.
     case "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL":
       return "An account with this email already exists. Log in with its password, or reset the password if you didn't set it.";
+    // ...and to create an account from a Google email Google hasn't verified.
+    case "OAUTH_EMAIL_NOT_VERIFIED":
+      return "Google hasn't verified this email address, so it can't be used to create an account. Verify it with Google, or sign up with email and password.";
     default:
       return "Something went wrong. Please try again.";
   }

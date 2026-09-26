@@ -17,6 +17,7 @@ const EMAIL = "victim@gmail.com";
 const PASSWORD = "attacker-password-123";
 const NEW_PASSWORD = "owner-password-456";
 const GOOGLE_SUB = "google-sub-victim";
+const STRANGER_SUB = "google-sub-stranger";
 const GOOGLE_RETURN_URL = "/?auth=google";
 const RESET_TEMPLATE = "test-reset-template";
 // Every password hash or check is a scrypt run of well over a second under
@@ -209,6 +210,30 @@ async function userRow(email = EMAIL) {
   return env.DB.prepare(`SELECT id, "emailVerified" FROM "user" WHERE email = ?`).bind(email).first();
 }
 
+/**
+ * The row a stranger's unverified Google identity left before such sign-ups
+ * were refused: an unverified user whose only account is that identity.
+ */
+async function seedGoogleSquat() {
+  const id = "google-squat-user";
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB
+      .prepare(
+        `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+         VALUES (?, 'Stranger', ?, 0, ?, ?)`,
+      )
+      .bind(id, EMAIL, now, now),
+    env.DB
+      .prepare(
+        `INSERT INTO account (id, "accountId", "providerId", "userId", "createdAt", "updatedAt")
+         VALUES ('google-squat-account', ?, 'google', ?, ?, ?)`,
+      )
+      .bind(STRANGER_SUB, id, now, now),
+  ]);
+  return id;
+}
+
 // --- tests -----------------------------------------------------------------
 
 describe("Google sign-in into a pre-registered unverified account", { timeout: PASSWORD_TEST_TIMEOUT_MS }, () => {
@@ -277,6 +302,74 @@ describe("the owner taking a squatted address back with a password reset", { tim
     expect((await signInWithPassword(PASSWORD)).res.status).toBe(401);
     expect((await signInWithPassword(NEW_PASSWORD)).res.status).toBe(200);
   });
+
+  it("detaches a stranger's Google identity, so only the owner's Google sign-in reaches the account", async () => {
+    const squatId = await seedGoogleSquat();
+    const stranger = { sub: STRANGER_SUB, email: EMAIL, emailVerified: false };
+    const owner = { sub: GOOGLE_SUB, email: EMAIL };
+    const strangerJar = (await googleRoundTrip(stranger)).jar;
+    expect((await sessionUser(strangerJar))?.id).toBe(squatId);
+
+    const refused = await googleRoundTrip(owner);
+    expect(landing(refused.res).error).toBe("ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL");
+    expect(await sessionUser(refused.jar)).toBeNull();
+
+    await resetPassword();
+
+    expect(await sessionUser(strangerJar)).toBeNull();
+    expect(await sessionUser((await googleRoundTrip(stranger)).jar)).toBeNull();
+
+    const { res, jar } = await googleRoundTrip(owner);
+    expect(res.headers.get("location")).toBe(GOOGLE_RETURN_URL);
+    expect((await sessionUser(jar))?.id).toBe(squatId);
+    expect(await accountsFor(squatId)).toEqual([
+      { providerId: "credential", accountId: squatId },
+      { providerId: "google", accountId: GOOGLE_SUB },
+    ]);
+  });
+
+  it("keeps the Google identity of an already verified user", async () => {
+    const first = await googleRoundTrip({ sub: GOOGLE_SUB, email: EMAIL });
+    const id = (await sessionUser(first.jar)).id;
+
+    await resetPassword();
+
+    expect(await accountsFor(id)).toEqual([
+      { providerId: "credential", accountId: id },
+      { providerId: "google", accountId: GOOGLE_SUB },
+    ]);
+    const { jar } = await googleRoundTrip({ sub: GOOGLE_SUB, email: EMAIL });
+    expect((await sessionUser(jar))?.id).toBe(id);
+  });
+});
+
+describe("Google sign-up with an email Google has not verified", () => {
+  it("is refused before any user row is written", async () => {
+    const { res, jar } = await googleRoundTrip({
+      sub: STRANGER_SUB,
+      email: EMAIL,
+      emailVerified: false,
+    });
+
+    expect(res.status).toBe(302);
+    expect(await sessionUser(jar)).toBeNull();
+    expect(await userRow()).toBeNull();
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n FROM account`).first("n")).toBe(0);
+  });
+
+  it("sends the browser back into the app with the reason", async () => {
+    const { res } = await googleRoundTrip({
+      sub: STRANGER_SUB,
+      email: EMAIL,
+      emailVerified: false,
+    });
+
+    expect(landing(res)).toEqual({
+      path: "/",
+      auth: "google",
+      error: "OAUTH_EMAIL_NOT_VERIFIED",
+    });
+  });
 });
 
 describe("Google sign-in that must keep working", { timeout: PASSWORD_TEST_TIMEOUT_MS }, () => {
@@ -289,17 +382,6 @@ describe("Google sign-in that must keep working", { timeout: PASSWORD_TEST_TIMEO
     expect(user?.email).toBe(EMAIL);
     expect(user?.emailVerified).toBe(true);
     expect(await accountsFor(user.id)).toEqual([{ providerId: "google", accountId: GOOGLE_SUB }]);
-  });
-
-  it("creates a new user even when Google reports the email unverified", async () => {
-    const { res, jar } = await googleRoundTrip({
-      sub: GOOGLE_SUB,
-      email: EMAIL,
-      emailVerified: false,
-    });
-
-    expect(res.headers.get("location")).toBe(GOOGLE_RETURN_URL);
-    expect((await sessionUser(jar))?.email).toBe(EMAIL);
   });
 
   it("signs a returning Google user back in", async () => {
