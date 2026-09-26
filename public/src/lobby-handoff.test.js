@@ -84,6 +84,7 @@ const sockets = [];
 class FakePartySocket {
   constructor(opts) {
     this.opts = opts;
+    this.readyState = 1;
     this.listeners = {};
     this.sent = [];
     sockets.push(this);
