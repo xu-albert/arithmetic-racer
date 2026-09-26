@@ -241,6 +241,7 @@ export function resetForRace(state) {
     p.dropped = false;
     p.dnf = false;
     p.resultHeld = false;
+    p.catchUpBatchId = null;
   }
   state.problemSequence = [];
   state.raceStartedAt = null;
@@ -281,7 +282,10 @@ export function publicPlayer(p) {
   // currently holding the seat — server-only bookkeeping for the eviction
   // path. What survives here is `id`, the ephemeral per-room broadcast id
   // (see nextBroadcastId).
-  const { attempts, longestStreak, currentStreak, deviceId, userId, racerId, connId, resultHeld, departed, ...rest } = p;
+  const {
+    attempts, longestStreak, currentStreak, deviceId, userId, racerId, connId, resultHeld, departed, catchUpBatchId,
+    ...rest
+  } = p;
   return { ...rest, isGuest: !userId };
 }
 
@@ -324,11 +328,6 @@ export class RaceRoom extends Server {
   // In-memory, per-instance. Not persisted and not shared across rooms: a
   // flood only ever needs to be stopped in the room receiving it.
   socketLimiter = createSocketLimiter();
-
-  // Per-seat chains serializing catch-up batches (broadcast id -> Promise of
-  // the batch currently being graded). In-memory like the limiter: the window
-  // it guards is the handler's own awaits, which do not survive hibernation.
-  catchUpChains = new Map();
 
   freshState(id) {
     return freshState(id);
@@ -715,6 +714,9 @@ export class RaceRoom extends Server {
       // Set when a captcha challenge takes ownership of this race's row; see
       // issueCaptchaChallenge. Server-only, stripped by publicPlayer.
       resultHeld: false,
+      // Id of the last catch-up batch graded for this seat this race; see
+      // gradeCatchUp. Server-only, stripped by publicPlayer.
+      catchUpBatchId: null,
       deviceId: isValidDeviceId(msg.deviceId) ? msg.deviceId : null,
       userId: currentConnState.userId ?? null,
     };
@@ -862,16 +864,22 @@ export class RaceRoom extends Server {
    * (the client holds them in a per-race outbox rather than the generic
    * socket queue, so a long outage never outruns the 20/s limiter).
    *
-   * Grading is positional, which is what makes delivery exactly-once:
-   * - `entry.index < player.score` — already graded (a replayed batch, or
-   *   answers that raced ahead before the drop): skip.
+   * Grading is positional, which places every answer against the problem it
+   * was typed at:
+   * - `entry.index < player.score` — already graded (answers that raced
+   *   ahead before the drop): skip.
    * - `entry.index === player.score` — grade exactly as handleAnswer does.
    * - `entry.index > player.score` — a gap; client and server disagree about
    *   where the race stands. Skip and report it; the client resumes normal
    *   play from the server's position.
-   * Replaying the whole batch after a second reconnect mid-drain is therefore
-   * a no-op. Wrong answers cost an attempt and the streak exactly as live
-   * play, and retries at one index grade as successive attempts.
+   * Wrong answers cost an attempt and the streak exactly as live play, and
+   * retries at one index grade as successive attempts.
+   *
+   * Position alone cannot tell a resent wrong answer at the seat's current
+   * index from a fresh retry there, so exactly-once is the batch id's job: the
+   * client keeps one id per batch across resends, the seat records the id it
+   * last graded (persisted with the grading), and a batch carrying that id is
+   * answered with an ack from the seat's current position, grading nothing.
    */
   async handleCatchUp(connection, msg) {
     const player = this.playerFor(connection);
@@ -879,35 +887,27 @@ export class RaceRoom extends Server {
 
     const entries = msg.entries;
     if (!Array.isArray(entries)
+      || !Number.isSafeInteger(msg.batchId)
       || entries.length > CATCHUP_MAX_ENTRIES_PER_PROBLEM * this.state.raceLength
       || entries.some((e) => !Number.isInteger(e?.index) || e.index < 0)) {
       this.sendCatchUpAck(connection, player, { rejected: 'oversize' });
       return;
     }
 
-    // At most one batch per seat is mid-grading at a time. The only way a
-    // second one arrives while the first is between awaits is the client
-    // resending after the drain's socket died, so chain behind it rather than
-    // reject — the positional skip makes that replay free.
-    const prev = this.catchUpChains.get(player.id) ?? Promise.resolve();
-    const run = prev.then(() => this.gradeCatchUp(connection, player, msg));
-    const tracked = run.catch(() => {});
-    this.catchUpChains.set(player.id, tracked);
-    try {
-      await run;
-    } finally {
-      if (this.catchUpChains.get(player.id) === tracked) this.catchUpChains.delete(player.id);
-    }
+    await this.gradeCatchUp(connection, player, msg);
   }
 
   async gradeCatchUp(connection, player, msg) {
     const entries = msg.entries;
-    // Not the race this batch belongs to any more: it ended or was rematched
-    // during the outage (raceStartedAt is the batch's epoch check), or the
-    // seat's reconnect grace ran out and it was dropped. Grade nothing — the
-    // snapshot the reconnect already sent settles the client's screen — but
-    // still answer: the client is holding its input pause open for the ack.
-    if (this.state.state !== 'racing'
+    // Already graded: the same batch resent because the socket carrying its
+    // ack died. Or not the race this batch belongs to any more: it ended or
+    // was rematched during the outage (raceStartedAt is the batch's epoch
+    // check), or the seat's reconnect grace ran out and it was dropped. Grade
+    // nothing — the snapshot the reconnect already sent settles the client's
+    // screen — but still answer: the client is holding its input pause open
+    // for the ack.
+    if (msg.batchId === player.catchUpBatchId
+      || this.state.state !== 'racing'
       || player.dropped
       || msg.raceStartedAt !== this.state.raceStartedAt) {
       this.sendCatchUpAck(connection, player, { applied: 0, skipped: entries.length });
@@ -938,6 +938,7 @@ export class RaceRoom extends Server {
       player.attempts += 1;
       applied++;
     }
+    player.catchUpBatchId = msg.batchId;
 
     // One broadcast for the whole batch: other clients render only the score
     // and the finish, so the intermediate steps would be invisible anyway.
