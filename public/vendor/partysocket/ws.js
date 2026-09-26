@@ -394,9 +394,11 @@ const partysocket = new PartySocket({
     // file; public/src/partysocket-flush-order.test.js fails if it does.
     if (this.onopen) this.onopen(event);
     this.dispatchEvent(cloneEvent(event));
-    // Known limit, tracked as a follow-up: this is one unpaced burst, so a
-    // queue longer than the room's 20-per-second socket budget
-    // (server/socket-limit.js) still loses the excess after `hello`.
+    // Still one unpaced burst, so a queue longer than the room's
+    // 20-per-second socket budget (server/socket-limit.js) would lose the
+    // excess after `hello`. Race answers no longer queue here: remote-runner.js
+    // holds those typed while the socket is down and sends them as a single
+    // `catch-up` message once it reopens.
     this._messageQueue.forEach((message) => {
       this._ws?.send(message);
     });
