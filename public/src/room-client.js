@@ -17,6 +17,10 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
     room: roomId,
   });
   const listeners = new Set();
+  // Fired on every (re)open, after hello has been sent. The catch-up batch a
+  // reconnecting runner holds (remote-runner.js) rides on this: hello-first is
+  // what lets the room resolve the seat before the batch arrives.
+  const openListeners = new Set();
   // The server's ephemeral, per-room id for this player, learned from
   // hello-ack. Every `playerId` the server puts on the wire is one of these —
   // the racerId we send in `hello` is a secret and never comes back out.
@@ -36,6 +40,7 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
       ...(mode === 'public' && { difficulty }),
     };
     ws.send(JSON.stringify(helloMsg));
+    for (const l of openListeners) l();
   });
 
   ws.addEventListener('message', (e) => {
@@ -55,6 +60,10 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
     on(handler) {
       listeners.add(handler);
       return () => listeners.delete(handler);
+    },
+    onOpen(handler) {
+      openListeners.add(handler);
+      return () => openListeners.delete(handler);
     },
     send(msg) {
       ws.send(JSON.stringify(msg));
