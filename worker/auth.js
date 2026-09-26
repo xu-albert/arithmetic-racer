@@ -4,8 +4,11 @@
 //   getAuth(env)                       — returns a configured better-auth instance.
 //                                        The integrator mounts `auth.handler(request)`
 //                                        on requests starting with `/api/auth/`.
-//   runClaim(env, userId, deviceId)    — attributes prior anonymous race results
-//                                        to a now-registered user. Used both by the
+//   runClaim(env, userId, deviceId, { source })
+//                                      — attributes recent anonymous race results
+//                                        (CLAIM_WINDOW_MS) to a now-registered
+//                                        user and logs the claim to
+//                                        history_claims. Used both by the
 //                                        signup hook (email/password) and by the
 //                                        OAuth-username-set flow (the integrator
 //                                        invokes this from POST /api/me/username
@@ -64,6 +67,7 @@ import { APIError } from "better-auth/api";
 import { sendResetEmail, sendWelcomeEmail } from "./email.js";
 import { validateUsernameSync } from "./username-validator.js";
 import { logError, KINDS } from "./logger.js";
+import { MAX_DEVICE_ID_LENGTH } from "./race-result-store.js";
 
 /**
  * Build the auth instance against the Worker's D1 binding and env secrets.
@@ -162,7 +166,7 @@ export function getAuth(env) {
             const deviceId = ctx?.body?.deviceId;
             if (deviceId) {
               try {
-                await runClaim(env, user.id, deviceId);
+                await runClaim(env, user.id, deviceId, { source: "signup" });
               } catch (err) {
                 // Don't fail signup if claim has a hiccup; log and move on.
                 logError(KINDS.CLAIM_FAILED, err, { trigger: "signup", userId: user.id });
@@ -181,10 +185,36 @@ export function getAuth(env) {
 }
 
 /**
- * Attribute prior anonymous race results to a registered user.
+ * How far back the anonymous-history claim reaches: races played more than
+ * this long before the claim stay anonymous.
+ *
+ * The claim's only proof of ownership is the deviceId, which is not a secret
+ * in any useful sense — it sits in localStorage, and anyone who gets it (a
+ * shared or borrowed computer, a copied value) can present it at signup. There
+ * is no anonymous-side credential to check instead, so the claim cannot be made
+ * safe, only smaller: the window caps what a stranger holding the id can take
+ * to the last week of play, and leaves a long-lived device's older history
+ * alone.
+ *
+ * Seven days because the claim exists for one moment — someone who has been
+ * playing signs up to keep what they have been doing. That is the same sitting
+ * or the same few days, and a week still covers a weekend of play followed by
+ * a signup on the Monday. `played_at` is stamped by the server
+ * (worker/race-result-store.js), so a client cannot backdate a row into it.
+ */
+export const CLAIM_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Attribute recent anonymous race results to a registered user, and record
+ * that it happened.
+ *
+ * Only rows inside CLAIM_WINDOW_MS are claimed. Every call that gets as far as
+ * the database writes one `history_claims` row (who, which device, how many
+ * rows moved, how many were left behind as too old, when) in the same batch as
+ * the UPDATE, so the claim and its record commit or fail together.
  *
  * Idempotent: rows that already have a non-null user_id are left alone.
- * Safe to call multiple times.
+ * Safe to call multiple times; each call is logged.
  *
  * Used by:
  *   - the email/password signup hook (above), via the deviceId in the body
@@ -194,16 +224,33 @@ export function getAuth(env) {
  * @param {{ DB: D1Database }} env
  * @param {string} userId
  * @param {string|undefined} deviceId
+ * @param {{ source: 'signup' | 'first_username_set', now?: number }} opts
  */
-export async function runClaim(env, userId, deviceId) {
-  if (!deviceId || !userId) return { claimed: 0 };
-  const result = await env.DB
-    .prepare(
-      "UPDATE race_results SET user_id = ?1 WHERE user_id IS NULL AND device_id = ?2",
-    )
-    .bind(userId, deviceId)
-    .run();
+export async function runClaim(env, userId, deviceId, { source, now = Date.now() } = {}) {
+  if (typeof deviceId !== "string" || !deviceId || deviceId.length > MAX_DEVICE_ID_LENGTH || !userId) {
+    return { claimed: 0 };
+  }
+  const [update] = await env.DB.batch([
+    env.DB
+      .prepare(
+        `UPDATE race_results SET user_id = ?1
+          WHERE user_id IS NULL AND device_id = ?2 AND played_at >= ?3`,
+      )
+      .bind(userId, deviceId, now - CLAIM_WINDOW_MS),
+    // changes() is the UPDATE above: a batch runs its statements in order, in
+    // one transaction, on one connection. What is still anonymous on the device
+    // after the UPDATE is exactly what the window left behind.
+    env.DB
+      .prepare(
+        `INSERT INTO history_claims
+           (id, user_id, device_id, source, claimed, left_unclaimed, created_at)
+         VALUES (?1, ?2, ?3, ?4, changes(),
+                 (SELECT COUNT(*) FROM race_results WHERE user_id IS NULL AND device_id = ?3),
+                 ?5)`,
+      )
+      .bind(crypto.randomUUID(), userId, deviceId, source, now),
+  ]);
   // D1's run() returns { meta: { changes } }. We surface the count for callers
   // that want to log it (e.g. the integrator).
-  return { claimed: result?.meta?.changes ?? 0 };
+  return { claimed: update?.meta?.changes ?? 0 };
 }

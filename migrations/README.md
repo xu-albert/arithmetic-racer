@@ -15,12 +15,12 @@ The preview deploy that Cloudflare Workers Builds runs on every PR
 
 ## Adding a migration
 
-1. Add the new numbered file, e.g. `0010_add_thing.sql`.
+1. Add the new numbered file, e.g. `0011_add_thing.sql`.
 2. Apply it to **both** databases:
 
    ```sh
-   npm run migrate:prod    -- --file=migrations/0010_add_thing.sql
-   npm run migrate:preview -- --file=migrations/0010_add_thing.sql
+   npm run migrate:prod    -- --file=migrations/0011_add_thing.sql
+   npm run migrate:preview -- --file=migrations/0011_add_thing.sql
    ```
 
 3. Confirm both databases match this directory:
@@ -45,8 +45,8 @@ be discovered by a broken INSERT.
 > them have run — wrangler's own `d1_migrations` ledger stopped reflecting
 > reality after `0002` (see *Never run `wrangler d1 migrations apply`* below).
 > Only apply a file that hasn't been applied to that database yet. Every
-> file *except* `0004` fails on a second apply: `0001`, `0002` and `0006` are
-> bare `CREATE TABLE`, `0005` is a bare `CREATE INDEX`, `0003`, `0007` and
+> file *except* `0004` fails on a second apply: `0001`, `0002`, `0006` and
+> `0010` are bare `CREATE TABLE`, `0005` is a bare `CREATE INDEX`, `0003`, `0007` and
 > `0009` are `ALTER TABLE ADD COLUMN`, and `0008` rebuilds a table it expects
 > to exist.
 > Only `0004` is safe to re-run, because it is a `CREATE INDEX IF NOT EXISTS`.

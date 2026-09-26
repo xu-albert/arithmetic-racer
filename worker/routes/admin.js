@@ -536,6 +536,57 @@ async function loadContactCounts(env) {
   return counts;
 }
 
+const CLAIMS_LIMIT = 50;
+
+/**
+ * Newest anonymous-history claims (migrations/0010_history_claims.sql), capped
+ * like the contact list.
+ */
+async function loadHistoryClaims(env, limit = CLAIMS_LIMIT) {
+  try {
+    const { results } = await env.DB
+      .prepare(
+        `SELECT hc.id, hc.user_id, hc.device_id, hc.source, hc.claimed, hc.left_unclaimed,
+                hc.created_at, u.username AS username, u.name AS name
+           FROM history_claims hc LEFT JOIN "user" u ON u.id = hc.user_id
+          ORDER BY hc.created_at DESC, hc.id DESC
+          LIMIT ?`
+      )
+      .bind(limit)
+      .all();
+    return results ?? [];
+  } catch (err) {
+    // The table arrives in migration 0010, applied by hand while the Worker
+    // deploys from a push. Degrade to an empty section, not a dead dashboard.
+    logWarn(KINDS.CLAIM_LOG_DB, err, { phase: "list" });
+    return [];
+  }
+}
+
+function renderClaimsTable(claims, now, token) {
+  if (!claims.length) return raw(`<p class="empty">No history claims.</p>`);
+  const body = claims
+    .map((c) => {
+      const whenIso = new Date(c.created_at).toISOString();
+      const who = c.user_id ? whoCell(c, token).__html : escapeHtml("(deleted account)");
+      return `<tr>
+      <td><span title="${escapeHtml(whenIso)}">${escapeHtml(relativeTime(now, c.created_at))}</span></td>
+      <td>${who}</td>
+      <td><code>${escapeHtml(c.device_id)}</code></td>
+      <td>${escapeHtml(c.source)}</td>
+      <td class="n">${escapeHtml(c.claimed)}</td>
+      <td class="n">${escapeHtml(c.left_unclaimed)}</td>
+    </tr>`;
+    })
+    .join("");
+  return raw(`<table class="claims">
+    <thead>
+      <tr><th>When</th><th>Account</th><th>Device</th><th>Via</th><th>Claimed</th><th>Too old</th></tr>
+    </thead>
+    <tbody>${body}</tbody>
+  </table>`);
+}
+
 export async function handleAdminIndex(request, env) {
   const url = new URL(request.url);
   const gateResponse = checkAdminToken(url, env);
@@ -561,9 +612,10 @@ export async function handleAdminIndex(request, env) {
     adminHref("/admin/", { token, kind: contactKind, before: cursorBefore, beforeId: cursorBeforeId });
   const rows = await loadRecentRaces(env, { before, beforeId: cursor.beforeId });
 
-  const [messages, contactCounts] = await Promise.all([
+  const [messages, contactCounts, claims] = await Promise.all([
     loadContactMessages(env, contactKind),
     loadContactCounts(env),
+    loadHistoryClaims(env),
   ]);
 
   const body = html`
@@ -592,6 +644,10 @@ export async function handleAdminIndex(request, env) {
           details.ctx dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.1rem 0.6rem; margin: 0.4rem 0 0; }
           details.ctx dt { color: #888; }
           details.ctx dd { margin: 0; word-break: break-word; }
+          table.claims { border-collapse: collapse; width: 100%; }
+          table.claims th, table.claims td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
+          table.claims th { color: #888; font-weight: 500; }
+          table.claims .n { font-variant-numeric: tabular-nums; }
         </style>
       </head>
       <body>
@@ -618,6 +674,9 @@ export async function handleAdminIndex(request, env) {
         <h2>Contact messages${messages.length ? ` (${messages.filter((m) => !m.handled).length} unhandled)` : ""}</h2>
         ${renderContactFilters(contactKind, token, contactCounts, cursor)}
         ${renderContactTable(messages, now, token, { kind: contactKind, ...cursor })}
+        <h2>History claims</h2>
+        <p class="avgs">Anonymous races attributed to an account at signup, newest ${CLAIMS_LIMIT}.</p>
+        ${renderClaimsTable(claims, now, token)}
       </body>
     </html>
   `;

@@ -316,7 +316,7 @@ export async function handlePostUsername(request, env) {
   }
   const username = body && typeof body === "object" ? body.username : undefined;
   // deviceId is optional; only sent on first-username-set after Google OAuth
-  // signup. Used to attribute prior anon races to this user (the email/password
+  // signup. Used to attribute recent anon races to this user (the email/password
   // signup path runs the claim from auth.js's databaseHooks instead).
   const deviceId = body && typeof body === "object" ? body.deviceId : undefined;
 
@@ -350,7 +350,7 @@ export async function handlePostUsername(request, env) {
 
   if (wasUnset && deviceId) {
     try {
-      await runClaim(env, userId, deviceId);
+      await runClaim(env, userId, deviceId, { source: "first_username_set" });
     } catch (err) {
       // Don't fail the rename on a claim hiccup; the user has their name set.
       logError(KINDS.CLAIM_FAILED, err, { trigger: "first_username_set", userId });
@@ -367,9 +367,9 @@ export async function handleByDevice(request, env) {
     return Response.json({ total_races: 0, best_time_ms: null, best_difficulty: null });
   }
 
-  // Only count anon rows (user_id IS NULL). After a claim, the same
-  // device's old rows have user_id set, and the header pills should reflect
-  // only what the *current anonymous* session has accumulated since.
+  // Only count anon rows (user_id IS NULL). After a claim, the rows it moved
+  // have user_id set and drop out of the header pills; rows older than
+  // CLAIM_WINDOW_MS (worker/auth.js) were never claimed, so they still count.
   const row = await db(env)
     .prepare(
       `SELECT COUNT(*) AS total_races,

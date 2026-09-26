@@ -275,3 +275,58 @@ describe("0008 — the rebuild preserves what 0006 created", () => {
     db.close();
   });
 });
+
+describe("0010 — history_claims", () => {
+  function insertClaim(db, overrides = {}) {
+    const row = {
+      id: `c-${Math.random().toString(36).slice(2)}`,
+      user_id: null,
+      device_id: "dev-1",
+      source: "signup",
+      claimed: 0,
+      left_unclaimed: 0,
+      created_at: 1700000000000,
+      ...overrides,
+    };
+    db.prepare(
+      `INSERT INTO history_claims (id, user_id, device_id, source, claimed, left_unclaimed, created_at)
+       VALUES (@id, @user_id, @device_id, @source, @claimed, @left_unclaimed, @created_at)`
+    ).run(row);
+    return row;
+  }
+
+  test("creates the table with its dashboard index", () => {
+    const db = migrate();
+    assert.deepEqual(columnNames(db, "history_claims"), [
+      "id", "user_id", "device_id", "source", "claimed", "left_unclaimed", "created_at",
+    ]);
+    assert.deepEqual(indexNames(db, "history_claims"), [
+      "idx_history_claims_created",
+    ]);
+    db.close();
+  });
+
+  test("accepts both claim sources and rejects anything else", () => {
+    const db = migrate();
+    insertClaim(db, { source: "signup" });
+    insertClaim(db, { source: "first_username_set" });
+    assert.throws(() => insertClaim(db, { source: "admin" }), /CHECK constraint failed/);
+    db.close();
+  });
+
+  test("keeps the record when the claiming account is deleted", () => {
+    const db = migrate();
+    db.prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", username)
+       VALUES ('u-3', 'Cy', 'cy@example.test', 0, '2026-01-01', '2026-01-01', 'cy')`
+    ).run();
+    insertClaim(db, { id: "claim-1", user_id: "u-3", claimed: 5 });
+    db.prepare(`DELETE FROM "user" WHERE id = 'u-3'`).run();
+
+    const row = db.prepare(`SELECT * FROM history_claims WHERE id = 'claim-1'`).get();
+    assert.equal(row.user_id, null);
+    assert.equal(row.device_id, "dev-1");
+    assert.equal(row.claimed, 5);
+    db.close();
+  });
+});
