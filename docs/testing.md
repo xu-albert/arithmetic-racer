@@ -110,7 +110,7 @@ real bindings:
   `server/room-identity.test.js` for the pattern (real alarms, real `state.storage`).
 - **Worker routes**: `worker/routes/*.test.js` hit route handlers with real D1 reads/writes,
   asserting on response shape and on what actually landed in `race_results` / `user` /
-  `contact_bug_reports`.
+  `contact_messages`.
 - **Third-party services**: none are exercised in tests, because none are meaningfully
   integrated in production either. `worker/email.js` (Loops) is unit-tested against its own
   payload-building logic (`worker/email.test.js`), not a live Loops call. The contact-message
@@ -499,7 +499,7 @@ not performance near the cap. These remain gaps (§11).
   in GitHub Actions repo secrets and are required (not optional) by `schema-drift.yml`'s
   "Require Cloudflare credentials" step — a missing secret fails loud rather than
   soft-passing.
-- **Data at rest**: D1 stores `race_results`, `user`, `contact_bug_reports`. No
+- **Data at rest**: D1 stores `race_results`, `user`, `contact_messages`, `history_claims`. No
   field-level encryption; the privacy posture is *what gets collected*, not encryption —
   see `AGENTS.md`'s note that the bug-report form was deliberately built "privacy-first, no
   account_id disclosure" (per project memory).
