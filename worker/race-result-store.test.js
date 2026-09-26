@@ -187,8 +187,9 @@ describe("insertRaceResult", () => {
       const a = await insertRaceResult(env, roomPayload(), undefined, RACE_AT);
       const b = await insertRaceResult(env, roomPayload(), undefined, RACE_AT);
       expect(b.duplicate).toBe(true);
-      expect(b.id).toBe(a.id);
-      expect(await roomRows()).toHaveLength(1);
+      expect(b.id).toBeNull();
+      const rows = await roomRows();
+      expect(rows.map((r) => r.id)).toEqual([a.id]);
     });
 
     it("does not merge two different results from the same race", async () => {

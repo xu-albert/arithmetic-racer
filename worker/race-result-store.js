@@ -48,48 +48,31 @@ export async function insertRaceResult(env, payload, plausibilityOverride, raceA
   // recording the settle. The retry replays the stored entry, so it carries
   // the same payload and the same race time, and the (room, device, race
   // time, result) fingerprint of the earlier row identifies it: the retry
-  // stands down instead of double-counting the race. The race time is what
-  // keeps two genuinely different races apart — a racer who idles through
-  // two rematches posts the same counts twice, but not from the same
-  // millisecond. Solo rows (no race time) are one-shot client POSTs with no
-  // retry loop behind them and skip the check.
-  if (raceAt != null) {
-    const existing = await db(env)
-      .prepare(
-        `SELECT id FROM race_results
-         WHERE played_at = ? AND room_id = ? AND device_id = ? AND finished = ?
-           AND problems_total = ? AND problems_correct = ? AND problems_attempted = ?
-           AND longest_streak = ?
-           AND (finish_time_ms = ? OR (finish_time_ms IS NULL AND ? IS NULL))
-         LIMIT 1`
-      )
-      .bind(
-        playedAt,
-        payload.room_id,
-        payload.device_id,
-        payload.finished ? 1 : 0,
-        payload.problems_total,
-        payload.problems_correct,
-        payload.problems_attempted,
-        payload.longest_streak ?? 0,
-        payload.finish_time_ms,
-        payload.finish_time_ms
-      )
-      .first();
-    if (existing) {
-      return { id: existing.id, played_at: playedAt, suspect, suspect_reason: reason, points, duplicate: true };
-    }
-  }
-
-  await db(env)
-    .prepare(
-      `INSERT INTO race_results (
-         id, user_id, device_id, difficulty, finished, finish_time_ms,
-         problems_total, problems_correct, problems_attempted,
-         avg_time_per_problem_ms, accuracy_pct, longest_streak,
-         played_at, room_id, suspect, suspect_reason, points
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    )
+  // inserts nothing instead of double-counting the race. The race time is
+  // what keeps two genuinely different races apart — a racer who idles
+  // through two rematches posts the same counts twice, but not from the same
+  // millisecond. The check rides inside the INSERT, so it and the write are
+  // one statement: one round trip, and no gap for another write to land in.
+  // Solo rows (no race time) are one-shot client POSTs with no retry loop
+  // behind them and skip the check.
+  const insert = `INSERT INTO race_results (
+       id, user_id, device_id, difficulty, finished, finish_time_ms,
+       problems_total, problems_correct, problems_attempted,
+       avg_time_per_problem_ms, accuracy_pct, longest_streak,
+       played_at, room_id, suspect, suspect_reason, points
+     )`;
+  const row = "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17";
+  const sql = raceAt == null
+    ? `${insert} VALUES (${row})`
+    : `${insert} SELECT ${row}
+       WHERE NOT EXISTS (
+         SELECT 1 FROM race_results
+         WHERE played_at = ?13 AND room_id = ?14 AND device_id = ?3 AND finished = ?5
+           AND problems_total = ?7 AND problems_correct = ?8 AND problems_attempted = ?9
+           AND longest_streak = ?12 AND finish_time_ms IS ?6
+       )`;
+  const { meta } = await db(env)
+    .prepare(sql)
     .bind(
       id,
       payload.user_id,
@@ -110,5 +93,8 @@ export async function insertRaceResult(env, payload, plausibilityOverride, raceA
       points
     )
     .run();
+  if (meta.changes === 0) {
+    return { id: null, played_at: playedAt, suspect, suspect_reason: reason, points, duplicate: true };
+  }
   return { id, played_at: playedAt, suspect, suspect_reason: reason, points };
 }

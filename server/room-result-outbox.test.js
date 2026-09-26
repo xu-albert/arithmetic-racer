@@ -133,6 +133,36 @@ function breakD1(room) {
   return () => { room.env = realEnv; };
 }
 
+/**
+ * Hold every D1 statement this room issues until `release()`, then let it
+ * through to the real database — a D1 that is slow rather than down. `calls`
+ * counts the statements started.
+ */
+function holdD1(room) {
+  const realEnv = room.env;
+  let open;
+  const gate = new Promise((resolve) => { open = resolve; });
+  let calls = 0;
+  const held = {
+    prepare(sql) {
+      return {
+        bind: (...args) => ({
+          async run() {
+            calls++;
+            await gate;
+            return realEnv.DB.prepare(sql).bind(...args).run();
+          },
+        }),
+      };
+    },
+  };
+  room.env = new Proxy(realEnv, { get: (target, key) => (key === "DB" ? held : target[key]) });
+  return {
+    calls: () => calls,
+    release() { room.env = realEnv; open(); },
+  };
+}
+
 /** Make every owed row due and let the alarm retry it. */
 async function retryNow(room) {
   for (const e of room.state.pendingResults) e.nextAttemptAt = Date.now() - 1;
@@ -329,6 +359,34 @@ describe("private room — durable outbox", () => {
     });
   });
 
+  it("the 24h ceiling does not delete rows still owed to D1", async () => {
+    const a = makeConn("a");
+    const b = makeConn("b");
+    await withPrivateRoom([a, b], async (room) => {
+      await join(room, a, "A");
+      await join(room, b, "B");
+      await room.handleStartRace(a);
+      await runCountdown(room);
+
+      const restore = breakD1(room);
+      await raceToFinish(room, [a, b]);
+      expect(room.state.pendingResults).toHaveLength(2);
+
+      // An empty room past its 24h ceiling, woken while D1 is still down and
+      // before the owed rows' retry is due.
+      room.state.players = [];
+      room.state.createdAt = 0;
+      await room.onAlarm();
+      expect(room.state.pendingResults).toHaveLength(2);
+      expect((await room.ctx.storage.get("state")).pendingResults).toHaveLength(2);
+
+      restore();
+      await retryNow(room);
+      expect(room.state.pendingResults).toHaveLength(0);
+      expect(await rowsForRoom(room)).toHaveLength(2);
+    });
+  });
+
   it("an undeliverable row is retired once the retry window closes", async () => {
     const a = makeConn("a");
     const b = makeConn("b");
@@ -386,6 +444,39 @@ describe("public quickmatch — durable outbox", () => {
       const rows = await rowsForRoom(room);
       expect(rows).toHaveLength(2);
       expect(rows.every((r) => r.finished === 1)).toBe(true);
+    });
+  });
+
+  it("rows still being written never arm the alarm for now", async () => {
+    const a = makeConn("a");
+    const b = makeConn("b");
+    await withPublicRoom([a, b], async (room, { settled }) => {
+      await join(room, a, "A", { difficulty: "medium" });
+      await join(room, b, "B", { difficulty: "medium" });
+      room.state.autoStartDeadline = Date.now() - 1;
+      await room.onAlarm();
+      await runCountdown(room);
+
+      // D1 is slow: the race end's inserts start and hang. finishRace settles
+      // off the broadcast path, so the final answer returns while they are in
+      // flight — and reschedules the alarm on its way out.
+      const d1 = holdD1(room);
+      await raceToFinish(room, [a, b]);
+      expect(room.state.state).toBe("finished");
+      expect(d1.calls()).toBe(1);
+      expect(room.state.pendingResults).toHaveLength(2);
+      expect(await room.ctx.storage.getAlarm()).toBeGreaterThan(Date.now());
+
+      // An alarm that fires mid-write neither starts a second write of the
+      // rows in flight nor re-arms itself for now.
+      await room.onAlarm();
+      expect(d1.calls()).toBe(1);
+      expect(await room.ctx.storage.getAlarm()).toBeGreaterThan(Date.now());
+
+      d1.release();
+      await settled();
+      expect(room.state.pendingResults).toHaveLength(0);
+      expect(await rowsForRoom(room)).toHaveLength(2);
     });
   });
 

@@ -77,7 +77,7 @@ export const EXPIRED_ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 // The race-result outbox (state.pendingResults) retries a failed insert on
 // this cadence, woken by the room's shared alarm. The insert itself is
 // idempotent (worker/race-result-store.js), so a retry that follows a write
-// which secretly succeeded costs a SELECT, not a duplicate row.
+// which secretly succeeded inserts nothing rather than a duplicate row.
 export const RESULT_RETRY_MS = 30 * 1000;
 
 // How long the outbox keeps retrying one row before giving up. An outage
@@ -85,6 +85,11 @@ export const RESULT_RETRY_MS = 30 * 1000;
 // so it is set far past any transient D1 failure; the cap exists because a
 // room (or its tombstone) would otherwise hold an alarm and retry forever.
 export const RESULT_OUTBOX_TTL_MS = 60 * 60 * 1000;
+
+/** The outbox entries in `state` still inside their retry window at `now`. */
+function owedResults(state, now) {
+  return (state?.pendingResults ?? []).filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > now);
+}
 
 // How far a deadline may drift later than the alarm already on disk before
 // scheduleNextAlarm() pays for a rewrite, in rooms that expire when idle. The
@@ -558,8 +563,7 @@ export class RaceRoom extends Server {
       // Rows still owed to D1 outlive the room that ran the race: carry the
       // queue across the reset and revisit cleanup once the retry window has
       // closed, rather than deleting storage out from under them.
-      const owed = (this.state.pendingResults ?? [])
-        .filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > now);
+      const owed = owedResults(this.state, now);
       this.state = this.freshState(this.name);
       if (owed.length > 0) {
         this.state.pendingResults = owed;
@@ -587,8 +591,9 @@ export class RaceRoom extends Server {
       return;
     }
 
-    // Hard ceiling: 24h.
-    if (now - this.state.createdAt > ROOM_MAX_AGE_MS && this.state.players.length === 0) {
+    // Hard ceiling: 24h — held off, like idle cleanup, while rows are owed.
+    if (now - this.state.createdAt > ROOM_MAX_AGE_MS && this.state.players.length === 0
+      && owedResults(this.state, now).length === 0) {
       await this.ctx.storage.delete('state');
       this.state = this.freshState(this.name);
       return;
@@ -1094,63 +1099,51 @@ export class RaceRoom extends Server {
     await this.drainRaceResults();
   }
 
-  // In-memory reentrancy guard, per DO instance: a captcha answer delivered
-  // while a drain is suspended on D1 must not start a second pass over the
-  // same queue. The in-flight pass picks up entries queued mid-drain instead.
-  drainingResults = false;
-
   /**
    * Settle the outbox: attempt every due entry, drop what landed (the insert
-   * dedupe counts a quietly successful earlier write as landed), reschedule
-   * what failed, and retire what has outlived RESULT_OUTBOX_TTL_MS. Persists
-   * if anything moved, so the settled state — not the intent — is what a
-   * crash replays from.
+   * dedupe counts a quietly successful earlier write as landed), leave what
+   * failed to its retry, and retire what has outlived RESULT_OUTBOX_TTL_MS.
+   * Persists if anything moved, so the settled state — not the intent — is
+   * what a crash replays from.
+   *
+   * Every entry a drain takes is leased — handed its retry time — before the
+   * first insert is awaited. A D1 insert leaves the input gate open, so other
+   * handlers run mid-drain: rescheduling the alarm, or draining again when a
+   * captcha settles. The lease is what makes a row in flight read as not yet
+   * due to all of them, instead of as work to start now. A crash replays the
+   * persisted, unleased entry, and onStart() re-arms the alarm for it.
    */
   async drainRaceResults() {
-    if (this.drainingResults) return;
-    this.drainingResults = true;
-    try {
-      let changed = false;
-      // A row that has outlived its retry window is an outage report, not a
-      // loop to run forever.
-      const now = Date.now();
-      const live = (this.state.pendingResults ?? [])
-        .filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > now);
-      if (live.length !== (this.state.pendingResults ?? []).length) {
-        for (const e of this.state.pendingResults) {
-          if (!live.includes(e)) {
-            logError(KINDS.RACE_RESULT_DB, 'race result outbox entry expired undelivered', {
-              roomId: this.name, playerId: e.playerId, phase: 'outbox_expire',
-            });
-          }
-        }
-        this.state.pendingResults = live;
-        changed = true;
-      }
-      // Bounded passes: an entry queued while a D1 await had the gate open
-      // (captcha settle mid-drain) is due immediately, and the next pass
-      // catches it.
-      for (let pass = 0; pass < 4; pass++) {
-        const due = (this.state.pendingResults ?? [])
-          .filter((e) => e.nextAttemptAt == null || e.nextAttemptAt <= Date.now());
-        if (due.length === 0) break;
-        for (const entry of due) {
-          try {
-            await insertRaceResult(this.env, entry.payload, entry.override ?? undefined, entry.raceAt);
-            this.state.pendingResults = this.state.pendingResults.filter((e) => e !== entry);
-          } catch (e) {
-            logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: entry.playerId, phase: 'outbox_insert' });
-            entry.nextAttemptAt = Date.now() + RESULT_RETRY_MS;
-          }
-          changed = true;
+    const now = Date.now();
+    let changed = false;
+    // A row that has outlived its retry window is an outage report, not a
+    // loop to run forever.
+    const live = owedResults(this.state, now);
+    if (live.length !== (this.state.pendingResults ?? []).length) {
+      for (const e of this.state.pendingResults) {
+        if (!live.includes(e)) {
+          logError(KINDS.RACE_RESULT_DB, 'race result outbox entry expired undelivered', {
+            roomId: this.name, playerId: e.playerId, phase: 'outbox_expire',
+          });
         }
       }
-      if (changed) {
-        await this.persist();
-        await this.scheduleNextAlarm();
+      this.state.pendingResults = live;
+      changed = true;
+    }
+    const due = (this.state.pendingResults ?? [])
+      .filter((e) => e.nextAttemptAt == null || e.nextAttemptAt <= now);
+    for (const entry of due) entry.nextAttemptAt = now + RESULT_RETRY_MS;
+    for (const entry of due) {
+      try {
+        await insertRaceResult(this.env, entry.payload, entry.override ?? undefined, entry.raceAt);
+        this.state.pendingResults = this.state.pendingResults.filter((e) => e !== entry);
+      } catch (e) {
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: entry.playerId, phase: 'outbox_insert' });
       }
-    } finally {
-      this.drainingResults = false;
+    }
+    if (changed || due.length > 0) {
+      await this.persist();
+      await this.scheduleNextAlarm();
     }
   }
 
@@ -1333,8 +1326,7 @@ export class RaceRoom extends Server {
     // Rows still owed to D1 survive the winddown: the tombstone carries the
     // outbox and keeps an alarm until they settle or expire, so a room that
     // idles out during a database outage does not take its results with it.
-    const owed = (this.state.pendingResults ?? [])
-      .filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > now);
+    const owed = owedResults(this.state, now);
     this.state = {
       ...this.freshState(this.name),
       state: EXPIRED_ROOM_STATE,
@@ -1389,8 +1381,7 @@ export class RaceRoom extends Server {
     // A tombstone may still owe result rows to D1; the room taking over the
     // name inherits the queue (the alarm armed below retries it) rather than
     // the writes dying with the old room.
-    const owed = (stored?.pendingResults ?? [])
-      .filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > Date.now());
+    const owed = owedResults(stored, Date.now());
     if (owed.length > 0) fresh.pendingResults = owed;
     // A bare RPC skips partyserver's initialization, which is what records the
     // name for an alarm wake whose ctx.id carries none. Without it the fuse
