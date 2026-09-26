@@ -155,4 +155,72 @@ describe("insertRaceResult", () => {
     const b = await insertRaceResult(env, basePayload());
     expect(a.id).not.toBe(b.id);
   });
+
+  // Room-counted rows are written from the room's durable outbox, which
+  // retries — and a retry can follow a write that secretly succeeded. A room
+  // row carries its race's own time, and the (room, device, race time,
+  // result) fingerprint makes the retry stand down. Solo rows carry no race
+  // time: they are one-shot POSTs and are never deduped (see above).
+  describe("room rows", () => {
+    const RACE_AT = Date.UTC(2026, 8, 24, 23, 59, 30);
+    const roomPayload = (overrides = {}) =>
+      basePayload({ room_id: "room-dedupe-test", ...overrides });
+    const dnfPayload = () => roomPayload({
+      finished: false, finish_time_ms: null, problems_correct: 3,
+      problems_attempted: 5, avg_time_per_problem_ms: 0,
+    });
+    const roomRows = async (roomId = "room-dedupe-test") => {
+      const { results } = await env.DB.prepare(
+        "SELECT id, played_at FROM race_results WHERE room_id = ?"
+      ).bind(roomId).all();
+      return results;
+    };
+
+    it("dates the row to the race, not to the write", async () => {
+      const { played_at } = await insertRaceResult(env, roomPayload(), undefined, RACE_AT);
+      expect(played_at).toBe(RACE_AT);
+      const [row] = await roomRows();
+      expect(row.played_at).toBe(RACE_AT);
+    });
+
+    it("skips a replayed insert of the same room row", async () => {
+      const a = await insertRaceResult(env, roomPayload(), undefined, RACE_AT);
+      const b = await insertRaceResult(env, roomPayload(), undefined, RACE_AT);
+      expect(b.duplicate).toBe(true);
+      expect(b.id).toBeNull();
+      const rows = await roomRows();
+      expect(rows.map((r) => r.id)).toEqual([a.id]);
+    });
+
+    it("does not merge two different results from the same race", async () => {
+      await insertRaceResult(env, roomPayload({ finish_time_ms: 30000 }), undefined, RACE_AT);
+      await insertRaceResult(env, roomPayload({ finish_time_ms: 41234 }), undefined, RACE_AT);
+      expect(await roomRows()).toHaveLength(2);
+    });
+
+    it("fingerprints unfinished rows too (finish_time_ms NULL)", async () => {
+      await insertRaceResult(env, dnfPayload(), undefined, RACE_AT);
+      const b = await insertRaceResult(env, dnfPayload(), undefined, RACE_AT);
+      expect(b.duplicate).toBe(true);
+      expect(await roomRows()).toHaveLength(1);
+    });
+
+    it("stores identical-count DNFs from two different races", async () => {
+      // A racer who idles through a rematch posts the same counts twice; only
+      // the race time tells the two races apart.
+      await insertRaceResult(env, dnfPayload(), undefined, RACE_AT);
+      const b = await insertRaceResult(env, dnfPayload(), undefined, RACE_AT + 90_000);
+      expect(b.duplicate).toBeUndefined();
+      expect(await roomRows()).toHaveLength(2);
+    });
+
+    it("does not merge the same result raced under two different rooms", async () => {
+      await insertRaceResult(env, roomPayload(), undefined, RACE_AT);
+      await insertRaceResult(env, roomPayload({ room_id: "room-dedupe-other" }), undefined, RACE_AT);
+      const { results } = await env.DB.prepare(
+        "SELECT id FROM race_results WHERE device_id = ?"
+      ).bind("device-xyz").all();
+      expect(results).toHaveLength(2);
+    });
+  });
 });

@@ -30,7 +30,7 @@
 //
 // The lobby button for the excluded mode says "Solo vs Bots", which is the
 // other half of the argument: a podium made of practice bots is not a
-// standing. Bots never produce rows at all (persistResults skips `p.isBot`),
+// standing. Bots never produce rows at all (queueRaceResults skips `p.isBot`),
 // so a Quick Match that backfilled empty lanes with bots still contributes
 // only its humans — the bot backfill is not a reason to drop Quick Match.
 //

@@ -74,6 +74,23 @@ export const UNJOINED_ROOM_IDLE_MS = 2 * 60 * 1000;
 // that a stale invite link explains itself.
 export const EXPIRED_ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 
+// The race-result outbox (state.pendingResults) retries a failed insert on
+// this cadence, woken by the room's shared alarm. The insert itself is
+// idempotent (worker/race-result-store.js), so a retry that follows a write
+// which secretly succeeded inserts nothing rather than a duplicate row.
+export const RESULT_RETRY_MS = 30 * 1000;
+
+// How long the outbox keeps retrying one row before giving up. An outage
+// longer than this loses the row the way the old fire-and-forget write did,
+// so it is set far past any transient D1 failure; the cap exists because a
+// room (or its tombstone) would otherwise hold an alarm and retry forever.
+export const RESULT_OUTBOX_TTL_MS = 60 * 60 * 1000;
+
+/** The outbox entries in `state` still inside their retry window at `now`. */
+function owedResults(state, now) {
+  return (state?.pendingResults ?? []).filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > now);
+}
+
 // How far a deadline may drift later than the alarm already on disk before
 // scheduleNextAlarm() pays for a rewrite, in rooms that expire when idle. The
 // idle clock moves on every client frame, so without this an answer costs a
@@ -159,6 +176,11 @@ export function freshState(id) {
     // publicState() like every other secret, and the wire carries only the
     // problem strings, only to the challenged seat.
     captchaChallenges: {},
+    // Rows this room owes D1: built before the first insert attempt, carried
+    // here until the write lands, retried by the alarm when it fails, and
+    // carried across idle re-mints and the expiry tombstone while still
+    // within RESULT_OUTBOX_TTL_MS. Server-only — publicState() strips it.
+    pendingResults: [],
   };
 }
 
@@ -217,7 +239,9 @@ export function resetForRace(state) {
   state.countdownAt = null;
   // captchaChallenges deliberately survives: a challenge belongs to the racer
   // who earned it, not to the race, and only their answers or their own
-  // deadline may settle it.
+  // deadline may settle it. pendingResults survives for the same shape of
+  // reason: those rows are owed to D1 by races already run, and a rematch
+  // must not abandon them.
 }
 
 function isValidDeviceId(s) {
@@ -340,11 +364,21 @@ export class RaceRoom extends Server {
       migrated = true;
     }
 
+    // A room persisted before the result outbox shipped has no queue.
+    if (!Array.isArray(this.state.pendingResults)) {
+      this.state.pendingResults = [];
+      if (stored) migrated = true;
+    }
+
     if (minted && this.expiresWhenIdle()) this.state.unjoined = true;
     if (minted || migrated) await this.persist();
     // The short fuse is only a deadline until something wakes the room to
-    // enforce it, and nothing on this path arms one otherwise.
-    if (this.state.unjoined) await this.scheduleNextAlarm();
+    // enforce it, and nothing on this path arms one otherwise. Owed result
+    // rows need the same: a crash between queueing and settling leaves them
+    // to whatever wake comes next, so make sure there is one.
+    if (this.state.unjoined || this.state.pendingResults.length > 0) {
+      await this.scheduleNextAlarm();
+    }
   }
 
   async onConnect(connection, ctx) {
@@ -514,10 +548,27 @@ export class RaceRoom extends Server {
       mutated = true;
     }
 
+    // Race-result outbox. Rows are queued and persisted before their first
+    // insert attempt, so a crash replays into this retry rather than losing
+    // the row; the insert's own dedupe (worker/race-result-store.js) absorbs
+    // a retry whose original write actually landed. Runs on tombstones too —
+    // expireRoom() carries the queue across the winddown.
+    if ((this.state.pendingResults ?? []).some((e) => e.nextAttemptAt == null || e.nextAttemptAt <= now)) {
+      await this.drainRaceResults();
+    }
+
     // Idle cleanup.
     if (this.state.idleCleanupAt != null && this.state.idleCleanupAt <= now && this.state.players.length === 0) {
       const idleSince = this.state.lastActivityAt;
+      // Rows still owed to D1 outlive the room that ran the race: carry the
+      // queue across the reset and revisit cleanup once the retry window has
+      // closed, rather than deleting storage out from under them.
+      const owed = owedResults(this.state, now);
       this.state = this.freshState(this.name);
+      if (owed.length > 0) {
+        this.state.pendingResults = owed;
+        this.state.idleCleanupAt = now + RESULT_OUTBOX_TTL_MS;
+      }
       if (this.expiresWhenIdle()) {
         // The room is reborn empty, not active: keep measuring the winddown
         // from the last real activity, or this reset would silently hand it a
@@ -527,13 +578,22 @@ export class RaceRoom extends Server {
         await this.scheduleNextAlarm();
         return;
       }
+      if (this.state.pendingResults.length > 0) {
+        // A public room is reclaimed by deleting its storage; with rows still
+        // owed that delete is the loss the outbox exists to prevent, so keep
+        // a stub state until the queue settles or expires.
+        await this.persist();
+        await this.scheduleNextAlarm();
+        return;
+      }
       await this.ctx.storage.delete('state');
       // Don't broadcast; nobody's listening.
       return;
     }
 
-    // Hard ceiling: 24h.
-    if (now - this.state.createdAt > ROOM_MAX_AGE_MS && this.state.players.length === 0) {
+    // Hard ceiling: 24h — held off, like idle cleanup, while rows are owed.
+    if (now - this.state.createdAt > ROOM_MAX_AGE_MS && this.state.players.length === 0
+      && owedResults(this.state, now).length === 0) {
       await this.ctx.storage.delete('state');
       this.state = this.freshState(this.name);
       return;
@@ -867,7 +927,7 @@ export class RaceRoom extends Server {
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
-    await this.persistRaceResults();
+    await this.persistRaceResults(Date.now());
   }
 
   /**
@@ -910,7 +970,7 @@ export class RaceRoom extends Server {
       index: 0,
       deadline: captchaDeadline(Date.now()),
       // Snapshot the result row now: the build-before-insert rule from
-      // persistRaceResults applies equally to a row that inserts later — a
+      // queueRaceResults applies equally to a row that inserts later — a
       // reconfigured or restarted room must not rewrite a held payload.
       payload: buildRaceResultPayload(player, { id: this.state.id, lastRace: race }),
     };
@@ -951,24 +1011,23 @@ export class RaceRoom extends Server {
     if (!challenge) return;
     delete this.state.captchaChallenges[playerId];
 
+    // The held row goes through the same outbox as every other race row:
+    // queued and persisted before the insert is attempted, retried by the
+    // alarm if the database is down, deduped by the insert if a retry follows
+    // a write that already landed. Dated to this settle, the moment the row
+    // became owed.
+    const raceAt = Date.now();
     const player = this.state.players.find((p) => p.id === playerId);
     if (outcome === 'pass') {
       this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: true }));
-      try {
-        await insertRaceResult(this.env, challenge.payload);
-      } catch (e) {
-        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'captcha_pass_insert' });
-      }
+      this.queueRaceResult({ playerId, payload: challenge.payload, raceAt });
     } else {
       const reason = outcome === 'timeout' ? 'captcha_timeout' : 'captcha_failed';
       this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: false, reason }));
-      try {
-        await insertRaceResult(this.env, challenge.payload, { suspect: 1, reason });
-      } catch (e) {
-        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'captcha_fail_insert' });
-      }
+      this.queueRaceResult({ playerId, payload: challenge.payload, override: { suspect: 1, reason }, raceAt });
     }
     await this.persist();
+    await this.drainRaceResults();
     await this.scheduleNextAlarm();
   }
 
@@ -991,13 +1050,23 @@ export class RaceRoom extends Server {
     }
   }
 
-  async persistRaceResults() {
-    // Every payload is built before the first insert. A D1 insert is a
-    // subrequest, not a storage operation, so the input gate stays open across
-    // it and a `set-config` or `rematch` is delivered mid-loop; a payload read
-    // from live state after that point would describe a different race.
-    const pending = [];
+  async persistRaceResults(raceAt) {
+    this.queueRaceResults(raceAt);
+    await this.flushRaceResults();
+  }
+
+  /**
+   * Build every row this race owes and queue it into the durable outbox,
+   * dated to `raceAt` — the race's end, however late the write lands.
+   *
+   * Every payload is built before the first insert. A D1 insert is a
+   * subrequest, not a storage operation, so the input gate stays open across
+   * it and a `set-config` or `rematch` is delivered mid-loop; a payload read
+   * from live state after that point would describe a different race.
+   */
+  queueRaceResults(raceAt) {
     for (const p of this.state.players) {
+      if (p.isBot) continue; // bots never write rows (public quickmatch)
       if (!p.deviceId) {
         // Defensive: shouldn't happen since the client always sends deviceId
         // in `hello`, but skip rather than violate the NOT NULL constraint.
@@ -1006,19 +1075,75 @@ export class RaceRoom extends Server {
       }
       if (p.resultHeld) {
         // Active verification owns this row: the snapshot taken at issue time
-        // is inserted by resolveCaptchaChallenge, whether it passed, failed or
-        // timed out, and inserting here as well would hand a racer who ignored
+        // is queued by resolveCaptchaChallenge, whether it passed, failed or
+        // timed out, and queueing here as well would hand a racer who ignored
         // the challenge a second, clean row.
         continue;
       }
-      pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
+      this.queueRaceResult({ playerId: p.id, payload: buildRaceResultPayload(p, this.state), raceAt });
     }
-    for (const { playerId, payload } of pending) {
-      try {
-        await insertRaceResult(this.env, payload);
-      } catch (e) {
-        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'insert' });
+  }
+
+  /**
+   * Add a row to the durable outbox. The queue is only intent, not
+   * durability: the caller follows with persist() (directly or through
+   * flushRaceResults) before any insert is attempted.
+   */
+  queueRaceResult({ playerId, payload, override = null, raceAt }) {
+    (this.state.pendingResults ??= []).push({ playerId, payload, override, raceAt, nextAttemptAt: null });
+  }
+
+  /** Persist the outbox, then attempt every due entry. */
+  async flushRaceResults() {
+    await this.persist();
+    await this.drainRaceResults();
+  }
+
+  /**
+   * Settle the outbox: attempt every due entry, drop what landed (the insert
+   * dedupe counts a quietly successful earlier write as landed), leave what
+   * failed to its retry, and retire what has outlived RESULT_OUTBOX_TTL_MS.
+   * Persists if anything moved, so the settled state — not the intent — is
+   * what a crash replays from.
+   *
+   * Every entry a drain takes is leased — handed its retry time — before the
+   * first insert is awaited. A D1 insert leaves the input gate open, so other
+   * handlers run mid-drain: rescheduling the alarm, or draining again when a
+   * captcha settles. The lease is what makes a row in flight read as not yet
+   * due to all of them, instead of as work to start now. A crash replays the
+   * persisted, unleased entry, and onStart() re-arms the alarm for it.
+   */
+  async drainRaceResults() {
+    const now = Date.now();
+    let changed = false;
+    // A row that has outlived its retry window is an outage report, not a
+    // loop to run forever.
+    const live = owedResults(this.state, now);
+    if (live.length !== (this.state.pendingResults ?? []).length) {
+      for (const e of this.state.pendingResults) {
+        if (!live.includes(e)) {
+          logError(KINDS.RACE_RESULT_DB, 'race result outbox entry expired undelivered', {
+            roomId: this.name, playerId: e.playerId, phase: 'outbox_expire',
+          });
+        }
       }
+      this.state.pendingResults = live;
+      changed = true;
+    }
+    const due = (this.state.pendingResults ?? [])
+      .filter((e) => e.nextAttemptAt == null || e.nextAttemptAt <= now);
+    for (const entry of due) entry.nextAttemptAt = now + RESULT_RETRY_MS;
+    for (const entry of due) {
+      try {
+        await insertRaceResult(this.env, entry.payload, entry.override ?? undefined, entry.raceAt);
+        this.state.pendingResults = this.state.pendingResults.filter((e) => e !== entry);
+      } catch (e) {
+        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: entry.playerId, phase: 'outbox_insert' });
+      }
+    }
+    if (changed || due.length > 0) {
+      await this.persist();
+      await this.scheduleNextAlarm();
     }
   }
 
@@ -1130,11 +1255,12 @@ export class RaceRoom extends Server {
 
   publicState() {
     // Strip server-only Player fields (attempts/streak counters, identity), the
-    // captcha table (seeds, answers, held result rows) and the unjoined flag
-    // (a lifecycle detail no client acts on) before broadcasting.
+    // captcha table (seeds, answers, held result rows), the result outbox
+    // (row payloads carry deviceId/userId) and the unjoined flag (a lifecycle
+    // detail no client acts on) before broadcasting.
     // `serverNow` is the room's clock at send, for a client reading race time
     // off `raceStartedAt` (remote-runner.js).
-    const { captchaChallenges, unjoined, ...rest } = this.state;
+    const { captchaChallenges, unjoined, pendingResults, ...rest } = this.state;
     return { ...rest, players: this.state.players.map(publicPlayer), serverNow: Date.now() };
   }
 
@@ -1190,21 +1316,31 @@ export class RaceRoom extends Server {
 
   /**
    * Wind the room down: tell everyone still attached, replace the state with a
-   * tombstone, drop the alarm. With no alarm, no players and no live sockets,
-   * the DO goes dormant and stops costing anything until someone opens the
-   * link again — and when they do, the tombstone answers "expired" instead of
-   * quietly reviving the room under them.
+   * tombstone, drop the alarm — unless the outbox still owes rows, which keep
+   * it armed until they settle or expire. With no alarm, no players and no
+   * live sockets, the DO goes dormant and stops costing anything until someone
+   * opens the link again — and when they do, the tombstone answers "expired"
+   * instead of quietly reviving the room under them.
    */
   async expireRoom(now = Date.now()) {
     this.broadcast(expiredMessage(this.name));
+    // Rows still owed to D1 survive the winddown: the tombstone carries the
+    // outbox and keeps an alarm until they settle or expire, so a room that
+    // idles out during a database outage does not take its results with it.
+    const owed = owedResults(this.state, now);
     this.state = {
       ...this.freshState(this.name),
       state: EXPIRED_ROOM_STATE,
       expiredAt: now,
       lastActivityAt: null,
+      pendingResults: owed,
     };
     await this.persist();
-    await this.ctx.storage.deleteAlarm();
+    if (owed.length > 0) {
+      await this.scheduleNextAlarm();
+    } else {
+      await this.ctx.storage.deleteAlarm();
+    }
     for (const c of this.getConnections()) closeQuietly(c, 'room expired');
   }
 
@@ -1243,6 +1379,11 @@ export class RaceRoom extends Server {
     const stored = await this.ctx.storage.get('state');
     if (stored != null && stored.state !== EXPIRED_ROOM_STATE) return false;
     const fresh = { ...this.freshState(this.name), unjoined: true };
+    // A tombstone may still owe result rows to D1; the room taking over the
+    // name inherits the queue (the alarm armed below retries it) rather than
+    // the writes dying with the old room.
+    const owed = owedResults(stored, Date.now());
+    if (owed.length > 0) fresh.pendingResults = owed;
     // A bare RPC skips partyserver's initialization, which is what records the
     // name for an alarm wake whose ctx.id carries none. Without it the fuse
     // armed below throws on this.name in expireRoom() and never frees the name.
@@ -1268,6 +1409,10 @@ export class RaceRoom extends Server {
     if (this.state.idleCleanupAt != null) candidates.push(this.state.idleCleanupAt);
     for (const dl of Object.values(this.state.disconnectDeadlines)) candidates.push(dl);
     for (const ch of Object.values(this.state.captchaChallenges ?? {})) candidates.push(ch.deadline);
+    // A queued row with no retry time yet is due now: the in-line drain right
+    // after queueing normally settles it, and the alarm is the backstop for
+    // the crash that landed in between.
+    for (const e of this.state.pendingResults ?? []) candidates.push(e.nextAttemptAt ?? Date.now());
     const raceDeadline = this.raceDeadlineAt();
     if (raceDeadline != null) candidates.push(raceDeadline);
     for (const dl of this.extraAlarmDeadlines()) if (dl != null) candidates.push(dl);

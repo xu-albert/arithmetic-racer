@@ -9,9 +9,16 @@ import { db } from "./db.js";
 import { assessPlausibility } from "./plausibility.js";
 import { computePoints } from "./race-score.js";
 
-export async function insertRaceResult(env, payload, plausibilityOverride) {
+export async function insertRaceResult(env, payload, plausibilityOverride, raceAt) {
   const id = crypto.randomUUID();
-  const playedAt = Date.now();
+  // A room row lands from the room's durable outbox (server/room.js), and a
+  // retry can land it up to RESULT_OUTBOX_TTL_MS after the race — past a UTC
+  // midnight, into the next leaderboard window. So the room hands over the
+  // race's own time, and the row is dated to that rather than to the write.
+  // A separate argument for the same reason as the override below: a solo
+  // row's payload is a request body, and a date read off it would be the
+  // client's to choose. Solo rows are dated here, as they land.
+  const playedAt = raceAt ?? Date.now();
 
   // Assessed here rather than in the route so every writer is covered — the
   // solo POST and the RaceRoom DO both land on this function, and a bound that
@@ -36,15 +43,36 @@ export async function insertRaceResult(env, payload, plausibilityOverride) {
   // rate, not an earning, so nothing accumulates from it.
   const points = computePoints(payload);
 
-  await db(env)
-    .prepare(
-      `INSERT INTO race_results (
-         id, user_id, device_id, difficulty, finished, finish_time_ms,
-         problems_total, problems_correct, problems_attempted,
-         avg_time_per_problem_ms, accuracy_pct, longest_streak,
-         played_at, room_id, suspect, suspect_reason, points
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
-    )
+  // The outbox retries until the insert lands — and a retry can follow a write
+  // that actually succeeded, when the DO crashed between the D1 response and
+  // recording the settle. The retry replays the stored entry, so it carries
+  // the same payload and the same race time, and the (room, device, race
+  // time, result) fingerprint of the earlier row identifies it: the retry
+  // inserts nothing instead of double-counting the race. The race time is
+  // what keeps two genuinely different races apart — a racer who idles
+  // through two rematches posts the same counts twice, but not from the same
+  // millisecond. The check rides inside the INSERT, so it and the write are
+  // one statement: one round trip, and no gap for another write to land in.
+  // Solo rows (no race time) are one-shot client POSTs with no retry loop
+  // behind them and skip the check.
+  const insert = `INSERT INTO race_results (
+       id, user_id, device_id, difficulty, finished, finish_time_ms,
+       problems_total, problems_correct, problems_attempted,
+       avg_time_per_problem_ms, accuracy_pct, longest_streak,
+       played_at, room_id, suspect, suspect_reason, points
+     )`;
+  const row = "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17";
+  const sql = raceAt == null
+    ? `${insert} VALUES (${row})`
+    : `${insert} SELECT ${row}
+       WHERE NOT EXISTS (
+         SELECT 1 FROM race_results
+         WHERE played_at = ?13 AND room_id = ?14 AND device_id = ?3 AND finished = ?5
+           AND problems_total = ?7 AND problems_correct = ?8 AND problems_attempted = ?9
+           AND longest_streak = ?12 AND finish_time_ms IS ?6
+       )`;
+  const { meta } = await db(env)
+    .prepare(sql)
     .bind(
       id,
       payload.user_id,
@@ -65,5 +93,8 @@ export async function insertRaceResult(env, payload, plausibilityOverride) {
       points
     )
     .run();
+  if (meta.changes === 0) {
+    return { id: null, played_at: playedAt, suspect, suspect_reason: reason, points, duplicate: true };
+  }
   return { id, played_at: playedAt, suspect, suspect_reason: reason, points };
 }

@@ -56,10 +56,11 @@ are deliberately different mechanisms:
   `state.lastActivityAt`, which `touchActivity()` bumps on connect, close, and
   any *recognized* client message. Alarm ticks are not activity, so a race
   nobody is answering is idle. It ends in `expireRoom()`: state becomes an
-  `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped, and everyone attached
-  gets `room-expired` and a closed socket. The same winddown runs on the much
-  shorter `UNJOINED_ROOM_IDLE_MS` while nobody has joined the room at all — see
-  "A room name is reserved, never merely drawn".
+  `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped (kept only while the
+  result outbox still owes rows, until they settle or expire), and everyone
+  attached gets `room-expired` and a closed socket. The same winddown runs on
+  the much shorter `UNJOINED_ROOM_IDLE_MS` while nobody has joined the room at
+  all — see "A room name is reserved, never merely drawn".
 - **Race deadline** — `raceDeadlineAt()`, both rooms. `isRaceComplete()` alone
   never ends a race a connected racer refuses to finish, so two bounds back it:
   the grace the *first* finisher arms (`armRaceGrace()`, value `raceGraceMs()`)
@@ -323,10 +324,10 @@ whole shape of the lifecycle, and every part of it follows:
   and the row payload itself, so nothing the room does later can change what it
   grades or stores.
 - **Issuing it transfers ownership of that race's row, permanently.**
-  `issueCaptchaChallenge` sets `player.resultHeld`, and `persistRaceResults` /
-  `PublicRaceRoom.persistResults` skip on that flag — never on "a challenge is
-  still open". Because the challenge opens at the racer's own finish, it
-  normally settles (and deletes itself) *before* `finishRace()` runs, so a guard
+  `issueCaptchaChallenge` sets `player.resultHeld`, and `queueRaceResults`
+  skips on that flag — never on "a challenge is still open". Because the
+  challenge opens at the racer's own finish, it normally settles (and deletes
+  itself) *before* `finishRace()` runs, so a guard
   that reads the live challenge map lets the race end write a second row — and
   on the timeout path that second row goes through `assessPlausibility`, comes
   out `suspect = 0`, and puts an unverified finish straight onto the board.
@@ -352,10 +353,11 @@ Other invariants that are easy to break:
 - The `captcha` message carries `remainingMs`, not the absolute deadline: the
   client's clock is not the DO's, and a re-offer has to show what is left of the
   original budget rather than restarting it.
-- The plausibility override is a named third argument to `insertRaceResult`, not
-  a payload field. `payload` is built from a request body on the solo path, so
-  an override read off it would be one `{...body}` away from letting a client
-  clear its own suspect flag.
+- The plausibility override is a named third argument to `insertRaceResult`, and
+  the room's race time (`played_at`) a named fourth; neither is a payload field.
+  `payload` is built from a request body on the solo path, so an override read
+  off it would be one `{...body}` away from letting a client clear its own
+  suspect flag.
 
 ## `public/` has no build step
 

@@ -27,7 +27,7 @@
 // The excluded mode is the one the lobby labels "Solo vs Bots", which is the
 // other half of the argument: a feed is a claim that there are *people* here,
 // and a podium made of practice bots is not people. Bots never produce rows at
-// all (`persistResults` skips `p.isBot`), so a Quick Match that backfilled
+// all (`queueRaceResults` skips `p.isBot`), so a Quick Match that backfilled
 // empty lanes with bots still contributes only its humans — the bot backfill is
 // not a reason to drop Quick Match, which is where most of the liveness is.
 //

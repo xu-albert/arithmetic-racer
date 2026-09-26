@@ -14,8 +14,6 @@ import { computeBotTimelines, scoreBotAt } from '../public/src/bot-timeline.js';
 import { seededRng } from '../public/src/seeded-rng.js';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence } from '../public/src/game.js';
-import { insertRaceResult } from '../worker/race-result-store.js';
-import { buildRaceResultPayload } from './room-stats.js';
 import { difficultyFromRoomName } from './lobby-router.js';
 import { logError, KINDS } from '../worker/logger.js';
 
@@ -224,7 +222,7 @@ export class PublicRaceRoom extends RaceRoom {
     this.state.state = 'finished';
     this.state.graceDeadline = null;
     // Same pin as the base room: what this race actually was, taken before the
-    // `finish` broadcast. Config is locked here, but persistResults reads the
+    // `finish` broadcast. Config is locked here, but queueRaceResults reads the
     // pin like every other writer rather than trusting live state.
     this.state.lastRace = {
       difficulty: this.state.difficulty,
@@ -241,17 +239,26 @@ export class PublicRaceRoom extends RaceRoom {
     // reach the other players in the room.
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
-    // Fire-and-forget — DB error must not block the WS broadcast.
-    this.persistResults().catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, phase: 'persist_results' }));
+    // Queue this race's rows into the durable outbox now, while the full
+    // roster is still present — the bots and departed seats are stripped
+    // below, and their payloads are built from it.
+    this.queueRaceResults(Date.now());
 
     // Strip bots from state.players so the human-count gates in onAlarm
     // (idle cleanup, 24h max-age) can actually fire once humans leave.
     // Without this, bots remain in players forever and the room's DO storage
     // never gets reclaimed (bug_004). The seats removePlayer held past their
     // socket's departure go the same way and for the same reason: their
-    // payloads are built above, so nothing needs them any more, and a seat
+    // payloads are queued above, so nothing needs them any more, and a seat
     // with nobody behind it would hold this room's storage open just as well.
     this.state.players = this.state.players.filter((p) => !p.isBot && !p.departed);
+
+    // Settle the outbox off the broadcast path — a D1 outage must not block
+    // the `finish` broadcast, and a failed write is retried from the alarm
+    // rather than lost. Deliberately after the strip: the persist inside
+    // captures the post-strip state, so a crash-replay never revives bots
+    // that would hold this room's storage open.
+    this.persistResults().catch((e) => logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, phase: 'persist_results' }));
 
     // If no humans remain at finish time (rare: everyone DNF'd via disconnect),
     // schedule cleanup now. The base cleanup gates only fire from onAlarm.
@@ -265,23 +272,9 @@ export class PublicRaceRoom extends RaceRoom {
     // the shared buildRaceResultPayload helper. attempts/longestStreak are
     // tracked by the base RaceRoom on each answer, so accuracy_pct here is
     // genuine — no more 0/100 approximation.
-    // Built up front for the reason the base room does it: finishRace strips
-    // bots and schedules cleanup right after kicking this off, and an insert is
-    // a subrequest the room keeps taking messages across.
-    const pending = [];
-    for (const p of this.state.players) {
-      if (p.isBot) continue;
-      if (!p.deviceId) continue;
-      if (p.resultHeld) continue; // active verification owns this row
-      pending.push({ playerId: p.id, payload: buildRaceResultPayload(p, this.state) });
-    }
-    for (const { playerId, payload } of pending) {
-      try {
-        await insertRaceResult(this.env, payload);
-      } catch (e) {
-        logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId, phase: 'insert' });
-      }
-    }
+    // finishRace already queued every owed row before stripping the roster,
+    // so what remains here is the settle: persist, then drain what is due.
+    await this.flushRaceResults();
   }
 
   isRaceComplete() {
