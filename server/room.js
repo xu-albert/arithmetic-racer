@@ -80,6 +80,15 @@ export const EXPIRED_ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 // which secretly succeeded inserts nothing rather than a duplicate row.
 export const RESULT_RETRY_MS = 30 * 1000;
 
+// Bound on a single catch-up batch (the answers one seat typed while its
+// socket was down), independent of the socket limiter: the batch is one
+// message, so one limiter tick, and without its own cap it would be the one
+// way to make the room grade unbounded work per tick. 4x raceLength covers
+// honest wrong-answer retries at every seat size (hard ceiling 200 entries,
+// ~8 KB at MAX_RACE_LENGTH); anything larger is rejected whole, never
+// truncated — a truncated batch would silently strand the tail's answers.
+export const CATCHUP_MAX_ENTRIES_PER_PROBLEM = 4;
+
 // How long the outbox keeps retrying one row before giving up. An outage
 // longer than this loses the row the way the old fire-and-forget write did,
 // so it is set far past any transient D1 failure; the cap exists because a
@@ -116,6 +125,7 @@ const MESSAGE_HANDLERS = new Map([
   ['set-config', (room, conn, msg) => room.handleSetConfig(conn, msg)],
   ['start-race', (room, conn) => room.handleStartRace(conn)],
   ['answer', (room, conn, msg) => room.handleAnswer(conn, msg)],
+  ['catch-up', (room, conn, msg) => room.handleCatchUp(conn, msg)],
   ['captcha-answer', (room, conn, msg) => room.handleCaptchaAnswer(conn, msg)],
   ['quit', (room, conn) => room.handleQuit(conn)],
   ['rematch', (room, conn) => room.handleRematch(conn)],
@@ -314,6 +324,11 @@ export class RaceRoom extends Server {
   // In-memory, per-instance. Not persisted and not shared across rooms: a
   // flood only ever needs to be stopped in the room receiving it.
   socketLimiter = createSocketLimiter();
+
+  // Per-seat chains serializing catch-up batches (broadcast id -> Promise of
+  // the batch currently being graded). In-memory like the limiter: the window
+  // it guards is the handler's own awaits, which do not survive hibernation.
+  catchUpChains = new Map();
 
   freshState(id) {
     return freshState(id);
@@ -839,6 +854,130 @@ export class RaceRoom extends Server {
       // Public rooms have no activity flush to save these stats before hibernation.
       await this.persist();
     }
+  }
+
+  /**
+   * Grade one reconnect catch-up batch: the answers a seat typed while its
+   * socket was down, sent as a single ordered message right after `hello`
+   * (the client holds them in a per-race outbox rather than the generic
+   * socket queue, so a long outage never outruns the 20/s limiter).
+   *
+   * Grading is positional, which is what makes delivery exactly-once:
+   * - `entry.index < player.score` — already graded (a replayed batch, or
+   *   answers that raced ahead before the drop): skip.
+   * - `entry.index === player.score` — grade exactly as handleAnswer does.
+   * - `entry.index > player.score` — a gap; client and server disagree about
+   *   where the race stands. Skip and report it; the client resumes normal
+   *   play from the server's position.
+   * Replaying the whole batch after a second reconnect mid-drain is therefore
+   * a no-op. Wrong answers cost an attempt and the streak exactly as live
+   * play, and retries at one index grade as successive attempts.
+   */
+  async handleCatchUp(connection, msg) {
+    const player = this.playerFor(connection);
+    if (!player) return;
+
+    const entries = msg.entries;
+    if (!Array.isArray(entries)
+      || entries.length > CATCHUP_MAX_ENTRIES_PER_PROBLEM * this.state.raceLength
+      || entries.some((e) => !Number.isInteger(e?.index) || e.index < 0)) {
+      this.sendCatchUpAck(connection, player, { rejected: 'oversize' });
+      return;
+    }
+
+    // At most one batch per seat is mid-grading at a time. The only way a
+    // second one arrives while the first is between awaits is the client
+    // resending after the drain's socket died, so chain behind it rather than
+    // reject — the positional skip makes that replay free.
+    const prev = this.catchUpChains.get(player.id) ?? Promise.resolve();
+    const run = prev.then(() => this.gradeCatchUp(connection, player, msg));
+    const tracked = run.catch(() => {});
+    this.catchUpChains.set(player.id, tracked);
+    try {
+      await run;
+    } finally {
+      if (this.catchUpChains.get(player.id) === tracked) this.catchUpChains.delete(player.id);
+    }
+  }
+
+  async gradeCatchUp(connection, player, msg) {
+    const entries = msg.entries;
+    // Not the race this batch belongs to any more: it ended or was rematched
+    // during the outage (raceStartedAt is the batch's epoch check), or the
+    // seat's reconnect grace ran out and it was dropped. Grade nothing — the
+    // snapshot the reconnect already sent settles the client's screen — but
+    // still answer: the client is holding its input pause open for the ack.
+    if (this.state.state !== 'racing'
+      || player.dropped
+      || msg.raceStartedAt !== this.state.raceStartedAt) {
+      this.sendCatchUpAck(connection, player, { applied: 0, skipped: entries.length });
+      return;
+    }
+
+    let applied = 0;
+    let skipped = 0;
+    const gaps = [];
+    let finishedNow = false;
+    for (const entry of entries) {
+      if (entry.index < player.score) { skipped++; continue; }
+      if (entry.index > player.score) { skipped++; gaps.push(entry.index); continue; }
+      if (player.score >= this.state.raceLength) { skipped++; continue; }
+      const problem = this.state.problemSequence[player.score];
+      if (!problem) { skipped++; continue; }
+      if (validateAnswer(problem, entry.value)) {
+        player.score += 1;
+        player.currentStreak += 1;
+        if (player.currentStreak > player.longestStreak) player.longestStreak = player.currentStreak;
+        if (player.score >= this.state.raceLength) {
+          player.finishMs = Date.now() - this.state.raceStartedAt;
+          finishedNow = true;
+        }
+      } else {
+        player.currentStreak = 0;
+      }
+      player.attempts += 1;
+      applied++;
+    }
+
+    // One broadcast for the whole batch: other clients render only the score
+    // and the finish, so the intermediate steps would be invisible anyway.
+    if (applied > 0) {
+      this.broadcast(JSON.stringify({
+        type: 'advance', playerId: player.id, score: player.score, finishMs: player.finishMs,
+      }));
+    }
+    this.sendCatchUpAck(connection, player, { applied, skipped, gaps });
+
+    // A finish is a finish however it arrived: same grace arming and same
+    // active verification as the live path, stamped on the room's clock.
+    if (finishedNow) {
+      this.armRaceGrace();
+      this.issueCaptchaChallenge(player);
+    }
+
+    const allDone = this.isRaceComplete();
+    if (allDone) {
+      await this.finishRace();
+      await this.persist();
+      this.broadcastState();
+      await this.scheduleNextAlarm();
+      return;
+    }
+    // One persist for the whole batch, where the live path pays one per answer.
+    await this.persist();
+  }
+
+  /** The targeted drain report the reconnecting seat is paused waiting for. */
+  sendCatchUpAck(connection, player, { applied = 0, skipped = 0, gaps = [], rejected = null } = {}) {
+    connection.send(JSON.stringify({
+      type: 'catch-up-ack',
+      applied,
+      skipped,
+      gaps,
+      rejected,
+      finalScore: player.score,
+      finishMs: player.finishMs,
+    }));
   }
 
   /**

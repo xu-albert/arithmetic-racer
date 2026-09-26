@@ -312,7 +312,8 @@ recent-finishes through the existing `suspect = 0` predicates. Never a ban.
 **A challenge belongs to the racer who earned it, not to the race.** That is the
 whole shape of the lifecycle, and every part of it follows:
 
-- It is issued in `handleAnswer` the moment that racer's `finishMs` is stamped,
+- It is issued the moment that racer's `finishMs` is stamped — in
+  `handleAnswer` for a live finish, in `gradeCatchUp` for a reconnect batch —
   so the budget runs from *their* finish. Issuing at race end would aim the
   clock at whoever waited longest for the stragglers — which is always the fast
   racer the feature exists to check.

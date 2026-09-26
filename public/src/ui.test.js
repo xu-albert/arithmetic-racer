@@ -52,6 +52,8 @@ function fakeEl(tag = 'div') {
       },
     },
     append: (...kids) => el.children.push(...kids),
+    remove: () => {},
+    setAttribute: () => {},
     addEventListener: () => {},
     removeEventListener: () => {},
     focus: () => {},
@@ -135,12 +137,14 @@ function racingState(extra = {}) {
 }
 
 /** What main.js's handleRoomRaceStart does once the lobby hands a snapshot over. */
-function openRaceScreen(state, youAre = ME) {
+function openRaceScreen(state, youAre = ME, roomClient = null) {
   const listeners = new Set();
-  const roomClient = {
-    on: (h) => { listeners.add(h); return () => listeners.delete(h); },
-    send: () => {},
-  };
+  if (!roomClient) {
+    roomClient = {
+      on: (h) => { listeners.add(h); return () => listeners.delete(h); },
+      send: () => {},
+    };
+  }
   const screens = { race: fakeEl(), results: fakeEl() };
   const runner = createRemoteRunner({ roomClient, initialState: state, youAre });
   const cleanup = attachRaceUI({ runner, raceLength: state.raceLength, screens });
@@ -148,6 +152,7 @@ function openRaceScreen(state, youAre = ME) {
   return {
     runner,
     cleanup,
+    screens,
     // What the room would push over the socket.
     receive: (msg) => { for (const l of [...listeners]) l(msg); },
     input: dom.el('answer-input'),
@@ -609,5 +614,71 @@ describe('ten-player private-room race screen', () => {
     assert.equal(screen.input.disabled, true);
     screen.cleanup();
     screen.runner.stop();
+  });
+});
+
+describe('the catch-up drain pause', () => {
+  // A roomClient whose socket can drop and come back, the way room-client.js
+  // drives it: hello goes out from its own open handler before onOpen fires.
+  function socketClient() {
+    const listeners = new Set();
+    const openListeners = new Set();
+    const sent = [];
+    return {
+      sent,
+      readyState: 1,
+      on: (h) => { listeners.add(h); return () => listeners.delete(h); },
+      onOpen: (h) => { openListeners.add(h); return () => openListeners.delete(h); },
+      send: (m) => sent.push(m),
+      receive: (msg) => { for (const l of [...listeners]) l(msg); },
+      drop() { this.readyState = 3; },
+      reopen() { this.readyState = 1; for (const l of [...openListeners]) l(); },
+    };
+  }
+
+  test('input pauses with a visible pill while the batch drains, then resumes', () => {
+    const client = socketClient();
+    const screen = openRaceScreen(racingState(), ME, client);
+    assert.equal(screen.input.disabled, false);
+
+    client.drop();
+    screen.runner.submitAnswer(String(SEQ[1].answer));
+    assert.equal(screen.input.disabled, false, 'typing still works while the socket is down');
+
+    client.reopen();
+    assert.equal(screen.input.disabled, true, 'the drain pauses input');
+    const pill = screen.screens.race.children.find((c) => c.id === 'catchup-pill');
+    assert.equal(pill.classList.contains('hidden'), false, 'the pause is visible');
+    assert.equal(pill.textContent, 'Catching up…');
+
+    client.receive({
+      type: 'catch-up-ack',
+      applied: 1, skipped: 0, gaps: [], rejected: null,
+      finalScore: 2, finishMs: null,
+    });
+    assert.equal(screen.input.disabled, false, 'the ack lifts the pause');
+    assert.equal(pill.classList.contains('hidden'), true);
+    assert.equal(screen.score.textContent, `2 / ${SEQ.length}`);
+    screen.cleanup();
+  });
+
+  test('a catch-up that completed the race keeps the input closed after the ack', () => {
+    const client = socketClient();
+    const screen = openRaceScreen(racingState(), ME, client);
+
+    client.drop();
+    screen.runner.submitAnswer(String(SEQ[1].answer));
+    screen.runner.submitAnswer(String(SEQ[2].answer));
+    client.reopen();
+    assert.equal(screen.input.disabled, true);
+
+    client.receive({
+      type: 'catch-up-ack',
+      applied: 2, skipped: 0, gaps: [], rejected: null,
+      finalScore: SEQ.length, finishMs: 12_000,
+    });
+    assert.equal(screen.input.disabled, true, 'finished stays finished');
+    assert.equal(screen.banner.classList.contains('hidden'), false, 'and the banner paints');
+    screen.cleanup();
   });
 });

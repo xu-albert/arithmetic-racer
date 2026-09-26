@@ -423,6 +423,22 @@ button[aria-pressed="true"]:hover {
   to   { transform: translate(-50%, -50%) scale(1.04); }
 }
 
+/* Catch-up pill -- shown while a reconnect's offline-answer batch drains. */
+#catchup-pill {
+  position: fixed;
+  top: 18%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  background: var(--card);
+  padding: 0.6rem 1.4rem;
+  border-radius: 999px;
+  box-shadow: var(--card-shadow-lift);
+  font-weight: 700;
+  color: var(--navy-mute);
+  pointer-events: none;
+}
+
 /* ============================================================
    FINISH BANNER -- centered overlay during the post-finish grace window
    ============================================================ */
