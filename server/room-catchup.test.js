@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 
-import { CATCHUP_MAX_ENTRIES_PER_PROBLEM } from "./room.js";
+import { CATCHUP_MAX_ENTRIES_PER_PROBLEM } from "../public/src/catch-up-rules.js";
 
 function makeConn(label) {
   return {

@@ -8,6 +8,7 @@
 import { validateAnswer } from './game.js';
 import { scoreBotAt } from './bot-timeline.js';
 import { rankRacers } from './rankings.js';
+import { CATCHUP_MAX_ENTRIES_PER_PROBLEM } from './catch-up-rules.js';
 
 const PLAYER_ALIAS = 'player';
 
@@ -43,6 +44,10 @@ function buildRacers(players, youAre) {
   return players.map((p) => toRacer(p, youAre));
 }
 
+/**
+ * @param {object} opts
+ * @param {object} opts.roomClient - room-client.js's shape: `on`, `onOpen`, `send` and `readyState`.
+ */
 export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQuit }) {
   const raceLength = initialState.raceLength;
   // Mutated in place and never reassigned: ui.js keeps a reference to it.
@@ -70,6 +75,9 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // mis-grade a retype. Cleared only by the room's `catch-up-ack` — until then
   // the batch is replayed verbatim, under the same `outboxBatchId`, if the
   // socket drops again mid-drain; the room grades an id only once.
+  // Only answers typed once readyState has left OPEN land here: one sent on a
+  // half-open socket that still reports OPEN is lost, and the entries after it
+  // then reach the room as gaps it skips and reports.
   const outbox = [];
   let outboxBatchId = null;
   let awaitingCatchUpAck = false;
@@ -81,14 +89,11 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     lastBatchId = Math.max(lastBatchId + 1, Date.now());
     return lastBatchId;
   }
-  // Client mirror of the server's cap (CATCHUP_MAX_ENTRIES_PER_PROBLEM in
-  // server/room.js), so an honest client never sends a batch the room rejects.
-  const outboxMax = 4 * raceLength;
+  // The room's own cap, so an honest client never sends a batch it rejects.
+  const outboxMax = CATCHUP_MAX_ENTRIES_PER_PROBLEM * raceLength;
 
   function socketOnline() {
-    // A client without a readyState (test doubles) is treated as online: the
-    // outbox only exists for a socket that has actually dropped.
-    return roomClient.readyState == null || roomClient.readyState === WS_OPEN;
+    return roomClient.readyState === WS_OPEN;
   }
 
   function catchUpInFlight() {
@@ -110,15 +115,13 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     emit('catchup-start', { pending: outbox.length });
   }
 
-  const offOpen = typeof roomClient.onOpen === 'function'
-    ? roomClient.onOpen(() => {
-      // A fresh socket means the batch that was in flight went down with the
-      // old one; if it arrived it has been graded, and the replay's batch id
-      // tells the room not to grade it again.
-      awaitingCatchUpAck = false;
-      flushOutbox();
-    })
-    : null;
+  const offOpen = roomClient.onOpen(() => {
+    // A fresh socket means the batch that was in flight went down with the
+    // old one; if it arrived it has been graded, and the replay's batch id
+    // tells the room not to grade it again.
+    awaitingCatchUpAck = false;
+    flushOutbox();
+  });
 
   // How far the room's clock is ahead of this browser's. Every race time on
   // the wire — `raceStartedAt`, the bot timelines, the finish the room stamps
@@ -574,7 +577,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     stop() {
       stopped = true;
       if (botRafId) { cancelAnimationFrame(botRafId); botRafId = null; }
-      offOpen?.();
+      offOpen();
       unsubscribe();
     },
   };
