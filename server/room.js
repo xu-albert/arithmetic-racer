@@ -883,7 +883,12 @@ export class RaceRoom extends Server {
    */
   async handleCatchUp(connection, msg) {
     const player = this.playerFor(connection);
-    if (!player) return;
+    // A socket whose hello was refused (its seat was spliced during the
+    // outage) is paused on this batch all the same.
+    if (!player) {
+      this.sendCatchUpAck(connection, null, { rejected: 'no-seat' });
+      return;
+    }
 
     const entries = msg.entries;
     if (!Array.isArray(entries)
@@ -968,7 +973,10 @@ export class RaceRoom extends Server {
     await this.persist();
   }
 
-  /** The targeted drain report the reconnecting seat is paused waiting for. */
+  /**
+   * The targeted drain report the reconnecting seat is paused waiting for.
+   * With no seat there is no position to report: `finalScore` is null.
+   */
   sendCatchUpAck(connection, player, { applied = 0, skipped = 0, gaps = [], rejected = null } = {}) {
     connection.send(JSON.stringify({
       type: 'catch-up-ack',
@@ -976,8 +984,8 @@ export class RaceRoom extends Server {
       skipped,
       gaps,
       rejected,
-      finalScore: player.score,
-      finishMs: player.finishMs,
+      finalScore: player?.score ?? null,
+      finishMs: player?.finishMs ?? null,
     }));
   }
 

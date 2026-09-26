@@ -441,6 +441,45 @@ describe("catch-up caps and stale batches", () => {
   });
 });
 
+describe("catch-up in a Quick Match", () => {
+  it("a seat spliced during the outage still gets an ack, so the drain pause lifts", async () => {
+    const alice = makeConn("alice");
+    const bob = makeConn("bob");
+    const conns = [alice, bob];
+    const stub = env.PublicRaceRoom.get(env.PublicRaceRoom.idFromName("m-cu-" + crypto.randomUUID()));
+    await runInDurableObject(stub, async (room) => {
+      if (!room.state) await room.onStart();
+      room.getConnections = () => connectionIterator(conns);
+      room.broadcast = (s) => { for (const c of conns) c.send(s); };
+      room.releaseLobby = async () => {};
+      const aliceRacerId = await join(room, alice, "Alice");
+      await join(room, bob, "Bob");
+      room.state.state = "racing";
+      room.state.raceStartedAt = Date.now() - 5000;
+      const raceStartedAt = room.state.raceStartedAt;
+
+      // Alice's reconnect grace ran out mid-race with Bob still racing: a
+      // public room splices an unfinished seat rather than keeping it dropped.
+      await room.removePlayer(room.playerFor(alice).id);
+      expect(room.state.state).toBe("racing");
+
+      // Her reconnect is refused a seat, and the batch still follows hello.
+      const alice2 = makeConn("alice-2");
+      conns.push(alice2);
+      await room.handleHello(alice2, { type: "hello", playerId: aliceRacerId, handle: "Alice" });
+      expect(alice2.lastOf("error")).toMatchObject({ code: "BAD_STATE" });
+      await room.handleCatchUp(alice2, {
+        type: "catch-up", batchId: 1, raceStartedAt, entries: [{ index: 0, value: "1" }],
+      });
+
+      expect(alice2.lastOf("catch-up-ack")).toMatchObject({
+        applied: 0, rejected: "no-seat", finalScore: null, finishMs: null,
+      });
+      expect(bob.allOf("advance")).toHaveLength(0);
+    });
+  });
+});
+
 describe("catch-up and active verification", () => {
   it("a superhuman-paced catch-up finish still triggers the captcha challenge", async () => {
     const host = makeConn("host");

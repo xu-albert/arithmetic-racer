@@ -179,6 +179,29 @@ describe('the offline outbox', () => {
     assert.deepEqual(client.answers(), [{ type: 'answer', value: '6' }]);
   });
 
+  test('an ack with no seat behind it lifts the pause and leaves the lane alone', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    startRace(client, runner);
+    const events = record(runner);
+
+    client.drop();
+    runner.submitAnswer('2');
+    client.reopen();
+    events.length = 0;
+
+    client.receive({
+      type: 'catch-up-ack',
+      applied: 0, skipped: 0, gaps: [], rejected: 'no-seat',
+      finalScore: null, finishMs: null,
+    });
+
+    assert.equal(runner.racers.find((r) => r.id === 'player').score, 1);
+    assert.deepEqual(events, [{ event: 'catchup-end', data: { rejected: 'no-seat', gaps: [] } }]);
+    runner.submitAnswer('4');
+    assert.deepEqual(client.answers(), [{ type: 'answer', value: '4' }], 'the outbox is drained');
+  });
+
   test('a revoked optimistic finish comes back as a null finishMs', () => {
     const client = fakeRoomClient();
     const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
