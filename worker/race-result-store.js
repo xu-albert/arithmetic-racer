@@ -9,9 +9,16 @@ import { db } from "./db.js";
 import { assessPlausibility } from "./plausibility.js";
 import { computePoints } from "./race-score.js";
 
-export async function insertRaceResult(env, payload, plausibilityOverride) {
+export async function insertRaceResult(env, payload, plausibilityOverride, raceAt) {
   const id = crypto.randomUUID();
-  const playedAt = Date.now();
+  // A room row lands from the room's durable outbox (server/room.js), and a
+  // retry can land it up to RESULT_OUTBOX_TTL_MS after the race — past a UTC
+  // midnight, into the next leaderboard window. So the room hands over the
+  // race's own time, and the row is dated to that rather than to the write.
+  // A separate argument for the same reason as the override below: a solo
+  // row's payload is a request body, and a date read off it would be the
+  // client's to choose. Solo rows are dated here, as they land.
+  const playedAt = raceAt ?? Date.now();
 
   // Assessed here rather than in the route so every writer is covered — the
   // solo POST and the RaceRoom DO both land on this function, and a bound that
@@ -36,33 +43,28 @@ export async function insertRaceResult(env, payload, plausibilityOverride) {
   // rate, not an earning, so nothing accumulates from it.
   const points = computePoints(payload);
 
-  // A room-counted row is written from the room's durable outbox
-  // (server/room.js), which retries until the insert lands — and a retry can
-  // follow a write that actually succeeded, when the DO crashed between the
-  // D1 response and recording the settle. A replayed race end rebuilds a
-  // bit-identical payload, so the (room, device, result) fingerprint of the
-  // earlier row identifies it and the retry stands down instead of
-  // double-counting the race. Solo rows (room_id NULL) are one-shot client
-  // POSTs with no retry loop behind them and skip the check.
-  //
-  // The fingerprint cannot tell a replay apart from two genuinely identical
-  // races: same room, same device, same finish time to the millisecond, same
-  // score. For a finisher that coincidence is effectively impossible; a
-  // zero-attempt DNF can repeat across a rematch, and then costs the player
-  // one indistinguishable row in their own history. Accepted — the
-  // alternative (a stored dedupe key under a unique index) is a migration
-  // plus a census of pre-existing duplicates.
-  if (payload.room_id != null) {
+  // The outbox retries until the insert lands — and a retry can follow a write
+  // that actually succeeded, when the DO crashed between the D1 response and
+  // recording the settle. The retry replays the stored entry, so it carries
+  // the same payload and the same race time, and the (room, device, race
+  // time, result) fingerprint of the earlier row identifies it: the retry
+  // stands down instead of double-counting the race. The race time is what
+  // keeps two genuinely different races apart — a racer who idles through
+  // two rematches posts the same counts twice, but not from the same
+  // millisecond. Solo rows (no race time) are one-shot client POSTs with no
+  // retry loop behind them and skip the check.
+  if (raceAt != null) {
     const existing = await db(env)
       .prepare(
         `SELECT id FROM race_results
-         WHERE room_id = ? AND device_id = ? AND finished = ?
+         WHERE played_at = ? AND room_id = ? AND device_id = ? AND finished = ?
            AND problems_total = ? AND problems_correct = ? AND problems_attempted = ?
            AND longest_streak = ?
            AND (finish_time_ms = ? OR (finish_time_ms IS NULL AND ? IS NULL))
          LIMIT 1`
       )
       .bind(
+        playedAt,
         payload.room_id,
         payload.device_id,
         payload.finished ? 1 : 0,
@@ -75,7 +77,7 @@ export async function insertRaceResult(env, payload, plausibilityOverride) {
       )
       .first();
     if (existing) {
-      return { id: existing.id, played_at: null, suspect, suspect_reason: reason, points, duplicate: true };
+      return { id: existing.id, played_at: playedAt, suspect, suspect_reason: reason, points, duplicate: true };
     }
   }
 

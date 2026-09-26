@@ -563,7 +563,13 @@ describe("PublicRaceRoom — race_results persistence", () => {
         { id: 'b-1', isBot: true, tier: 'medium', score: 0, finishMs: null, dropped: false, dnf: false },
       ];
 
-      await room.persistResults();
+      // finishRace queues the rows and settles them off the broadcast path;
+      // hold on to that settle to read what it wrote.
+      let settled;
+      const persistResults = room.persistResults.bind(room);
+      room.persistResults = () => (settled = persistResults());
+      room.finishRace();
+      await settled;
 
       // The prefix-stamped name is the actual room_id in race_results.
       const actualRoomId = room.name;

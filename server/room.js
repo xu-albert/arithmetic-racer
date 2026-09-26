@@ -559,7 +559,7 @@ export class RaceRoom extends Server {
       // queue across the reset and revisit cleanup once the retry window has
       // closed, rather than deleting storage out from under them.
       const owed = (this.state.pendingResults ?? [])
-        .filter((e) => e.createdAt + RESULT_OUTBOX_TTL_MS > now);
+        .filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > now);
       this.state = this.freshState(this.name);
       if (owed.length > 0) {
         this.state.pendingResults = owed;
@@ -922,7 +922,7 @@ export class RaceRoom extends Server {
     const rankings = rankPlayers(this.state.players);
     this.broadcast(JSON.stringify({ type: 'finish', rankings: rankings.map(publicPlayer) }));
 
-    await this.persistRaceResults();
+    await this.persistRaceResults(Date.now());
   }
 
   /**
@@ -964,10 +964,6 @@ export class RaceRoom extends Server {
       count: CAPTCHA_PROBLEM_COUNT,
       index: 0,
       deadline: captchaDeadline(Date.now()),
-      // The outbox key this race's row will settle under. raceStartedAt is
-      // this race's, so the key matches what persistRaceResults would have
-      // used for the seat had the row not been held.
-      resultKey: `${this.state.id}:${this.state.raceStartedAt ?? 0}:${player.id}`,
       // Snapshot the result row now: the build-before-insert rule from
       // persistRaceResults applies equally to a row that inserts later — a
       // reconfigured or restarted room must not rewrite a held payload.
@@ -1012,17 +1008,18 @@ export class RaceRoom extends Server {
 
     // The held row goes through the same outbox as every other race row:
     // queued and persisted before the insert is attempted, retried by the
-    // alarm if the database is down, deduped by the insert if a replay
-    // already wrote it.
-    const key = challenge.resultKey ?? `${this.state.id}:${this.state.raceStartedAt ?? 0}:${playerId}`;
+    // alarm if the database is down, deduped by the insert if a retry follows
+    // a write that already landed. Dated to this settle, the moment the row
+    // became owed.
+    const raceAt = Date.now();
     const player = this.state.players.find((p) => p.id === playerId);
     if (outcome === 'pass') {
       this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: true }));
-      this.queueRaceResult({ key, playerId, payload: challenge.payload });
+      this.queueRaceResult({ playerId, payload: challenge.payload, raceAt });
     } else {
       const reason = outcome === 'timeout' ? 'captcha_timeout' : 'captcha_failed';
       this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: false, reason }));
-      this.queueRaceResult({ key, playerId, payload: challenge.payload, override: { suspect: 1, reason } });
+      this.queueRaceResult({ playerId, payload: challenge.payload, override: { suspect: 1, reason }, raceAt });
     }
     await this.persist();
     await this.drainRaceResults();
@@ -1048,22 +1045,21 @@ export class RaceRoom extends Server {
     }
   }
 
-  async persistRaceResults() {
-    this.queueRaceResults();
+  async persistRaceResults(raceAt) {
+    this.queueRaceResults(raceAt);
     await this.flushRaceResults();
   }
 
   /**
-   * Build every row this race owes and queue it into the durable outbox.
-   * Returns true if anything new was queued.
+   * Build every row this race owes and queue it into the durable outbox,
+   * dated to `raceAt` — the race's end, however late the write lands.
    *
    * Every payload is built before the first insert. A D1 insert is a
    * subrequest, not a storage operation, so the input gate stays open across
    * it and a `set-config` or `rematch` is delivered mid-loop; a payload read
    * from live state after that point would describe a different race.
    */
-  queueRaceResults() {
-    let queued = false;
+  queueRaceResults(raceAt) {
     for (const p of this.state.players) {
       if (p.isBot) continue; // bots never write rows (public quickmatch)
       if (!p.deviceId) {
@@ -1079,35 +1075,17 @@ export class RaceRoom extends Server {
         // the challenge a second, clean row.
         continue;
       }
-      queued = this.queueRaceResult({
-        key: this.resultKeyFor(p),
-        playerId: p.id,
-        payload: buildRaceResultPayload(p, this.state),
-      }) || queued;
+      this.queueRaceResult({ playerId: p.id, payload: buildRaceResultPayload(p, this.state), raceAt });
     }
-    return queued;
   }
 
   /**
-   * The deterministic name of one seat's row from one race. Re-queueing after
-   * a replayed race end collides with the entry the first pass persisted, so
-   * the outbox never holds the same row twice; a rematch starts a new race
-   * (new raceStartedAt) and therefore a new key.
+   * Add a row to the durable outbox. The queue is only intent, not
+   * durability: the caller follows with persist() (directly or through
+   * flushRaceResults) before any insert is attempted.
    */
-  resultKeyFor(player) {
-    return `${this.state.id}:${this.state.raceStartedAt ?? 0}:${player.id}`;
-  }
-
-  /**
-   * Add a row to the durable outbox, unless its key is already there. The
-   * queue is only intent, not durability: the caller follows with persist()
-   * (directly or through flushRaceResults) before any insert is attempted.
-   */
-  queueRaceResult({ key, playerId, payload, override = null }) {
-    const pending = (this.state.pendingResults ??= []);
-    if (pending.some((e) => e.key === key)) return false;
-    pending.push({ key, playerId, payload, override, createdAt: Date.now(), nextAttemptAt: null });
-    return true;
+  queueRaceResult({ playerId, payload, override = null, raceAt }) {
+    (this.state.pendingResults ??= []).push({ playerId, payload, override, raceAt, nextAttemptAt: null });
   }
 
   /** Persist the outbox, then attempt every due entry. */
@@ -1137,7 +1115,7 @@ export class RaceRoom extends Server {
       // loop to run forever.
       const now = Date.now();
       const live = (this.state.pendingResults ?? [])
-        .filter((e) => e.createdAt + RESULT_OUTBOX_TTL_MS > now);
+        .filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > now);
       if (live.length !== (this.state.pendingResults ?? []).length) {
         for (const e of this.state.pendingResults) {
           if (!live.includes(e)) {
@@ -1158,7 +1136,7 @@ export class RaceRoom extends Server {
         if (due.length === 0) break;
         for (const entry of due) {
           try {
-            await insertRaceResult(this.env, entry.payload, entry.override ?? undefined);
+            await insertRaceResult(this.env, entry.payload, entry.override ?? undefined, entry.raceAt);
             this.state.pendingResults = this.state.pendingResults.filter((e) => e !== entry);
           } catch (e) {
             logError(KINDS.RACE_RESULT_DB, e, { roomId: this.name, playerId: entry.playerId, phase: 'outbox_insert' });
@@ -1356,7 +1334,7 @@ export class RaceRoom extends Server {
     // outbox and keeps an alarm until they settle or expire, so a room that
     // idles out during a database outage does not take its results with it.
     const owed = (this.state.pendingResults ?? [])
-      .filter((e) => e.createdAt + RESULT_OUTBOX_TTL_MS > now);
+      .filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > now);
     this.state = {
       ...this.freshState(this.name),
       state: EXPIRED_ROOM_STATE,
@@ -1412,7 +1390,7 @@ export class RaceRoom extends Server {
     // name inherits the queue (the alarm armed below retries it) rather than
     // the writes dying with the old room.
     const owed = (stored?.pendingResults ?? [])
-      .filter((e) => e.createdAt + RESULT_OUTBOX_TTL_MS > Date.now());
+      .filter((e) => e.raceAt + RESULT_OUTBOX_TTL_MS > Date.now());
     if (owed.length > 0) fresh.pendingResults = owed;
     // A bare RPC skips partyserver's initialization, which is what records the
     // name for an alarm wake whose ctx.id carries none. Without it the fuse

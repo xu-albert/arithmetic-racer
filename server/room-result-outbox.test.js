@@ -3,18 +3,25 @@
 // Two failure shapes are covered here, both reproduced against the real room
 // DO and a real D1:
 //   1. D1 down at race end — rows sit in state.pendingResults (persisted
-//      BEFORE the first insert attempt) and the alarm retries until they land.
-//   2. A replayed race end — the insert's own (room, device, result)
-//      fingerprint dedupe keeps a re-run from writing a second row.
+//      BEFORE the first insert attempt) and the alarm retries until they land,
+//      dated to the race rather than to the retry.
+//   2. A retry after a write that secretly landed — the insert's own (room,
+//      device, race time, result) fingerprint keeps it from writing a second
+//      row, while two races that happen to post the same counts both land.
 //
 // Harness mirrors server/room-race-deadline.test.js: fake connections,
 // handlers called directly, real D1 via cloudflare:test. The D1 outage is a
-// Proxy on room.env whose DB binding throws on every statement.
+// Proxy on room.env whose DB binding throws on every statement. Tests that
+// need the race's time to be a particular one pin Date (only Date) to a
+// moment after the real clock, so no alarm they arm comes due mid-test.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 
 import { RESULT_OUTBOX_TTL_MS } from "./room.js";
+import { periodStartMs } from "../public/src/leaderboard-period.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function makeConn(label) {
   return {
@@ -132,8 +139,18 @@ async function retryNow(room) {
   await room.onAlarm();
 }
 
+/** Pin the clock the room reads to `at`. Undone after every test. */
+function setClock(at) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(at);
+}
+
 beforeEach(async () => {
   await env.DB.exec("DELETE FROM race_results");
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("private room — durable outbox", () => {
@@ -172,7 +189,7 @@ describe("private room — durable outbox", () => {
     });
   });
 
-  it("a replayed race end does not write a second set of rows", async () => {
+  it("a retry whose earlier write landed does not write the row twice", async () => {
     const a = makeConn("a");
     const b = makeConn("b");
     await withPrivateRoom([a, b], async (room) => {
@@ -180,19 +197,95 @@ describe("private room — durable outbox", () => {
       await join(room, b, "B");
       await room.handleStartRace(a);
       await runCountdown(room);
+
+      const restore = breakD1(room);
       await raceToFinish(room, [a, b]);
-      expect(room.state.state).toBe("finished");
+      // The outbox as storage holds it before any insert has landed.
+      const owed = structuredClone(room.state.pendingResults);
+      expect(owed).toHaveLength(2);
+
+      restore();
+      await retryNow(room);
       const rows = await rowsForRoom(room);
       expect(rows).toHaveLength(2);
 
-      // What a crash-and-replay does: the race end runs again from the
-      // durable snapshot. The queue is empty (the first pass settled), so the
-      // rows re-queue — and the insert's dedupe stands each one down.
-      await room.persistRaceResults();
+      // A crash between D1's reply and the settle being persisted wakes the
+      // room to the queue as it was: the same entries, owed again. Their
+      // retry finds the rows already written and stands down.
+      room.state.pendingResults = owed;
+      await retryNow(room);
       expect(room.state.pendingResults).toHaveLength(0);
       const after = await rowsForRoom(room);
       expect(after).toHaveLength(2);
       expect(after.map((r) => r.id).sort()).toEqual(rows.map((r) => r.id).sort());
+    });
+  });
+
+  it("an idle racer's identical DNFs from two races both land", async () => {
+    const a = makeConn("a");
+    const b = makeConn("b");
+    const firstRaceAt = Date.now() + DAY_MS;
+    setClock(firstRaceAt);
+    await withPrivateRoom([a, b], async (room) => {
+      await join(room, a, "A");
+      await join(room, b, "B");
+
+      // Each race: A finishes, B never answers, and the grace A's finish
+      // armed ends the race with B on 0 of 0 both times.
+      async function raceWithIdleB() {
+        await room.handleStartRace(a);
+        await runCountdown(room);
+        await raceToFinish(room, [a]);
+        room.state.graceDeadline = Date.now() - 1;
+        await room.onAlarm();
+        expect(room.state.state).toBe("finished");
+      }
+
+      await raceWithIdleB();
+      await room.handleRematch(a);
+      vi.setSystemTime(firstRaceAt + 5 * 60 * 1000);
+      await raceWithIdleB();
+
+      const rows = await rowsForRoom(room);
+      const bRows = rows.filter((r) => r.device_id === "dev-B");
+      expect(bRows).toHaveLength(2);
+      expect(bRows.every((r) => r.finished === 0 && r.problems_attempted === 0)).toBe(true);
+      expect(new Set(bRows.map((r) => r.played_at)).size).toBe(2);
+      expect(rows.filter((r) => r.device_id === "dev-A")).toHaveLength(2);
+    });
+  });
+
+  it("a row retried after UTC midnight keeps its race's date", async () => {
+    const a = makeConn("a");
+    const b = makeConn("b");
+    // The first UTC midnight after the real clock, so nothing armed fires.
+    const midnight = periodStartMs("day", Date.now()) + DAY_MS;
+    const raceAt = midnight - 60 * 1000;
+    setClock(raceAt);
+    await withPrivateRoom([a, b], async (room) => {
+      await join(room, a, "A");
+      await join(room, b, "B");
+      await room.handleStartRace(a);
+      await runCountdown(room);
+
+      // The race ends a minute before midnight, with D1 down until after it.
+      const restore = breakD1(room);
+      await raceToFinish(room, [a, b]);
+      expect(room.state.pendingResults).toHaveLength(2);
+
+      vi.setSystemTime(midnight + 2 * 60 * 1000);
+      restore();
+      await retryNow(room);
+      expect(room.state.pendingResults).toHaveLength(0);
+
+      // Written after midnight, dated before it: the rows stay on the day's
+      // board they were raced on, not the next one.
+      const rows = await rowsForRoom(room);
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row.played_at).toBe(raceAt);
+        expect(row.played_at).toBeLessThan(periodStartMs("day", Date.now()));
+      }
     });
   });
 
@@ -252,7 +345,7 @@ describe("private room — durable outbox", () => {
       // The window closes with D1 still down: the entries are dropped rather
       // than retried forever, and the room stops waking for them.
       for (const e of room.state.pendingResults) {
-        e.createdAt = Date.now() - RESULT_OUTBOX_TTL_MS - 1;
+        e.raceAt = Date.now() - RESULT_OUTBOX_TTL_MS - 1;
       }
       await retryNow(room);
       expect(room.state.pendingResults).toHaveLength(0);

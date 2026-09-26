@@ -242,7 +242,7 @@ export class PublicRaceRoom extends RaceRoom {
     // Queue this race's rows into the durable outbox now, while the full
     // roster is still present — the bots and departed seats are stripped
     // below, and their payloads are built from it.
-    this.queueRaceResults();
+    this.queueRaceResults(Date.now());
 
     // Strip bots from state.players so the human-count gates in onAlarm
     // (idle cleanup, 24h max-age) can actually fire once humans leave.
@@ -272,10 +272,8 @@ export class PublicRaceRoom extends RaceRoom {
     // the shared buildRaceResultPayload helper. attempts/longestStreak are
     // tracked by the base RaceRoom on each answer, so accuracy_pct here is
     // genuine — no more 0/100 approximation.
-    // finishRace already queued every owed row before stripping the roster;
-    // the key dedupe makes this second pass over queueRaceResults a no-op, so
-    // what remains here is the settle: persist, then drain what is due.
-    this.queueRaceResults();
+    // finishRace already queued every owed row before stripping the roster,
+    // so what remains here is the settle: persist, then drain what is due.
     await this.flushRaceResults();
   }
 
