@@ -48,6 +48,18 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     problemQueue.append(div);
   }
 
+  // Shown while a reconnect's catch-up batch drains: the snapshot the room
+  // sends first still carries pre-outage scores, so answers typed then would
+  // grade against problems the server has already moved past. The pause lifts
+  // on 'catchup-end'. Only the drain pauses input — while the socket is down
+  // typing still works; those answers are exactly what the batch carries.
+  const catchupPill = document.createElement('div');
+  catchupPill.id = 'catchup-pill';
+  catchupPill.className = 'hidden';
+  catchupPill.setAttribute('role', 'status');
+  catchupPill.textContent = 'Catching up…';
+  screens.race.append(catchupPill);
+
   // Cache rowHeight once — reading offsetHeight on every advance forces a
   // synchronous layout, which competes with the car-animation paint frames.
   let cachedRowHeight = 0;
@@ -236,6 +248,15 @@ export function attachRaceUI({ runner, raceLength, screens }) {
       if (data.laneId === 'player') { input.disabled = true; input.value = ''; }
       paintFinishBanner();
       if (podium.childElementCount > 0) renderPodium();
+    } else if (event === 'catchup-start') {
+      catchupPill.classList.remove('hidden');
+      input.disabled = true;
+    } else if (event === 'catchup-end') {
+      catchupPill.classList.add('hidden');
+      const done = playerRacer.score >= raceLength || playerRacer.dropped || runner.getState() === 'finished';
+      input.disabled = done;
+      if (done) input.value = '';
+      else input.focus();
     } else if (event === 'finish') {
       input.disabled = true;
       input.value = '';
@@ -256,5 +277,6 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     window.removeEventListener('focus', restoreAnswerFocus);
     unsubscribe();
     runner.stop();
+    catchupPill.remove();
   };
 }
