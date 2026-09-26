@@ -970,7 +970,7 @@ export class RaceRoom extends Server {
       index: 0,
       deadline: captchaDeadline(Date.now()),
       // Snapshot the result row now: the build-before-insert rule from
-      // persistRaceResults applies equally to a row that inserts later — a
+      // queueRaceResults applies equally to a row that inserts later — a
       // reconfigured or restarted room must not rewrite a held payload.
       payload: buildRaceResultPayload(player, { id: this.state.id, lastRace: race }),
     };
