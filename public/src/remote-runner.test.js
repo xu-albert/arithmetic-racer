@@ -23,9 +23,13 @@ function fakeRoomClient() {
   const sent = [];
   return {
     sent,
+    readyState: 1,
     on(handler) {
       listeners.add(handler);
       return () => listeners.delete(handler);
+    },
+    onOpen() {
+      return () => {};
     },
     send(msg) {
       sent.push(msg);

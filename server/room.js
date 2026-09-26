@@ -3,6 +3,7 @@ import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
 import { isConfigurableState } from '../public/src/room-config-rules.js';
 import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE } from '../public/src/room-expiry.js';
+import { CATCHUP_MAX_ENTRIES_PER_PROBLEM } from '../public/src/catch-up-rules.js';
 import { insertRaceResult, MAX_DEVICE_ID_LENGTH } from '../worker/race-result-store.js';
 import { CAPTCHA_PROBLEM_COUNT } from '../worker/plausibility.js';
 import { containsProfanity } from '../worker/username-validator.js';
@@ -79,15 +80,6 @@ export const EXPIRED_ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 // idempotent (worker/race-result-store.js), so a retry that follows a write
 // which secretly succeeded inserts nothing rather than a duplicate row.
 export const RESULT_RETRY_MS = 30 * 1000;
-
-// Bound on a single catch-up batch (the answers one seat typed while its
-// socket was down), independent of the socket limiter: the batch is one
-// message, so one limiter tick, and without its own cap it would be the one
-// way to make the room grade unbounded work per tick. 4x raceLength covers
-// honest wrong-answer retries at every seat size (hard ceiling 200 entries,
-// ~8 KB at MAX_RACE_LENGTH); anything larger is rejected whole, never
-// truncated — a truncated batch would silently strand the tail's answers.
-export const CATCHUP_MAX_ENTRIES_PER_PROBLEM = 4;
 
 // How long the outbox keeps retrying one row before giving up. An outage
 // longer than this loses the row the way the old fire-and-forget write did,

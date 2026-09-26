@@ -141,7 +141,9 @@ function openRaceScreen(state, youAre = ME, roomClient = null) {
   const listeners = new Set();
   if (!roomClient) {
     roomClient = {
+      readyState: 1,
       on: (h) => { listeners.add(h); return () => listeners.delete(h); },
+      onOpen: () => () => {},
       send: () => {},
     };
   }

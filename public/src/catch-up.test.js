@@ -10,6 +10,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRemoteRunner } from './remote-runner.js';
+import { CATCHUP_MAX_ENTRIES_PER_PROBLEM } from './catch-up-rules.js';
 
 const ME = 'p-2';
 const SEQ = [
@@ -365,6 +366,6 @@ describe('the offline outbox', () => {
 
     client.reopen();
     const batch = client.catchUps()[0];
-    assert.equal(batch.entries.length, 4 * SEQ.length);
+    assert.equal(batch.entries.length, CATCHUP_MAX_ENTRIES_PER_PROBLEM * SEQ.length);
   });
 });
