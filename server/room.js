@@ -1316,10 +1316,11 @@ export class RaceRoom extends Server {
 
   /**
    * Wind the room down: tell everyone still attached, replace the state with a
-   * tombstone, drop the alarm. With no alarm, no players and no live sockets,
-   * the DO goes dormant and stops costing anything until someone opens the
-   * link again — and when they do, the tombstone answers "expired" instead of
-   * quietly reviving the room under them.
+   * tombstone, drop the alarm — unless the outbox still owes rows, which keep
+   * it armed until they settle or expire. With no alarm, no players and no
+   * live sockets, the DO goes dormant and stops costing anything until someone
+   * opens the link again — and when they do, the tombstone answers "expired"
+   * instead of quietly reviving the room under them.
    */
   async expireRoom(now = Date.now()) {
     this.broadcast(expiredMessage(this.name));

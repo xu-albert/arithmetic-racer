@@ -222,7 +222,7 @@ export class PublicRaceRoom extends RaceRoom {
     this.state.state = 'finished';
     this.state.graceDeadline = null;
     // Same pin as the base room: what this race actually was, taken before the
-    // `finish` broadcast. Config is locked here, but persistResults reads the
+    // `finish` broadcast. Config is locked here, but queueRaceResults reads the
     // pin like every other writer rather than trusting live state.
     this.state.lastRace = {
       difficulty: this.state.difficulty,
