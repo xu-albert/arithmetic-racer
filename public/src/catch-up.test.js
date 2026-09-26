@@ -1,7 +1,7 @@
 // The client half of reconnect catch-up (Design C): the per-race outbox that
 // holds answers typed while the socket is down, the single ordered `catch-up`
 // batch sent after hello on reconnect, the drain-time input pause, and the
-// positional replay that makes a second reconnect harmless.
+// batch id a second reconnect's replay carries so the room grades it once.
 //
 // The room side is covered in server/room-catchup.test.js; here the server is
 // a fake roomClient with a switchable readyState, and the browser's open event
@@ -102,7 +102,9 @@ describe('the offline outbox', () => {
 
     assert.equal(client.answers().length, 0);
     assert.equal(client.catchUps().length, 1);
-    assert.deepEqual(client.catchUps()[0], {
+    const { batchId, ...batch } = client.catchUps()[0];
+    assert.ok(Number.isSafeInteger(batchId));
+    assert.deepEqual(batch, {
       type: 'catch-up',
       raceStartedAt: 10_000,
       entries: [
@@ -212,15 +214,94 @@ describe('the offline outbox', () => {
     client.reopen();
     assert.equal(client.catchUps().length, 1);
 
-    // Down again before the ack arrived; the resend is the same entries, and
-    // the server skips whatever of the first delivery it already graded.
+    // Down again before the ack arrived; the resend is the same entries under
+    // the same id, which the room grades at most once.
     client.drop();
     client.reopen();
 
     assert.equal(client.catchUps().length, 2);
-    assert.deepEqual(client.catchUps()[1].entries, [
+    const [first, resend] = client.catchUps();
+    assert.equal(resend.batchId, first.batchId);
+    assert.deepEqual(resend.entries, [
       { index: 0, value: '2' },
       { index: 1, value: '4' },
+    ]);
+  });
+
+  test('the next outage after an ack is a new batch with a new id', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    startRace(client, runner);
+    record(runner);
+
+    client.drop();
+    runner.submitAnswer('2');
+    client.reopen();
+    client.receive({
+      type: 'catch-up-ack', applied: 1, skipped: 0, gaps: [], rejected: null, finalScore: 1, finishMs: null,
+    });
+
+    client.drop();
+    runner.submitAnswer('9'); // wrong at index 1
+    client.reopen();
+
+    const [first, second] = client.catchUps();
+    assert.ok(second.batchId > first.batchId);
+    assert.deepEqual(second.entries, [{ index: 1, value: '9' }]);
+  });
+
+  test('a finished snapshot arriving mid-drain settles the race from the room\'s row', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    startRace(client, runner);
+    const events = record(runner);
+
+    runner.submitAnswer('2'); // live, graded by the room before the drop
+    client.drop();
+    for (const value of ['4', '6', '8']) runner.submitAnswer(value);
+    const me = runner.racers.find((r) => r.id === 'player');
+    assert.equal(me.score, SEQ.length);
+    assert.notEqual(me.finishMs, null, 'optimistic finish painted offline');
+
+    // The race hit its deadline during the outage. The batch goes out on
+    // reopen, and the snapshot onConnect pushes is the first thing back.
+    client.reopen();
+    assert.equal(client.catchUps().length, 1);
+    client.receive({
+      type: 'state',
+      state: {
+        ...lobbyState(),
+        state: 'finished',
+        players: [
+          player('p-1', { score: 4, finishMs: 9000 }),
+          player(ME, { score: 1, dnf: true }),
+        ],
+        problemSequence: SEQ,
+        raceStartedAt: 10_000,
+        serverNow: 90_000,
+      },
+      youAre: ME,
+    });
+
+    assert.deepEqual(
+      { score: me.score, finishMs: me.finishMs, dnf: me.dnf },
+      { score: 1, finishMs: null, dnf: true },
+      'the settled row is the room\'s, not the optimistic one',
+    );
+    const finish = events.filter((e) => e.event === 'finish');
+    assert.equal(finish.length, 1);
+    assert.deepEqual(finish[0].data.rankings.map((r) => r.id), ['p-1', 'player']);
+
+    // The late ack speaks for a seat re-minted after the old one's grace ran
+    // out in the finished room; it must not rewrite the settled row.
+    events.length = 0;
+    client.receive({
+      type: 'catch-up-ack', applied: 0, skipped: 3, gaps: [], rejected: null, finalScore: 0, finishMs: null,
+    });
+    assert.equal(me.score, 1);
+    assert.equal(events.filter((e) => e.event === 'advance').length, 0);
+    assert.deepEqual(events.filter((e) => e.event === 'catchup-end'), [
+      { event: 'catchup-end', data: { rejected: null, gaps: [] } },
     ]);
   });
 

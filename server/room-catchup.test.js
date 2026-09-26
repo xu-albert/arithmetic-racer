@@ -1,6 +1,7 @@
 // Reconnect catch-up batches (Design C), end to end against the real room DO:
-// positional exactly-once grading, the caps, the coalesced broadcast, the
-// targeted ack, and the anti-cheat trigger on a catch-up finish.
+// positional grading, exactly-once delivery by batch id, the caps, the
+// coalesced broadcast, the targeted ack, and the anti-cheat trigger on a
+// catch-up finish.
 //
 // Harness mirrors server/room-captcha.test.js: fake connections, handlers
 // called directly, real D1 via cloudflare:test.
@@ -81,9 +82,11 @@ function correctBatch(room, from = 0, to = room.state.raceLength) {
   return entries;
 }
 
-function catchUp(room, conn, entries) {
+let lastBatchId = 0;
+
+function catchUp(room, conn, entries, batchId = ++lastBatchId) {
   return room.handleCatchUp(conn, {
-    type: "catch-up", raceStartedAt: room.state.raceStartedAt, entries,
+    type: "catch-up", batchId, raceStartedAt: room.state.raceStartedAt, entries,
   });
 }
 
@@ -145,7 +148,7 @@ describe("catch-up grading", () => {
       // Through onMessage, so the socket limiter is exercised: the batch is
       // one tick, however many entries it carries.
       await room.onMessage(guest, JSON.stringify({
-        type: "catch-up", raceStartedAt: room.state.raceStartedAt, entries,
+        type: "catch-up", batchId: 1, raceStartedAt: room.state.raceStartedAt, entries,
       }));
 
       const player = room.playerFor(guest);
@@ -165,7 +168,7 @@ describe("catch-up grading", () => {
       await startRace(room, host);
       const entries = correctBatch(room, 0, 5);
 
-      await catchUp(room, guest, entries);
+      await catchUp(room, guest, entries, 1);
       const afterFirst = room.playerFor(guest);
       expect(afterFirst.score).toBe(5);
       expect(afterFirst.attempts).toBe(5);
@@ -175,7 +178,7 @@ describe("catch-up grading", () => {
       const guest2 = makeConn("guest-2");
       conns.push(guest2);
       await room.handleHello(guest2, { type: "hello", playerId: guestRacerId, handle: "Guest" });
-      await catchUp(room, guest2, entries);
+      await catchUp(room, guest2, entries, 1);
 
       const player = room.playerFor(guest2);
       expect(player.score).toBe(5);
@@ -183,6 +186,43 @@ describe("catch-up grading", () => {
       expect(guest2.lastOf("catch-up-ack")).toMatchObject({
         applied: 0, skipped: 5, finalScore: 5,
       });
+    });
+  });
+
+  it("a resent batch ending in a wrong answer at the seat's position grades nothing", async () => {
+    const host = makeConn("host");
+    const guest = makeConn("guest");
+    const conns = [host, guest];
+    await withRoom(conns, async (room) => {
+      await join(room, host, "Host");
+      const guestRacerId = await join(room, guest, "Guest");
+      await startRace(room, host);
+      const seq = room.state.problemSequence;
+      const wrongAtOne = { index: 1, value: String(seq[1].answer + 1) };
+      const entries = [{ index: 0, value: String(seq[0].answer) }, wrongAtOne];
+      const stats = (p) => ({
+        score: p.score, attempts: p.attempts, currentStreak: p.currentStreak, longestStreak: p.longestStreak,
+      });
+
+      await catchUp(room, guest, entries, 7);
+      const graded = { score: 1, attempts: 2, currentStreak: 0, longestStreak: 1 };
+      expect(stats(room.playerFor(guest))).toEqual(graded);
+
+      // The ack died with the socket, and the DO was evicted before the
+      // resend: the replay is judged against what storage holds.
+      room.state = await room.ctx.storage.get("state");
+      const guest2 = makeConn("guest-2");
+      conns.push(guest2);
+      await room.handleHello(guest2, { type: "hello", playerId: guestRacerId, handle: "Guest" });
+      await catchUp(room, guest2, entries, 7);
+
+      expect(stats(room.playerFor(guest2))).toEqual(graded);
+      expect(guest2.lastOf("catch-up-ack")).toMatchObject({ applied: 0, skipped: 2, finalScore: 1 });
+      for (const p of guest2.lastOf("state").state.players) expect(p).not.toHaveProperty("catchUpBatchId");
+
+      // A new batch carrying the same retry is a fresh attempt, and grades.
+      await catchUp(room, guest2, [wrongAtOne], 8);
+      expect(stats(room.playerFor(guest2))).toEqual({ ...graded, attempts: 3 });
     });
   });
 
@@ -290,6 +330,23 @@ describe("catch-up caps and stale batches", () => {
     });
   });
 
+  it("rejects a batch without a batch id without grading any of it", async () => {
+    const host = makeConn("host");
+    const guest = makeConn("guest");
+    await withRoom([host, guest], async (room) => {
+      await join(room, host, "Host");
+      await join(room, guest, "Guest");
+      await startRace(room, host);
+
+      await room.handleCatchUp(guest, {
+        type: "catch-up", raceStartedAt: room.state.raceStartedAt, entries: correctBatch(room, 0, 2),
+      });
+
+      expect(room.playerFor(guest)).toMatchObject({ score: 0, attempts: 0 });
+      expect(guest.lastOf("catch-up-ack")?.rejected).toBeTruthy();
+    });
+  });
+
   it("accepts a batch exactly at the cap", async () => {
     const host = makeConn("host");
     const guest = makeConn("guest");
@@ -348,6 +405,7 @@ describe("catch-up caps and stale batches", () => {
       // The batch from race one must not grade against race two's sequence.
       await room.handleCatchUp(guest, {
         type: "catch-up",
+        batchId: 1,
         raceStartedAt: oldStartedAt,
         entries: [{ index: 0, value: String(room.state.problemSequence[0].answer) }],
       });

@@ -68,9 +68,19 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // they go out as one `catch-up` message the room grades positionally, which
   // neither outruns the server's 20/s limiter nor lets a rollback window
   // mis-grade a retype. Cleared only by the room's `catch-up-ack` — until then
-  // the batch is replayed verbatim if the socket drops again mid-drain.
+  // the batch is replayed verbatim, under the same `outboxBatchId`, if the
+  // socket drops again mid-drain; the room grades an id only once.
   const outbox = [];
+  let outboxBatchId = null;
   let awaitingCatchUpAck = false;
+  // Strictly increasing within this runner, and seeded from the clock so a
+  // runner rebuilt by a reload mid-race never reissues an id the room has
+  // already recorded for this seat.
+  let lastBatchId = 0;
+  function nextBatchId() {
+    lastBatchId = Math.max(lastBatchId + 1, Date.now());
+    return lastBatchId;
+  }
   // Client mirror of the server's cap (CATCHUP_MAX_ENTRIES_PER_PROBLEM in
   // server/room.js), so an honest client never sends a batch the room rejects.
   const outboxMax = 4 * raceLength;
@@ -96,15 +106,15 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       return;
     }
     awaitingCatchUpAck = true;
-    roomClient.send({ type: 'catch-up', raceStartedAt: raceStartedAtMs, entries: outbox });
+    roomClient.send({ type: 'catch-up', batchId: outboxBatchId, raceStartedAt: raceStartedAtMs, entries: outbox });
     emit('catchup-start', { pending: outbox.length });
   }
 
   const offOpen = typeof roomClient.onOpen === 'function'
     ? roomClient.onOpen(() => {
       // A fresh socket means the batch that was in flight went down with the
-      // old one; whatever of it arrived has been graded, and the replay's
-      // below-score entries skip positionally on the server.
+      // old one; if it arrived it has been graded, and the replay's batch id
+      // tells the room not to grade it again.
       awaitingCatchUpAck = false;
       flushOutbox();
     })
@@ -253,10 +263,12 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       existing.handle = displayHandle(p.handle, !!p.isGuest);
       if (existing.isBot) {
         if (p.finishMs != null) existing.finishMs = p.finishMs;
-      } else if (aliased === PLAYER_ALIAS && catchUpInFlight()) {
+      } else if (aliased === PLAYER_ALIAS && roomState === 'racing' && catchUpInFlight()) {
         // The snapshot mid-drain still shows the pre-outage score; taking it
         // verbatim would roll back answers the catch-up batch is about to
         // have graded. The ack applies the room's final position instead.
+        // A `finished` snapshot is final — the room grades no batch against
+        // it — so that one is taken verbatim like any other seat's.
       } else {
         if (p.score != null) existing.score = p.score;
         existing.finishMs = p.finishMs ?? null;
@@ -453,11 +465,14 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       case 'catch-up-ack': {
         // The batch is drained: adopt the room's position verbatim — it is the
         // authority on which entries graded (a revoked optimistic finish comes
-        // back as a null finishMs here) — then lift the input pause.
+        // back as a null finishMs here) — then lift the input pause. Not once
+        // the race is settled: the row the room ended it with is final, and a
+        // late ack can speak for a different seat (one re-minted after the old
+        // seat's grace ran out in a finished room).
         awaitingCatchUpAck = false;
         outbox.length = 0;
         const me = racers.find((r) => r.id === PLAYER_ALIAS);
-        if (me && Number.isInteger(msg.finalScore)) {
+        if (me && !raceSettled && Number.isInteger(msg.finalScore)) {
           const changed = msg.finalScore !== me.score || (msg.finishMs ?? null) !== me.finishMs;
           me.score = msg.finalScore;
           me.finishMs = msg.finishMs ?? null;
@@ -522,6 +537,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // Socket down: hold the answer against the problem it was typed at,
         // for the catch-up batch on reconnect. Past the cap the answer is
         // simply not held — the ack's finalScore corrects the screen.
+        if (outbox.length === 0) outboxBatchId = nextBatchId();
         outbox.push({ index: me.score, value: raw });
       }
       // Optimistic local update — your own car moves on press, no waiting on
