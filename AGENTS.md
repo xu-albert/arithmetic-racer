@@ -56,10 +56,11 @@ are deliberately different mechanisms:
   `state.lastActivityAt`, which `touchActivity()` bumps on connect, close, and
   any *recognized* client message. Alarm ticks are not activity, so a race
   nobody is answering is idle. It ends in `expireRoom()`: state becomes an
-  `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped, and everyone attached
-  gets `room-expired` and a closed socket. The same winddown runs on the much
-  shorter `UNJOINED_ROOM_IDLE_MS` while nobody has joined the room at all — see
-  "A room name is reserved, never merely drawn".
+  `EXPIRED_ROOM_STATE` tombstone, the alarm is dropped (kept only while the
+  result outbox still owes rows, until they settle or expire), and everyone
+  attached gets `room-expired` and a closed socket. The same winddown runs on
+  the much shorter `UNJOINED_ROOM_IDLE_MS` while nobody has joined the room at
+  all — see "A room name is reserved, never merely drawn".
 - **Race deadline** — `raceDeadlineAt()`, both rooms. `isRaceComplete()` alone
   never ends a race a connected racer refuses to finish, so two bounds back it:
   the grace the *first* finisher arms (`armRaceGrace()`, value `raceGraceMs()`)
