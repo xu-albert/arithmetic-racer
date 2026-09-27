@@ -116,7 +116,6 @@ export class PublicRaceRoom extends RaceRoom {
   async onAlarm() {
     const now = Date.now();
     const wasLobby = this.state.state === 'lobby';
-    const wasCountdown = this.state.state === 'countdown';
 
     // 1) Auto-start sequence: fire if deadline elapsed in lobby.
     if (wasLobby && this.state.autoStartDeadline != null && this.state.autoStartDeadline <= now) {
@@ -124,28 +123,57 @@ export class PublicRaceRoom extends RaceRoom {
       // Fall through to base onAlarm so countdown ticks can begin firing.
     }
 
-    await super.onAlarm();
+    // 2) A room can be persisted 'racing' with no bot timelines: an older build
+    //    computed them in a second write after the racing snapshot, and a DO
+    //    reset in that window — or a restart between the two writes — lost them
+    //    for good, because the old gate required this same wake-up to have
+    //    crossed the countdown→racing line. finishRace reads the timelines, so
+    //    the heal has to run BEFORE super.onAlarm()'s race-deadline branch, and
+    //    it is idempotent because computeBotTimelines is deterministic in
+    //    botSeed. The normal path never reaches this: onRaceStarted() fills the
+    //    timelines inside the transition itself.
+    if (this.ensureBotTimelines()) await this.persist();
 
-    // 2) On countdown→racing transition, compute bot timelines once and
-    //    broadcast them so the client can animate bots locally.
-    if (wasCountdown && this.state.state === 'racing' && this.state.botTimelines.length === 0) {
-      this.state.botTimelines = computeBotTimelines({
-        botSeed: this.state.botSeed,
-        botTiers: this.state.botTiers,
-        difficulty: this.state.difficulty,
-        raceLength: this.state.raceLength,
-      });
-      await this.persist();
-      // Send bot timeline data so clients can animate bots without per-tick messages.
-      this.broadcast(JSON.stringify({
-        type: 'bot-timelines',
-        botSeed: this.state.botSeed,
-        botTiers: this.state.botTiers,
-        botTimelines: this.state.botTimelines,
-        raceStartedAt: this.state.raceStartedAt,
-        serverNow: Date.now(),
-      }));
-    }
+    await super.onAlarm();
+  }
+
+  /**
+   * Compute and broadcast the bot timelines for a running race that lacks
+   * them; true if they were (re)derived. Called from onRaceStarted() on the
+   * transition and from onAlarm() as crash recovery. Deterministic in botSeed,
+   * so re-deriving after a lost write reproduces exactly the lost timelines.
+   */
+  ensureBotTimelines() {
+    if (this.state.state !== 'racing') return false;
+    if (this.state.botSeed == null) return false;
+    // A full six-human race has no bots: empty timelines are its final state,
+    // not a lost write — without this check the recovery gate would recompute
+    // and rebroadcast nothing on every alarm for the whole race.
+    if (this.state.botTiers.length === 0) return false;
+    if (this.state.botTimelines.length > 0) return false;
+    this.state.botTimelines = computeBotTimelines({
+      botSeed: this.state.botSeed,
+      botTiers: this.state.botTiers,
+      difficulty: this.state.difficulty,
+      raceLength: this.state.raceLength,
+    });
+    // Send bot timeline data so clients can animate bots without per-tick messages.
+    this.broadcast(JSON.stringify({
+      type: 'bot-timelines',
+      botSeed: this.state.botSeed,
+      botTiers: this.state.botTiers,
+      botTimelines: this.state.botTimelines,
+      raceStartedAt: this.state.raceStartedAt,
+      serverNow: Date.now(),
+    }));
+    return true;
+  }
+
+  onRaceStarted() {
+    // Runs inside the base onAlarm's countdown→racing branch, so the timelines
+    // ride the same persist as the racing snapshot — no two-write window for a
+    // restart to strand an empty-timelines race in.
+    this.ensureBotTimelines();
   }
 
   async runAutoStart() {
@@ -314,6 +342,7 @@ export class PublicRaceRoom extends RaceRoom {
     }
 
     this.state.players.splice(idx, 1);
+    this.cancelAbandonedCountdown();
     this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
 
     // Mid-race: treat removed unfinished player as drop for ranking.

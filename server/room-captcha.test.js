@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 
 import { captchaProblems } from "./captcha.js";
+import { CAPTCHA_PROBLEM_COUNT, CAPTCHA_MS_PER_PROBLEM } from "../worker/plausibility.js";
 
 function makeConn(label) {
   return {
@@ -402,6 +403,78 @@ describe("private room — one row per racer per race, whenever the challenge se
       const rows = await rowsForRoom(room);
       expect(rows.filter((r) => r.device_id === "dev-fast")).toHaveLength(2);
       expect(rows.filter((r) => r.device_id === "dev-slow")).toHaveLength(2);
+    });
+  });
+});
+
+describe("private room — a superseded challenge", () => {
+  it("records captcha_superseded (not captcha_timeout) and reissues three fresh problems on a full budget", async () => {
+    const fast = makeConn("fast");
+    const slow = makeConn("slow");
+    await withRoom([fast, slow], async (room) => {
+      await join(room, fast, "Fast", "dev-fast");
+      await join(room, slow, "Slow", "dev-slow");
+      const finishStraggler = await raceFastFirst(room, fast, slow, fast);
+
+      // The supersede settles fire-and-forget (the finish path must not
+      // suspend on a database write); capture the promise so the row it
+      // writes is awaitable.
+      const settles = [];
+      const origResolve = room.resolveCaptchaChallenge.bind(room);
+      room.resolveCaptchaChallenge = (...args) => {
+        const p = origResolve(...args);
+        settles.push(p);
+        return p;
+      };
+
+      // One of three answered before the host rematches into the window.
+      const first = challengeFor(room, fast);
+      expect(first).toBeTruthy();
+      await answerCaptcha(room, fast, first, 1);
+      await finishStraggler();
+
+      // Second race, fast again: the pending challenge is superseded.
+      await room.handleRematch(fast);
+      await room.handleStartRace(fast);
+      await runCountdown(room);
+      room.state.raceStartedAt = Date.now() - 3500;
+      await raceToFinish(room, [fast]);
+      await Promise.allSettled(settles);
+
+      // The abandoned challenge's row says what actually happened: the budget
+      // was still live and the racer was mid-answer when the reissue landed.
+      const firstRaceRows = (await rowsForRoom(room)).filter((r) => r.device_id === "dev-fast");
+      expect(firstRaceRows).toHaveLength(1);
+      expect(firstRaceRows[0].suspect).toBe(1);
+      expect(firstRaceRows[0].suspect_reason).toBe("captcha_superseded");
+      expect(fast.sent.filter((m) => m.type === "captcha-result"))
+        .toContainEqual({ type: "captcha-result", verified: false, reason: "captcha_superseded" });
+
+      // Progress on the superseded challenge does not carry: the reissue is
+      // three fresh problems with the full budget, like any other challenge.
+      const second = challengeFor(room, fast);
+      expect(second).toBeTruthy();
+      expect(second.index).toBe(0);
+      expect(second.count).toBe(CAPTCHA_PROBLEM_COUNT);
+      const budgetLeft = second.deadline - Date.now();
+      expect(budgetLeft).toBeGreaterThan((CAPTCHA_PROBLEM_COUNT - 1) * CAPTCHA_MS_PER_PROBLEM);
+      expect(budgetLeft).toBeLessThanOrEqual(CAPTCHA_PROBLEM_COUNT * CAPTCHA_MS_PER_PROBLEM);
+      expect(fast.lastOf("captcha").problems).toHaveLength(CAPTCHA_PROBLEM_COUNT);
+
+      // All three must be answered to pass, and the second race's row then
+      // records clean.
+      const problems = problemsOf(room, second);
+      await answerCaptcha(room, fast, second, CAPTCHA_PROBLEM_COUNT - 1);
+      expect(challengeFor(room, fast)).toBeTruthy();
+      await room.handleCaptchaAnswer(fast, {
+        type: "captcha-answer", value: String(problems[CAPTCHA_PROBLEM_COUNT - 1].answer),
+      });
+      expect(fast.lastOf("captcha-result")).toMatchObject({ verified: true });
+      expect(challengeFor(room, fast)).toBeNull();
+
+      const mine = (await rowsForRoom(room)).filter((r) => r.device_id === "dev-fast");
+      expect(mine).toHaveLength(2);
+      expect(mine.filter((r) => r.suspect === 0)).toHaveLength(1);
     });
   });
 });

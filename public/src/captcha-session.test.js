@@ -172,6 +172,11 @@ describe('verdict wording', () => {
     // caught answering wrongly.
     assert.match(verdictMessage({ verified: false, reason: 'captcha_timeout' }), /timed out/);
     assert.match(verdictMessage({ verified: false, reason: 'captcha_failed' }), /failed/);
+    // A reissue settles the old challenge while its budget was still live:
+    // neither a wrong answer nor running out of time.
+    const superseded = verdictMessage({ verified: false, reason: 'captcha_superseded' });
+    assert.match(superseded, /new race started/);
+    assert.doesNotMatch(superseded, /failed|timed out/);
     assert.match(verdictMessage({ verified: true }), /counts/);
   });
 });
