@@ -74,6 +74,10 @@ async function signOut() {
   });
 }
 
+// Where better-auth sends the browser back from Google. A failed sign-in
+// comes back here too, with an `error` parameter added (see readGoogleReturn).
+const GOOGLE_RETURN_URL = "/?auth=google";
+
 /**
  * Initiate the Google OAuth flow.
  *
@@ -82,14 +86,15 @@ async function signOut() {
  * better-auth.state cookie. We POST, read the URL, and navigate the
  * browser to Google's consent screen.
  */
-async function startGoogleSignIn() {
+export async function startGoogleSignIn() {
   const res = await fetch(`${AUTH}/sign-in/social`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     credentials: "include",
     body: JSON.stringify({
       provider: "google",
-      callbackURL: "/?auth=google",
+      callbackURL: GOOGLE_RETURN_URL,
+      errorCallbackURL: GOOGLE_RETURN_URL,
     }),
   });
   if (!res.ok) {
@@ -178,9 +183,32 @@ export function mapAuthError(code) {
       return "Wrong email or password.";
     case "PASSWORD_TOO_SHORT":
       return "Password must be at least 8 characters.";
+    // worker/auth.js refuses to join Google sign-in to a password account
+    // whose email was never verified; a password reset verifies it.
+    case "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL":
+      return "An account with this email already exists. Log in with its password, or reset the password if you didn't set it.";
+    // ...and to create an account from a Google email Google hasn't verified.
+    case "OAUTH_EMAIL_NOT_VERIFIED":
+      return "Google hasn't verified this email address, so it can't be used to create an account. Verify it with Google, or sign up with email and password.";
     default:
       return "Something went wrong. Please try again.";
   }
+}
+
+/**
+ * Read a page load's query string for a return from Google sign-in.
+ * Returns null when this load is not one; otherwise the failure code
+ * better-auth added (null on success) and the query left once the return
+ * parameters are stripped.
+ * @param {string} search
+ * @returns {{ error: string|null, query: string } | null}
+ */
+export function readGoogleReturn(search) {
+  const params = new URLSearchParams(search);
+  if (params.get("auth") !== "google") return null;
+  const error = params.get("error");
+  for (const key of ["auth", "error", "error_description"]) params.delete(key);
+  return { error, query: params.toString() };
 }
 
 /**
@@ -597,20 +625,26 @@ export function mountAuthModal(host) {
 
   // ---- OAuth-return detection ---
   // If we landed here from /api/auth/sign-in/social with ?auth=google,
-  // dispatch auth-changed once and clean the URL.
+  // clean the URL, then either dispatch auth-changed once or, when the
+  // sign-in failed, reopen the modal on Log In with the reason.
   try {
-    const params = new URLSearchParams(location.search);
-    if (params.get("auth") === "google") {
-      params.delete("auth");
-      const cleanQuery = params.toString();
+    const googleReturn = readGoogleReturn(location.search);
+    if (googleReturn) {
       const cleanUrl =
-        location.pathname + (cleanQuery ? `?${cleanQuery}` : "") + location.hash;
+        location.pathname +
+        (googleReturn.query ? `?${googleReturn.query}` : "") +
+        location.hash;
       history.replaceState(null, "", cleanUrl);
-      // Defer one tick so listeners (e.g. header) attached after this
-      // module's top-level mount still receive the event.
-      setTimeout(() => {
-        document.dispatchEvent(new Event("auth-changed"));
-      }, 0);
+      if (googleReturn.error) {
+        openModal("signin");
+        showError(signinForm, mapAuthError(googleReturn.error));
+      } else {
+        // Defer one tick so listeners (e.g. header) attached after this
+        // module's top-level mount still receive the event.
+        setTimeout(() => {
+          document.dispatchEvent(new Event("auth-changed"));
+        }, 0);
+      }
     }
   } catch {
     // location/history unavailable — non-fatal in non-browser test envs.

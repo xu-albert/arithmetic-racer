@@ -47,8 +47,11 @@
 //         naturally to user creation and exposes the endpoint context as the
 //         second argument.
 //    We use `databaseHooks.user.create.before` for username validation
-//    (so we reject before the DB insert) and `databaseHooks.user.create.after`
-//    for claim + welcome email.
+//    and the unverified-OAuth-email refusal (so we reject before the DB
+//    insert), `databaseHooks.user.create.after` for claim + welcome email,
+//    `databaseHooks.account.create.before` to refuse linking into an
+//    unverified user, and a single `hooks.after` that names those refusals
+//    on better-auth's error redirect.
 //
 // 3. PASSWORD-RESET ROUTES (verified against
 //    node_modules/better-auth/dist/api/routes/password.mjs in v1.6.9):
@@ -63,11 +66,16 @@
 //    and persisted on user creation; we then validate it in the create hook.
 
 import { betterAuth } from "better-auth";
-import { APIError } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { sendResetEmail, sendWelcomeEmail } from "./email.js";
 import { validateUsernameSync } from "./username-validator.js";
 import { logError, KINDS } from "./logger.js";
 import { MAX_DEVICE_ID_LENGTH } from "./race-result-store.js";
+
+// The error codes a refused Google sign-in reaches the client with. The
+// client's mapAuthError (public/src/auth.js) turns each into the explanation.
+const LINK_REFUSED = "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL";
+const SIGNUP_REFUSED = "OAUTH_EMAIL_NOT_VERIFIED";
 
 /**
  * Build the auth instance against the Worker's D1 binding and env secrets.
@@ -77,6 +85,15 @@ import { MAX_DEVICE_ID_LENGTH } from "./race-result-store.js";
  * @returns {ReturnType<typeof betterAuth>}
  */
 export function getAuth(env) {
+  // Requests whose OAuth sign-in a create hook refused, mapped to the reason,
+  // so the after hook can name the reason better-auth's own error redirect drops.
+  const refusals = new WeakMap();
+
+  function refuse(ctx, code, message) {
+    if (ctx?.request) refusals.set(ctx.request, code);
+    throw new APIError("FORBIDDEN", { message, code });
+  }
+
   return betterAuth({
     // The kysely-adapter auto-detects a Cloudflare D1 binding (objects with
     // `batch`, `exec`, and `prepare`) and uses its built-in D1SqliteDialect.
@@ -96,6 +113,29 @@ export function getAuth(env) {
       sendResetPassword: async ({ user, url }) => {
         await sendResetEmail(env, { to: user.email, resetUrl: url });
       },
+      // Only whoever reads the address can use a reset link, so a completed
+      // reset is the proof of ownership sign-up never asked for. It is what
+      // lets the owner of a squatted address take it back: the reset verifies
+      // the email (opening Google sign-in to this account) and ends every
+      // session, the squatter's included. On a user that was still unverified
+      // it also detaches every OAuth identity, since each was attached without
+      // that proof and would otherwise keep signing its holder in; the owner
+      // can link Google again afterwards.
+      onPasswordReset: async ({ user }) => {
+        await env.DB.batch([
+          env.DB
+            .prepare(
+              `DELETE FROM account
+                WHERE "userId" = ?1 AND "providerId" != 'credential'
+                  AND (SELECT "emailVerified" FROM "user" WHERE id = ?1) = 0`,
+            )
+            .bind(user.id),
+          env.DB
+            .prepare(`UPDATE "user" SET "emailVerified" = 1 WHERE id = ?`)
+            .bind(user.id),
+        ]);
+      },
+      revokeSessionsOnPasswordReset: true,
     },
 
     socialProviders: {
@@ -124,7 +164,18 @@ export function getAuth(env) {
           // Validate before insert. For OAuth signups, ctx.body has no
           // `username` field — we let those through (the user will set
           // username later via the modal + /api/me/username).
+          //
+          // An OAuth signup must come with an email its provider verified, or
+          // a stranger's Google identity could hold someone else's address.
+          // It has to be refused here, before the insert: D1 has no
+          // transactions, so a later refusal would leave the user row behind.
+          // Password sign-up is exempt; the address's owner can always reset
+          // that password away.
           before: async (user, ctx) => {
+            if (!user.emailVerified && ctx?.path !== "/sign-up/email") {
+              refuse(ctx, SIGNUP_REFUSED, "oauth_email_not_verified");
+            }
+
             const incoming = ctx?.body?.username;
             if (typeof incoming === "string" && incoming.length > 0) {
               const v = validateUsernameSync(incoming);
@@ -180,9 +231,68 @@ export function getAuth(env) {
           },
         },
       },
+      account: {
+        create: {
+          before: async (account, ctx) => {
+            if (!(await linksIntoUnverifiedUser(env, account))) return;
+            refuse(ctx, LINK_REFUSED, "account_link_requires_verified_email");
+          },
+        },
+      },
+    },
+
+    hooks: {
+      // better-auth reports the refusals above generically on its error
+      // redirect (a link refusal as `error=unable_to_link_account`). Name the
+      // real reason instead, so the client can tell the user what to do.
+      after: createAuthMiddleware(async (ctx) => {
+        const code = refusals.get(ctx.request);
+        if (!code) return;
+        const location = ctx.context.responseHeaders?.get("location");
+        if (!location) return;
+        const url = new URL(location, ctx.context.baseURL);
+        url.searchParams.set("error", code);
+        throw ctx.redirect(url.href);
+      }),
     },
   });
 }
+
+/**
+ * Whether creating this account would attach an OAuth identity to an existing
+ * user whose email was never verified — the join the account hook refuses.
+ *
+ * better-auth 1.6.9 signs a Google user in by email: if a user row already has
+ * that address, it links the Google account into it and marks the email
+ * verified (`handleOAuthUserInfo` in oauth2/link-account.mjs), trusting only
+ * Google's claim and never the local row's. Nothing verifies email on sign-up,
+ * so anyone can register a password account under someone else's address,
+ * wait for the owner to sign in with Google, and keep a password that opens
+ * the owner's account. 1.7 closes this upstream with
+ * `accountLinking.requireLocalEmailVerified` (default on); 1.6.9 has no such
+ * setting, and `disableImplicitLinking` would also refuse verified users.
+ *
+ * The hook's throw is the refusal: the link sits in a try/catch that returns
+ * "unable to link account" before the emailVerified update or any session is
+ * created. Returning `false` from the hook would not do — 1.6.9 ignores a null
+ * link and signs in anyway.
+ *
+ * Credential accounts (email sign-up, password reset) are not a join. Neither
+ * is `createOAuthUser` minting a new user with its first account: the user
+ * create hook only lets that user in with a verified email.
+ * The only way into a squatted address is a password reset, which verifies it
+ * (`onPasswordReset` above).
+ */
+async function linksIntoUnverifiedUser(env, account) {
+  if (account.providerId === "credential") return false;
+
+  const target = await env.DB
+    .prepare(`SELECT "emailVerified" AS verified FROM "user" WHERE id = ?`)
+    .bind(account.userId)
+    .first();
+  return !target?.verified;
+}
+
 
 /**
  * How far back the anonymous-history claim reaches: races played more than
