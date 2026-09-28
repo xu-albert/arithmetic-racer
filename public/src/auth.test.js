@@ -52,7 +52,7 @@ test("a refused link comes back explaining the existing account", async () => {
   assert.deepEqual(googleReturn, { error: "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL", query: "" });
   assert.equal(
     mapAuthError(googleReturn.error),
-    "An account with this email already exists. Log in with its password, or reset the password if you didn't set it.",
+    "An account with this email already exists. Google sign-in stays blocked for it until you reset its password with \"Forgot password?\", which confirms you own this email. Until then you can keep logging in with its password; if you didn't set that password, reset it now.",
   );
 });
 

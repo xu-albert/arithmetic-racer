@@ -186,7 +186,7 @@ export function mapAuthError(code) {
     // worker/auth.js refuses to join Google sign-in to a password account
     // whose email was never verified; a password reset verifies it.
     case "ACCOUNT_LINK_REQUIRES_VERIFIED_EMAIL":
-      return "An account with this email already exists. Log in with its password, or reset the password if you didn't set it.";
+      return "An account with this email already exists. Google sign-in stays blocked for it until you reset its password with \"Forgot password?\", which confirms you own this email. Until then you can keep logging in with its password; if you didn't set that password, reset it now.";
     // ...and to create an account from a Google email Google hasn't verified.
     case "OAUTH_EMAIL_NOT_VERIFIED":
       return "Google hasn't verified this email address, so it can't be used to create an account. Verify it with Google, or sign up with email and password.";
