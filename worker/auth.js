@@ -293,7 +293,6 @@ async function linksIntoUnverifiedUser(env, account) {
   return !target?.verified;
 }
 
-
 /**
  * How far back the anonymous-history claim reaches: races played more than
  * this long before the claim stay anonymous.

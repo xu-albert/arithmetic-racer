@@ -119,7 +119,8 @@ real bindings:
   against — the D1 row plus `worker/routes/admin.test.js` is the real integration surface.
   better-auth's Google OAuth and password-reset flows are driven end to end by
   `worker/auth.test.js`, with only Google's token endpoint and the Loops send endpoint stubbed.
-- **What's mocked:** nothing that reaches a real backend. `vi.useFakeTimers()` /
+- **What's mocked:** no binding; only outbound `fetch` to the third parties above, so no
+  test reaches a real backend. `vi.useFakeTimers()` /
   `vi.advanceTimersByTime()` stand in for wall-clock time in `room-winddown.test.js` and
   similar alarm-driven tests — that's a clock mock, not a service mock.
 
