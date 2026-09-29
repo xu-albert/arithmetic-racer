@@ -178,7 +178,7 @@ describe('quick-match dead-end refusals point the player at a fresh match', () =
       assertPointedElsewhere(ws, els);
     });
 
-    test(`${code} after this page held a seat: the finisher stays on the scoreboard`, async () => {
+    test(`${code} after this page lost its seat: no navigation, roster dropped, Find Another Match shown`, async () => {
       const { ws, els } = open();
       ws.push({ type: 'hello-ack', playerId: 'p-1', handle: 'Me' });
       ws.push({ type: 'state', state: FINISHED, youAre: 'p-1' });
