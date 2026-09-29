@@ -21,8 +21,8 @@ import { logError, KINDS } from '../worker/logger.js';
 // every pick for the difficulty routes here — the wedged-lane failure. The
 // release is retried on the room's shared alarm at this cadence, up to
 // LOBBY_RELEASE_MAX_ATTEMPTS in all; past that the router has been unreachable
-// for most of a minute and the dead-end join gate in handleHello is the
-// backstop (it re-attempts the release as it turns the next joiner away).
+// for most of a minute and handleHello is the backstop (every hello that
+// reaches a room past its lobby re-attempts the release).
 export const LOBBY_RELEASE_RETRY_MS = 10 * 1000;
 export const LOBBY_RELEASE_MAX_ATTEMPTS = 5;
 
@@ -71,17 +71,24 @@ export class PublicRaceRoom extends RaceRoom {
     // A new joiner only ever belongs in a lobby: public rooms are single-shot,
     // so countdown/racing/finished are all dead ends for matchmaking — there
     // is no rematch to wait for and no spectating. Turn the joiner away with
-    // MATCH_OVER (the client requeues on it) and re-attempt the router
-    // release: reaching this branch at all means the pointer outlived the
-    // release that was supposed to clear it, so this is the backstop that
-    // lets the next pick mint a fresh room. Reconnects bypass the gate — a
-    // finisher reloading the page keeps their seat and the scoreboard.
-    if (!isReconnect && this.state.state !== 'lobby') {
-      if (this.state.difficulty) await this.releaseLobby();
-      return this.sendError(connection, 'MATCH_OVER',
-        this.state.state === 'finished'
-          ? 'This match has ended; find a new match.'
-          : 'This race already started; find a new match.');
+    // MATCH_OVER. Any hello here re-attempts the router release: the pointer
+    // may have outlived the release that was supposed to clear it, and a
+    // matchmade player holding a seat lands back in it, so this is the
+    // backstop that lets the next pick mint a fresh room. Reconnects bypass
+    // the gate — a finisher reloading the page keeps their seat and the
+    // scoreboard — and do not wait on the router before their hello-ack.
+    if (this.state.state !== 'lobby') {
+      if (isReconnect) {
+        this.releaseLobby().catch((e) => {
+          logError(KINDS.LOBBY_RELEASE_FAILED, e, { roomId: this.name, difficulty: this.state.difficulty });
+        });
+      } else {
+        if (this.state.difficulty) await this.releaseLobby();
+        return this.sendError(connection, 'MATCH_OVER',
+          this.state.state === 'finished'
+            ? 'This match has ended; find a new match.'
+            : 'This race already started; find a new match.');
+      }
     }
 
     if (!isReconnect) {

@@ -8,7 +8,8 @@
 //   2. A new join routed into a dead-end room (full, started, or finished) is
 //      refused, and the refusal re-attempts the router release so the next
 //      pick mints a fresh room. Reconnects still seat — a finisher reloading
-//      the page keeps the scoreboard.
+//      the page keeps the scoreboard — and re-attempt the release too,
+//      without holding their hello-ack on the router.
 //   3. publicState() never carries the pending-release bookkeeping.
 //
 // Harness mirrors server/room-result-outbox.test.js: fake connections,
@@ -109,6 +110,28 @@ function spyLobbyRouter(room) {
   };
   room.env = new Proxy(realEnv, { get: (target, key) => (key === "LobbyRouter" ? spy : target[key]) });
   return { calls, restore: () => { room.env = realEnv; } };
+}
+
+/**
+ * Hold every release open until `open()` — proves a caller does not wait on
+ * the router. Calls are recorded as they are issued.
+ */
+function holdLobbyRouter(room) {
+  const realEnv = room.env;
+  const calls = [];
+  let open;
+  const gate = new Promise((resolve) => { open = resolve; });
+  const held = {
+    idFromName: (n) => realEnv.LobbyRouter.idFromName(n),
+    get: () => ({
+      release: async (name) => {
+        calls.push(name);
+        await gate;
+      },
+    }),
+  };
+  room.env = new Proxy(realEnv, { get: (target, key) => (key === "LobbyRouter" ? held : target[key]) });
+  return { calls, open: () => open(), restore: () => { room.env = realEnv; } };
 }
 
 describe("PublicRaceRoom.releaseLobby — bounded retry", () => {
@@ -241,6 +264,35 @@ describe("PublicRaceRoom.handleHello — dead-end seating", () => {
       router.restore();
     });
   });
+
+  for (const phase of ["racing", "finished"]) {
+    it(`a reconnect into a ${phase} room re-attempts the release without waiting on it`, async () => {
+      await withRoom(`lr-rc-${phase}-` + crypto.randomUUID(), async (room) => {
+        const racerA = await join(room, makeConn("A"), "A");
+        room.state.state = "racing";
+        room.state.raceStartedAt = 1000;
+        if (phase === "finished") room.finishRace(1100);
+        expect(room.state.state).toBe(phase);
+
+        const router = holdLobbyRouter(room);
+        const connA2 = makeConn("A2");
+        await room.handleHello(connA2, {
+          type: "hello", playerId: racerA, handle: "A", deviceId: "dev-A", difficulty: "medium",
+        });
+
+        // Seated while the router is still answering...
+        expect(connA2.lastOf("hello-ack")).toBeTruthy();
+        expect(connA2.lastOf("error")).toBeNull();
+        // ...and the backstop release was issued all the same.
+        expect(router.calls).toEqual([room.name]);
+
+        router.open();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(room.state.pendingLobbyRelease).toBeNull();
+        router.restore();
+      });
+    });
+  }
 
   it("a finished room the router still names is unpinned by the refused join (real router)", async () => {
     // XC-04 end to end: the pointer outlived the room's own release. The

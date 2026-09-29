@@ -236,7 +236,7 @@ today: `server/public-room.test.js` (secrecy — see regression #1/#13 in §4),
 
 | # | Step | Expected |
 |---|---|---|
-| Q1 | On `/`, under **Find a Match**, pick a difficulty radio and click **Find Match** (`#btn-find-match`, distinct from **Quickplay** and **Create Private Room**) | Button disables and `#match-status` reads `Searching…` while the request is in flight; on success the tab navigates to `/?room=<slug>&mode=public&difficulty=<diff>&rq=0`, and `rq` drops out of the URL once the room seats you — the slug is in the URL but never shown in the UI (per c0f9a4c, "hide room slug") |
+| Q1 | On `/`, under **Find a Match**, pick a difficulty radio and click **Find Match** (`#btn-find-match`, distinct from **Quickplay** and **Create Private Room**) | Button disables and `#match-status` reads `Searching…` while the request is in flight; on success the tab navigates to `/?room=<slug>&mode=public&difficulty=<diff>` — the slug is in the URL but never shown in the UI (per c0f9a4c, "hide room slug") |
 | Q2 | Land in the Quick Match lobby (`isPublic` mode) | Header reads **Quick Match**, not the room slug; there is no **Start Race** or **Invite** button — races auto-start, there is nothing to invite a link into |
 | Q3 | Watch the lobby with only you present | A **Searching… 1 / 6 humans** pill sits where the start button would be in a private room (`lobby.js`'s `searchingPill`, counts only `!p.isBot` players) |
 | Q4 | You are the first human in an otherwise-empty room | Auto-start deadline is set 5s out (`LONE_TIMEOUT_MS`); if nobody else joins, the race auto-starts alone (backfilled to 6 with bots) roughly 5s after you land in the lobby |
