@@ -1,8 +1,16 @@
 import { createRoomClient } from './room-client.js';
 import { canEditConfig } from './room-config-rules.js';
 import { createExpiryLatch } from './room-expiry.js';
+import { joinMatchmaking } from './matchmake-api.js';
 
 const DIFFS = ['easy', 'medium', 'hard'];
+
+// How many times a quick-match dead end (MATCH_OVER / ROOM_FULL) re-runs
+// matchmaking on its own before surfacing the error. The count rides the URL
+// (`rq`) because entering a room is a full-page navigation, so module state
+// would reset with every attempt; two requeues also stay inside the
+// matchmake rate limit (3 per 60s) together with the original join.
+const MAX_AUTO_REQUEUES = 2;
 
 /**
  * @param {object} opts
@@ -64,6 +72,8 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   let inviteShownThisSession = false;
   let raceStartHandled = false;
   let prevServerState = null;
+  // In-flight guard for the dead-end requeue (see requeueForMatch).
+  let requeueStarted = false;
 
   // Public matches are anonymous drop-ins — the internal room slug is
   // meaningless to players, so don't surface it.
@@ -332,6 +342,35 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
     showToast(msg, 'error');
   }
 
+  // Quick match only: the router pointed this client at a room that turned
+  // out to be a dead end (full, started, or finished). The room re-attempts
+  // its router release as it refuses the join, so a fresh pick routes
+  // somewhere new — take the player there instead of leaving them on a dead
+  // screen. Bounded by the `rq` counter in the URL: entering a room is a
+  // full-page navigation, and a pointer that stays stale anyway (router
+  // unreachable for minutes) must not loop forever.
+  async function requeueForMatch(msg) {
+    // One requeue at a time: a duplicate error frame (repeated hello after an
+    // auto-reconnect) must not spend a second matchmake rate-limit token.
+    if (requeueStarted) return;
+    requeueStarted = true;
+    const attempted = Number(new URLSearchParams(location.search).get('rq')) || 0;
+    if (attempted >= MAX_AUTO_REQUEUES) {
+      showError(msg.message || msg.code);
+      return;
+    }
+    showToast('That match is gone — finding a new one…', 'info');
+    try {
+      const next = await joinMatchmaking({ difficulty: difficulty ?? 'medium', deviceId });
+      location.assign(
+        `/?room=${encodeURIComponent(next.roomId)}&mode=public` +
+        `&difficulty=${encodeURIComponent(next.difficulty)}&rq=${attempted + 1}`,
+      );
+    } catch (e) {
+      showError(e.message || 'Error finding match');
+    }
+  }
+
   // ----- subscribe -----
   const handleExpiry = createExpiryLatch({
     close: () => client.close(),
@@ -391,7 +430,11 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
         showToast(`Host set the race to ${diff} · ${msg.raceLength} problems`, 'info');
       }
     } else if (msg.type === 'error') {
-      showError(msg.message || msg.code);
+      if (isPublic && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) {
+        requeueForMatch(msg);
+      } else {
+        showError(msg.message || msg.code);
+      }
     }
   });
 
