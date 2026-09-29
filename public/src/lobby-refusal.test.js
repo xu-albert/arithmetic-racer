@@ -5,10 +5,10 @@
 // room re-attempts its router release as it refuses, so the player's own next
 // Find Match mints a fresh room — the lobby itself never re-runs matchmaking
 // or navigates. Whether the page was never seated (a fresh join) or held a
-// seat it has since lost (reconnect or reload past the grace), the refusal is
-// an ordinary error toast and the player stays put, with Find Another Match
-// and Leave still on screen. Only the browser is stubbed: PartySocket, the
-// DOM, fetch and location.assign.
+// seat it has since lost (reconnect or reload past the grace), the refusal
+// drops the room's socket and roster, swaps the Searching pill for Find
+// Another Match, and leaves the player where they are. Only the browser is
+// stubbed: PartySocket, the DOM, fetch and location.assign.
 
 import { test, describe, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
@@ -97,9 +97,12 @@ class FakePartySocket {
   addEventListener(kind, fn) { (this.listeners[kind] ||= []).push(fn); }
   removeEventListener() {}
   send(raw) { this.sent.push(JSON.parse(raw)); }
-  close() {}
-  /** Deliver a server frame. */
-  push(obj) { for (const fn of this.listeners.message ?? []) fn({ data: JSON.stringify(obj) }); }
+  close() { this.closed = true; }
+  /** Deliver a server frame; a closed socket, like a browser's, drops it. */
+  push(obj) {
+    if (this.closed) return;
+    for (const fn of this.listeners.message ?? []) fn({ data: JSON.stringify(obj) });
+  }
 }
 
 mock.module('partysocket', { defaultExport: FakePartySocket });
@@ -131,6 +134,25 @@ function assertStaysPut(els, message) {
   assert.equal(els.get('error-toast').textContent, message);
 }
 
+/** Quick Match inserts its pill beside Start and its button beside Race Again. */
+function quickMatchControls(els) {
+  return {
+    pill: els.get('start-race-btn').children.find((c) => c.id === 'searching-pill'),
+    findAnother: els.get('rematch-btn').children.find((c) => c.id === 'find-another-btn'),
+  };
+}
+
+function assertPointedElsewhere(ws, els) {
+  const { pill, findAnother } = quickMatchControls(els);
+  assert.equal(ws.closed, true);
+  assert.equal(els.get('room-players').children.length, 0);
+  assert.equal(pill.classList.contains('hidden'), true);
+  assert.equal(findAnother.classList.contains('hidden'), false);
+  assert.equal(els.get('lobby-hint').textContent, 'That match is no longer open — find another one.');
+}
+
+const STRANGERS = Array.from({ length: 6 }, (_, i) => ({ id: `p-${i + 2}`, handle: `S${i}`, score: 0, finishMs: null }));
+
 const FINISHED = {
   state: 'finished',
   difficulty: 'easy',
@@ -140,19 +162,20 @@ const FINISHED = {
   players: [{ id: 'p-1', handle: 'Me', score: 10, finishMs: 9000, isGuest: true }],
 };
 
-describe('quick-match dead-end refusals are plain error toasts', () => {
+describe('quick-match dead-end refusals point the player at a fresh match', () => {
   beforeEach(() => {
     sockets.length = 0;
   });
 
   for (const code of ['MATCH_OVER', 'ROOM_FULL']) {
-    test(`${code} on a fresh join: toast, no matchmaking, no navigation`, async () => {
+    test(`${code} on a fresh join: Find Another Match, no matchmaking, no navigation`, async () => {
       const { ws, els } = open();
       ws.push({ type: 'state', state: { ...FINISHED, players: [] }, youAre: null });
       ws.push({ type: 'error', code, message: 'dead end' });
       await flush();
 
       assertStaysPut(els, 'dead end');
+      assertPointedElsewhere(ws, els);
     });
 
     test(`${code} after this page held a seat: the finisher stays on the scoreboard`, async () => {
@@ -167,15 +190,40 @@ describe('quick-match dead-end refusals are plain error toasts', () => {
       await flush();
 
       assertStaysPut(els, 'This match has ended; find a new match.');
+      assertPointedElsewhere(ws, els);
     });
   }
 
-  test('a reload mid-race past the grace is not moved either', async () => {
+  test('MATCH_OVER from a racing room: no Searching pill, Find Another Match instead', async () => {
     const { ws, els } = open();
-    ws.push({ type: 'state', state: { ...FINISHED, state: 'racing', players: [] }, youAre: null });
+    ws.push({ type: 'state', state: { ...FINISHED, state: 'racing', players: STRANGERS }, youAre: null });
     ws.push({ type: 'error', code: 'MATCH_OVER', message: 'This race already started; find a new match.' });
     await flush();
 
     assertStaysPut(els, 'This race already started; find a new match.');
+    assertPointedElsewhere(ws, els);
+  });
+
+  test('ROOM_FULL: the strangers already painted go, and later broadcasts never land', async () => {
+    const { ws, els } = open();
+    const lobby = { ...FINISHED, state: 'lobby', lastRace: null, players: STRANGERS };
+    ws.push({ type: 'state', state: lobby, youAre: null });
+    assert.equal(els.get('room-players').children.length, 6);
+
+    ws.push({ type: 'error', code: 'ROOM_FULL', message: 'This room is full (6/6); requeue for a fresh room.' });
+    ws.push({ type: 'state', state: lobby, youAre: null });
+    await flush();
+
+    assertStaysPut(els, 'This room is full (6/6); requeue for a fresh room.');
+    assertPointedElsewhere(ws, els);
+  });
+
+  test('private rooms keep the plain toast and their socket', async () => {
+    const { ws, els } = open({ mode: null });
+    ws.push({ type: 'error', code: 'ROOM_FULL', message: 'This room is full (10/10).' });
+    await flush();
+
+    assertStaysPut(els, 'This room is full (10/10).');
+    assert.notEqual(ws.closed, true);
   });
 });

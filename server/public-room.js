@@ -154,9 +154,18 @@ export class PublicRaceRoom extends RaceRoom {
     const now = Date.now();
 
     // A lobby release that failed when it was first attempted retries here,
-    // woken by the deadline extraAlarmDeadlines() coalesces into the alarm.
+    // woken by the deadline extraAlarmDeadlines() coalesces into the alarm —
+    // but only while the room is still empty or a dead end. A lobby that
+    // refilled in the meantime is where the router should keep sending
+    // joiners, so the release it no longer owes is dropped instead.
     if (this.state.pendingLobbyRelease && this.state.pendingLobbyRelease.nextAttemptAt <= now) {
-      await this.releaseLobby();
+      const humans = this.state.players.filter((p) => !p.isBot).length;
+      if (this.state.state !== 'lobby' || humans >= MAX_PLAYERS || this.state.players.length === 0) {
+        await this.releaseLobby();
+      } else {
+        this.state.pendingLobbyRelease = null;
+        await this.persist();
+      }
     }
 
     const wasLobby = this.state.state === 'lobby';
