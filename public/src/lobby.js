@@ -10,6 +10,12 @@ const DIFFS = ['easy', 'medium', 'hard'];
 // (`rq`) because entering a room is a full-page navigation, so module state
 // would reset with every attempt; two requeues also stay inside the
 // matchmake rate limit (3 per 60s) together with the original join.
+//
+// `rq` is also the page's matchmaking provenance: Find a Match navigates with
+// `rq=0`, and the lobby strips it the moment the room seats this page. So its
+// presence means "matchmaking sent this page here and it has never held a
+// seat" — the only refusal worth requeueing. A reload or restored tab after a
+// seat carries no `rq`, and that player stays where they are.
 const MAX_AUTO_REQUEUES = 2;
 
 /**
@@ -74,7 +80,6 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   let prevServerState = null;
   // In-flight guard for the dead-end requeue (see requeueForMatch).
   let requeueStarted = false;
-  let heldSeat = false;
 
   // Public matches are anonymous drop-ins — the internal room slug is
   // meaningless to players, so don't surface it.
@@ -372,6 +377,17 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
     }
   }
 
+  function isMatchmadeUnseated() {
+    return new URLSearchParams(location.search).has('rq');
+  }
+
+  function clearMatchmadeMarker() {
+    const params = new URLSearchParams(location.search);
+    if (!params.has('rq')) return;
+    params.delete('rq');
+    history.replaceState(null, '', `?${params}`);
+  }
+
   // ----- subscribe -----
   const handleExpiry = createExpiryLatch({
     close: () => client.close(),
@@ -383,10 +399,11 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
     // rendering, and the server may deliver this on the very first message.
     if (handleExpiry(msg)) return;
     if (msg.type === 'hello-ack') {
-      heldSeat = true;
+      clearMatchmadeMarker();
     } else if (msg.type === 'state') {
       currentState = msg.state;
       youAre = msg.youAre;
+      if (youAre) clearMatchmadeMarker();
 
       // Auto-open invite modal once when creator first lands (private rooms only).
       if (!isPublic && !inviteShownThisSession && meIsCreator() && currentState.state === 'lobby' && currentState.problemSequence.length === 0) {
@@ -433,7 +450,7 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
         showToast(`Host set the race to ${diff} · ${msg.raceLength} problems`, 'info');
       }
     } else if (msg.type === 'error') {
-      if (isPublic && !heldSeat && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) {
+      if (isPublic && isMatchmadeUnseated() && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) {
         requeueForMatch(msg);
       } else {
         showError(msg.message || msg.code);
