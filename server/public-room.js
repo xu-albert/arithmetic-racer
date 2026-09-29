@@ -17,6 +17,15 @@ import { generateSequence } from '../public/src/game.js';
 import { difficultyFromRoomName } from './lobby-router.js';
 import { logError, KINDS } from '../worker/logger.js';
 
+// A failed releaseLobby() RPC leaves the router's pointer naming this room, so
+// every pick for the difficulty routes here — the wedged-lane failure. The
+// release is retried on the room's shared alarm at this cadence, up to
+// LOBBY_RELEASE_MAX_ATTEMPTS in all; past that the router has been unreachable
+// for most of a minute and the dead-end join gate in handleHello is the
+// backstop (it re-attempts the release as it turns the next joiner away).
+export const LOBBY_RELEASE_RETRY_MS = 10 * 1000;
+export const LOBBY_RELEASE_MAX_ATTEMPTS = 5;
+
 export class PublicRaceRoom extends RaceRoom {
   static options = { hibernate: true };
 
@@ -52,19 +61,40 @@ export class PublicRaceRoom extends RaceRoom {
         `This room is locked to difficulty=${roomDifficulty}`);
     }
 
-    // Hard cap before delegating — the base handler will happily push a 7th
-    // player if state.state is still 'lobby'. The 6-player release fires on
-    // strict-equality at 6, so a concurrent 7th hello inside the same alarm
-    // tick can otherwise slip past releaseLobby().
     // Track whether this is a reconnect — reconnects must not reset the
     // auto-start timer (see bug_002). Matched on the racerId reconnect secret,
     // the same proof the base handler requires; msg.playerId is never a
     // broadcast id, so a stranger who read one off the wire lands here as a
-    // new joiner and is subject to the ROOM_FULL gate below.
+    // new joiner and is subject to the gates below.
     const isReconnect = !!this.state.players.find((p) => !p.isBot && p.racerId === msg?.playerId);
-    if (!isReconnect && this.state.state === 'lobby') {
+
+    // A new joiner only ever belongs in a lobby: public rooms are single-shot,
+    // so countdown/racing/finished are all dead ends for matchmaking — there
+    // is no rematch to wait for and no spectating. Turn the joiner away with
+    // MATCH_OVER (the client requeues on it) and re-attempt the router
+    // release: reaching this branch at all means the pointer outlived the
+    // release that was supposed to clear it, so this is the backstop that
+    // lets the next pick mint a fresh room. Reconnects bypass the gate — a
+    // finisher reloading the page keeps their seat and the scoreboard.
+    if (!isReconnect && this.state.state !== 'lobby') {
+      if (this.state.difficulty) await this.releaseLobby();
+      return this.sendError(connection, 'MATCH_OVER',
+        this.state.state === 'finished'
+          ? 'This match has ended; find a new match.'
+          : 'This race already started; find a new match.');
+    }
+
+    if (!isReconnect) {
+      // Hard cap before delegating — the base handler seats up to
+      // PRIVATE_ROOM_MAX_PLAYERS. The 6-player release fires on
+      // strict-equality at 6, so a concurrent 7th hello inside the same alarm
+      // tick can otherwise slip past releaseLobby().
       const humans = this.state.players.filter((p) => !p.isBot).length;
       if (humans >= MAX_PLAYERS) {
+        // Full rooms are another dead end the router must stop naming — the
+        // 6th join's release is what should have cleared the pointer, so a
+        // rejected 7th hello means it never landed. Idempotent if it did.
+        if (this.state.difficulty) await this.releaseLobby();
         return this.sendError(connection, 'ROOM_FULL',
           `This room is full (${MAX_PLAYERS}/${MAX_PLAYERS}); requeue for a fresh room.`);
       }
@@ -115,6 +145,13 @@ export class PublicRaceRoom extends RaceRoom {
 
   async onAlarm() {
     const now = Date.now();
+
+    // A lobby release that failed when it was first attempted retries here,
+    // woken by the deadline extraAlarmDeadlines() coalesces into the alarm.
+    if (this.state.pendingLobbyRelease && this.state.pendingLobbyRelease.nextAttemptAt <= now) {
+      await this.releaseLobby();
+    }
+
     const wasLobby = this.state.state === 'lobby';
 
     // 1) Auto-start sequence: fire if deadline elapsed in lobby.
@@ -368,15 +405,47 @@ export class PublicRaceRoom extends RaceRoom {
   }
 
   extraAlarmDeadlines() {
-    return [this.state.autoStartDeadline];
+    return [this.state.autoStartDeadline, this.state.pendingLobbyRelease?.nextAttemptAt];
   }
 
+  /**
+   * Clear the router's pointer to this room. Idempotent on the router side
+   * (release is a no-op when the pointer has moved), so every caller may
+   * attempt it unconditionally. A failed RPC used to be log-and-forget, which
+   * wedged the difficulty's lane on this room's name; it now records a
+   * pending release in state — persisted, so a DO restart replays it — and
+   * the alarm retries it up to LOBBY_RELEASE_MAX_ATTEMPTS times. Past the cap
+   * the retry disarms: the dead-end gate in handleHello re-attempts the
+   * release the next time matchmaking routes a joiner here, which is also
+   * fresh evidence the lane is in use.
+   */
   async releaseLobby() {
     try {
       const stub = this.env.LobbyRouter.get(this.env.LobbyRouter.idFromName(this.state.difficulty));
       await stub.release(this.name);
     } catch (e) {
       logError(KINDS.LOBBY_RELEASE_FAILED, e, { roomId: this.name, difficulty: this.state.difficulty });
+      const attempts = (this.state.pendingLobbyRelease?.attempts ?? 0) + 1;
+      if (attempts >= LOBBY_RELEASE_MAX_ATTEMPTS) {
+        logError(KINDS.LOBBY_RELEASE_FAILED, 'lobby release retries exhausted', {
+          roomId: this.name, difficulty: this.state.difficulty, phase: 'release_give_up',
+        });
+        if (this.state.pendingLobbyRelease) {
+          this.state.pendingLobbyRelease = null;
+          await this.persist();
+          await this.scheduleNextAlarm();
+        }
+        return;
+      }
+      this.state.pendingLobbyRelease = { attempts, nextAttemptAt: Date.now() + LOBBY_RELEASE_RETRY_MS };
+      await this.persist();
+      await this.scheduleNextAlarm();
+      return;
+    }
+    if (this.state.pendingLobbyRelease) {
+      this.state.pendingLobbyRelease = null;
+      await this.persist();
+      await this.scheduleNextAlarm();
     }
   }
 }
@@ -394,5 +463,8 @@ export function publicFreshState(id) {
     botSeed: null,
     botTiers: [],
     botTimelines: [],
+    // A router release this room still owes, retried by the alarm; see
+    // releaseLobby(). Server-only — publicState() strips it.
+    pendingLobbyRelease: null,
   };
 }

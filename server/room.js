@@ -1351,11 +1351,12 @@ export class RaceRoom extends Server {
   publicState() {
     // Strip server-only Player fields (attempts/streak counters, identity), the
     // captcha table (seeds, answers, held result rows), the result outbox
-    // (row payloads carry deviceId/userId) and the unjoined flag (a lifecycle
-    // detail no client acts on) before broadcasting.
+    // (row payloads carry deviceId/userId), the unjoined flag (a lifecycle
+    // detail no client acts on) and the public room's pending lobby release
+    // (router bookkeeping; only PublicRaceRoom carries it) before broadcasting.
     // `serverNow` is the room's clock at send, for a client reading race time
     // off `raceStartedAt` (remote-runner.js).
-    const { captchaChallenges, unjoined, pendingResults, ...rest } = this.state;
+    const { captchaChallenges, unjoined, pendingResults, pendingLobbyRelease, ...rest } = this.state;
     return { ...rest, players: this.state.players.map(publicPlayer), serverNow: Date.now() };
   }
 
