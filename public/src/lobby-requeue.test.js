@@ -1,15 +1,14 @@
-// The quick-match dead-end requeue, over the real attachLobby and room client.
+// Quick-match dead-end refusals, over the real attachLobby and room client.
 //
 // A hello can be refused because the router's pointer outlived the room
 // (MATCH_OVER: started/finished; ROOM_FULL: six humans already seated). The
-// room re-attempts its router release as it refuses, so the lobby re-runs
-// matchmaking on its own and navigates to the fresh room — bounded by the
-// `rq` counter in the URL, because entering a room is a full-page navigation
-// and a pointer that stays stale anyway must not loop forever. `rq` is also
-// the matchmade-and-never-seated marker: a page that has held a seat (and so
-// a reload or restored tab of one) gets the error toast and stays put. Only
-// the browser is stubbed: PartySocket, the DOM, fetch, history and
-// location.assign.
+// room re-attempts its router release as it refuses, so the player's own next
+// Find Match mints a fresh room — the lobby itself never re-runs matchmaking
+// or navigates. Whether the page was never seated (a fresh join) or held a
+// seat it has since lost (reconnect or reload past the grace), the refusal is
+// an ordinary error toast and the player stays put, with Find Another Match
+// and Leave still on screen. Only the browser is stubbed: PartySocket, the
+// DOM, fetch and location.assign.
 
 import { test, describe, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
@@ -70,11 +69,7 @@ function installDom({ search = '' } = {}) {
   };
   assigns = [];
   globalThis.location = { host: 'localhost', search, assign: (url) => assigns.push(url) };
-  globalThis.history = {
-    replaceState: (_s, _t, url) => {
-      globalThis.location.search = new URL(url, 'http://localhost/').search;
-    },
-  };
+  globalThis.history = { replaceState: () => {} };
   const store = new Map();
   globalThis.localStorage = {
     getItem: (k) => (store.has(k) ? store.get(k) : null),
@@ -83,13 +78,9 @@ function installDom({ search = '' } = {}) {
   };
   globalThis.crypto ??= { randomUUID: () => '11111111-2222-4333-8444-555555555555' };
   fetches = [];
-  globalThis.fetch = async (url, opts) => {
-    fetches.push({ url, body: JSON.parse(opts.body) });
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ roomId: 'm-fresh-room', mode: 'public', difficulty: 'medium' }),
-    };
+  globalThis.fetch = async (url) => {
+    fetches.push(url);
+    return { ok: true, status: 200, json: async () => ({ roomId: 'm-fresh-room', difficulty: 'easy' }) };
   };
   return els;
 }
@@ -115,16 +106,15 @@ mock.module('partysocket', { defaultExport: FakePartySocket });
 
 const { attachLobby } = await import('./lobby.js');
 
-const MATCHMADE = '?room=m-old-room&mode=public&difficulty=easy&rq=0';
-const SEATED = '?room=m-old-room&mode=public&difficulty=easy';
+const ROOM_URL = '?room=m-old-room&mode=public&difficulty=easy';
 
-/** Let the async requeue (fetch + navigation) run to completion. */
+/** Let anything async the error handler might start run to completion. */
 async function flush(times = 5) {
   for (let i = 0; i < times; i++) await new Promise((r) => setImmediate(r));
 }
 
-function open({ mode, difficulty = 'easy', search } = {}) {
-  const els = installDom({ search });
+function open({ mode = 'public', difficulty = 'easy' } = {}) {
+  const els = installDom({ search: ROOM_URL });
   attachLobby({
     roomId: 'm-old-room',
     screens: { 'lobby-room': fakeEl(), race: fakeEl(), results: fakeEl() },
@@ -135,113 +125,57 @@ function open({ mode, difficulty = 'easy', search } = {}) {
   return { ws: sockets[sockets.length - 1], els };
 }
 
-describe('quick-match dead-end errors re-run matchmaking', () => {
+function assertStaysPut(els, message) {
+  assert.equal(fetches.length, 0);
+  assert.equal(assigns.length, 0);
+  assert.equal(els.get('error-toast').textContent, message);
+}
+
+const FINISHED = {
+  state: 'finished',
+  difficulty: 'easy',
+  raceLength: 10,
+  lastRace: { difficulty: 'easy', raceLength: 10 },
+  problemSequence: [],
+  players: [{ id: 'p-1', handle: 'Me', score: 10, finishMs: 9000, isGuest: true }],
+};
+
+describe('quick-match dead-end refusals are plain error toasts', () => {
   beforeEach(() => {
     sockets.length = 0;
   });
 
   for (const code of ['MATCH_OVER', 'ROOM_FULL']) {
-    test(`${code}: requeues once and navigates to the fresh room with rq bumped`, async () => {
-      const { ws } = open({ mode: 'public', difficulty: 'easy', search: MATCHMADE });
-      ws.push({ type: 'state', state: { state: 'finished', players: [] }, youAre: null });
+    test(`${code} on a fresh join: toast, no matchmaking, no navigation`, async () => {
+      const { ws, els } = open();
+      ws.push({ type: 'state', state: { ...FINISHED, players: [] }, youAre: null });
       ws.push({ type: 'error', code, message: 'dead end' });
       await flush();
 
-      assert.equal(fetches.length, 1);
-      assert.equal(fetches[0].url, '/api/matchmake/join');
-      assert.deepEqual(fetches[0].body, { difficulty: 'easy', device_id: 'dev-1' });
-      assert.equal(assigns.length, 1);
-      assert.equal(
-        assigns[0],
-        '/?room=m-fresh-room&mode=public&difficulty=medium&rq=1',
-      );
+      assertStaysPut(els, 'dead end');
     });
-  }
 
-  test('the rq counter in the URL survives navigation and bounds the loop', async () => {
-    const { ws } = open({ mode: 'public', search: '?room=m-old-room&mode=public&difficulty=easy&rq=1' });
-    ws.push({ type: 'error', code: 'MATCH_OVER', message: 'This match has ended' });
-    await flush();
+    test(`${code} after this page held a seat: the finisher stays on the scoreboard`, async () => {
+      const { ws, els } = open();
+      ws.push({ type: 'hello-ack', playerId: 'p-1', handle: 'Me' });
+      ws.push({ type: 'state', state: FINISHED, youAre: 'p-1' });
 
-    assert.equal(fetches.length, 1);
-    assert.match(assigns[0], /&rq=2$/);
-  });
-
-  test('at the requeue cap the error is surfaced instead of looping', async () => {
-    const { ws, els } = open({ mode: 'public', search: '?room=m-newer&mode=public&difficulty=easy&rq=2' });
-    ws.push({ type: 'error', code: 'MATCH_OVER', message: 'This match has ended; find a new match.' });
-    await flush();
-
-    assert.equal(fetches.length, 0);
-    assert.equal(assigns.length, 0);
-    assert.equal(els.get('error-toast').textContent, 'This match has ended; find a new match.');
-  });
-
-  test('a failed requeue (rate limited) shows the error rather than navigating', async () => {
-    const { ws, els } = open({ mode: 'public', search: MATCHMADE });
-    globalThis.fetch = async () => ({ ok: false, status: 429, json: async () => ({}) });
-    ws.push({ type: 'error', code: 'ROOM_FULL', message: 'This room is full' });
-    await flush();
-
-    assert.equal(assigns.length, 0);
-    assert.equal(els.get('error-toast').textContent, 'Slow down — too many queue attempts');
-  });
-
-  test('private rooms never requeue: the same error is a plain toast', async () => {
-    const { ws, els } = open({ mode: undefined });
-    ws.push({ type: 'error', code: 'MATCH_OVER', message: 'some error' });
-    await flush();
-
-    assert.equal(fetches.length, 0);
-    assert.equal(assigns.length, 0);
-    assert.equal(els.get('error-toast').textContent, 'some error');
-  });
-
-  test('a finisher who lost their seat past the grace stays on the scoreboard', async () => {
-    const { ws, els } = open({ mode: 'public', search: MATCHMADE });
-    ws.push({ type: 'hello-ack', playerId: 'p-1', handle: 'Me' });
-    assert.equal(location.search, SEATED);
-    const finished = {
-      state: 'finished',
-      difficulty: 'easy',
-      raceLength: 10,
-      lastRace: { difficulty: 'easy', raceLength: 10 },
-      problemSequence: [],
-      players: [{ id: 'p-1', handle: 'Me', score: 10, finishMs: 9000, isGuest: true }],
-    };
-    ws.push({ type: 'state', state: finished, youAre: 'p-1' });
-
-    ws.push({ type: 'state', state: { ...finished, players: [] }, youAre: null });
-    ws.push({ type: 'error', code: 'MATCH_OVER', message: 'This match has ended; find a new match.' });
-    await flush();
-
-    assert.equal(fetches.length, 0);
-    assert.equal(assigns.length, 0);
-    assert.equal(els.get('error-toast').textContent, 'This match has ended; find a new match.');
-  });
-
-  for (const [label, state] of [
-    ['reload on a results URL', 'finished'],
-    ['tab restore mid-race', 'racing'],
-  ]) {
-    test(`${label} after the grace period is not requeued`, async () => {
-      const { ws, els } = open({ mode: 'public', search: SEATED });
-      ws.push({ type: 'state', state: { state, players: [] }, youAre: null });
-      ws.push({ type: 'error', code: 'MATCH_OVER', message: 'This match has ended; find a new match.' });
+      // Socket away past the grace: the seat is gone, the reconnect's
+      // snapshot names nobody, and the new hello is refused.
+      ws.push({ type: 'state', state: { ...FINISHED, players: [] }, youAre: null });
+      ws.push({ type: 'error', code, message: 'This match has ended; find a new match.' });
       await flush();
 
-      assert.equal(fetches.length, 0);
-      assert.equal(assigns.length, 0);
-      assert.equal(els.get('error-toast').textContent, 'This match has ended; find a new match.');
+      assertStaysPut(els, 'This match has ended; find a new match.');
     });
   }
 
-  test('other error codes in quick match stay plain toasts', async () => {
-    const { ws, els } = open({ mode: 'public', search: MATCHMADE });
-    ws.push({ type: 'error', code: 'BAD_DIFFICULTY', message: 'locked' });
+  test('a reload mid-race past the grace is not moved either', async () => {
+    const { ws, els } = open();
+    ws.push({ type: 'state', state: { ...FINISHED, state: 'racing', players: [] }, youAre: null });
+    ws.push({ type: 'error', code: 'MATCH_OVER', message: 'This race already started; find a new match.' });
     await flush();
 
-    assert.equal(fetches.length, 0);
-    assert.equal(els.get('error-toast').textContent, 'locked');
+    assertStaysPut(els, 'This race already started; find a new match.');
   });
 });
