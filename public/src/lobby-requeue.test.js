@@ -186,6 +186,28 @@ describe('quick-match dead-end errors re-run matchmaking', () => {
     assert.equal(els.get('error-toast').textContent, 'some error');
   });
 
+  test('a finisher who lost their seat past the grace stays on the scoreboard', async () => {
+    const { ws, els } = open({ mode: 'public' });
+    ws.push({ type: 'hello-ack', playerId: 'p-1', handle: 'Me' });
+    const finished = {
+      state: 'finished',
+      difficulty: 'easy',
+      raceLength: 10,
+      lastRace: { difficulty: 'easy', raceLength: 10 },
+      problemSequence: [],
+      players: [{ id: 'p-1', handle: 'Me', score: 10, finishMs: 9000, isGuest: true }],
+    };
+    ws.push({ type: 'state', state: finished, youAre: 'p-1' });
+
+    ws.push({ type: 'state', state: { ...finished, players: [] }, youAre: null });
+    ws.push({ type: 'error', code: 'MATCH_OVER', message: 'This match has ended; find a new match.' });
+    await flush();
+
+    assert.equal(fetches.length, 0);
+    assert.equal(assigns.length, 0);
+    assert.equal(els.get('error-toast').textContent, 'This match has ended; find a new match.');
+  });
+
   test('other error codes in quick match stay plain toasts', async () => {
     const { ws, els } = open({ mode: 'public' });
     ws.push({ type: 'error', code: 'BAD_DIFFICULTY', message: 'locked' });

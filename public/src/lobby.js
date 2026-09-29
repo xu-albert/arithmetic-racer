@@ -74,6 +74,7 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   let prevServerState = null;
   // In-flight guard for the dead-end requeue (see requeueForMatch).
   let requeueStarted = false;
+  let heldSeat = false;
 
   // Public matches are anonymous drop-ins — the internal room slug is
   // meaningless to players, so don't surface it.
@@ -381,7 +382,9 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
     // Checked ahead of everything else — an expired room has no state worth
     // rendering, and the server may deliver this on the very first message.
     if (handleExpiry(msg)) return;
-    if (msg.type === 'state') {
+    if (msg.type === 'hello-ack') {
+      heldSeat = true;
+    } else if (msg.type === 'state') {
       currentState = msg.state;
       youAre = msg.youAre;
 
@@ -430,7 +433,7 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
         showToast(`Host set the race to ${diff} · ${msg.raceLength} problems`, 'info');
       }
     } else if (msg.type === 'error') {
-      if (isPublic && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) {
+      if (isPublic && !heldSeat && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) {
         requeueForMatch(msg);
       } else {
         showError(msg.message || msg.code);
