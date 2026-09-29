@@ -7,7 +7,10 @@
 // Decoupling rules:
 //   LISTEN  — `open-signup`, `open-signin`, `request-signout`
 //   DISPATCH — `auth-changed` after every transition (signin / signup /
-//              signout / oauth-return / pick-username success).
+//              signout / oauth-return / pick-username success). The event is
+//              a CustomEvent whose `detail.reason` names the transition, so a
+//              listener that only cares about in-place sign-ins (not the
+//              fresh page load of an OAuth return) can tell them apart.
 //
 // better-auth endpoint deviations from the brief (verified against
 // node_modules/better-auth@1.6.9):
@@ -18,12 +21,13 @@
 // stats-api.js note: the integrator may want to extend `setUsername` to
 // include `deviceId`. Per the brief we do NOT modify stats-api.js from
 // here — the pick-username flow POSTs `/api/me/username` inline below
-// with `deviceId` from localStorage.
+// with `deviceId` from identity.js.
 //
 // Idempotent: calling mountAuthModal(host) twice is a no-op on the second
 // call (host already initialized). Internal state lives in module scope.
 
 import { validateUsernameSync } from "./username-validator-client.js";
+import { getOrCreateDeviceId } from "./identity.js";
 
 const AUTH = "/api/auth";
 
@@ -74,9 +78,25 @@ async function signOut() {
   });
 }
 
-// Where better-auth sends the browser back from Google. A failed sign-in
-// comes back here too, with an `error` parameter added (see readGoogleReturn).
-const GOOGLE_RETURN_URL = "/?auth=google";
+/**
+ * Where Google sends the browser back: the page the player started sign-in
+ * from, with `auth=google` marking the return. A fixed "/?auth=google"
+ * callback ejected anyone who signed in from a room — the reload landed on
+ * the bare lobby and the room was lost. Carrying the current query
+ * (`?room=<slug>`) through the round trip lands the player back where they
+ * were, now signed in. better-auth 1.6.9 accepts a relative callbackURL with
+ * a query string (origin-check's allowRelativePaths pattern).
+ *
+ * Pure and exported for tests; startGoogleSignIn feeds it location.
+ * @param {string} search   location.search of the page sign-in started on
+ * @param {string} pathname location.pathname of that page
+ */
+export function buildGoogleReturnUrl(search, pathname = "/") {
+  const params = new URLSearchParams(search);
+  params.set("auth", "google");
+  const query = params.toString();
+  return pathname + (query ? `?${query}` : "");
+}
 
 /**
  * Initiate the Google OAuth flow.
@@ -93,8 +113,10 @@ export async function startGoogleSignIn() {
     credentials: "include",
     body: JSON.stringify({
       provider: "google",
-      callbackURL: GOOGLE_RETURN_URL,
-      errorCallbackURL: GOOGLE_RETURN_URL,
+      callbackURL: buildGoogleReturnUrl(location.search, location.pathname),
+      // Keep failures on the same page too, so a refused account link can
+      // explain itself without ejecting the player from their room.
+      errorCallbackURL: buildGoogleReturnUrl(location.search, location.pathname),
     }),
   });
   if (!res.ok) {
@@ -134,7 +156,7 @@ async function setUsernameForOAuth(username) {
     credentials: "include",
     body: JSON.stringify({
       username,
-      deviceId: localStorage.getItem("deviceId"),
+      deviceId: getOrCreateDeviceId(),
     }),
   });
   if (!res.ok) {
@@ -174,9 +196,12 @@ export function mapAuthError(code) {
     case "USERNAME_INVALID_FORMAT":
       return "Use 3-20 letters/digits/underscore, starting with a letter.";
     case "USER_ALREADY_EXISTS":
+    case "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL":
     case "EMAIL_ALREADY_EXISTS":
     case "email_in_use":
-      return "An account with that email already exists.";
+      return "An account with that email already exists. Log in instead.";
+    case "VALIDATION_ERROR":
+      return "Enter a valid email address.";
     case "INVALID_EMAIL_OR_PASSWORD":
     case "INVALID_PASSWORD":
     case "INVALID_EMAIL":
@@ -474,6 +499,10 @@ export function mountAuthModal(host) {
     const password = String(fd.get("password") || "");
     const username = String(fd.get("username") || "").trim();
 
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      showError(signupForm, mapAuthError("VALIDATION_ERROR"));
+      return;
+    }
     if (email !== emailConfirm) {
       showError(signupForm, "Emails don't match.");
       return;
@@ -495,10 +524,10 @@ export function mountAuthModal(host) {
         email,
         password,
         username,
-        deviceId: localStorage.getItem("deviceId"),
+        deviceId: getOrCreateDeviceId(),
       });
       closeModal();
-      document.dispatchEvent(new Event("auth-changed"));
+      document.dispatchEvent(new CustomEvent("auth-changed", { detail: { reason: "signup" } }));
     } catch (err) {
       showError(signupForm, mapAuthError(err.code));
     } finally {
@@ -519,7 +548,7 @@ export function mountAuthModal(host) {
     try {
       await signInEmail({ email, password });
       closeModal();
-      document.dispatchEvent(new Event("auth-changed"));
+      document.dispatchEvent(new CustomEvent("auth-changed", { detail: { reason: "signin" } }));
     } catch (err) {
       if (err.status === 401) {
         showError(signinForm, "Wrong email or password.");
@@ -587,7 +616,7 @@ export function mountAuthModal(host) {
     try {
       await setUsernameForOAuth(username);
       closePickUsernameModal();
-      document.dispatchEvent(new Event("auth-changed"));
+      document.dispatchEvent(new CustomEvent("auth-changed", { detail: { reason: "pick-username" } }));
     } catch (err) {
       showError(pickForm, mapAuthError(err.code));
     } finally {
@@ -603,7 +632,7 @@ export function mountAuthModal(host) {
     try {
       await signOut();
     } finally {
-      document.dispatchEvent(new Event("auth-changed"));
+      document.dispatchEvent(new CustomEvent("auth-changed", { detail: { reason: "signout" } }));
     }
   });
 
@@ -642,7 +671,7 @@ export function mountAuthModal(host) {
         // Defer one tick so listeners (e.g. header) attached after this
         // module's top-level mount still receive the event.
         setTimeout(() => {
-          document.dispatchEvent(new Event("auth-changed"));
+          document.dispatchEvent(new CustomEvent("auth-changed", { detail: { reason: "oauth-return" } }));
         }, 0);
       }
     }

@@ -18,20 +18,9 @@ import { mountProfile } from './src/profile.js';
 import { mountLeaderboard } from './src/leaderboard.js';
 import { postRaceResult } from './src/stats-api.js';
 import { soloResultPayload } from './src/solo-result.js';
-import { getOrCreateDeviceId } from './src/identity.js';
+import { getOrCreateDeviceId, getOrCreateAnonHandle } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
-
-// ---- Identity helpers --------------------------------------------------
-
-function getOrCreateAnonHandle() {
-  let h = localStorage.getItem('anonHandle');
-  if (!h) {
-    h = generateHandle(Math.random);
-    localStorage.setItem('anonHandle', h);
-  }
-  return h;
-}
 
 // Cache of the logged-in user's username — set by the `session-ready`
 // event dispatched by header.js after its /api/me fetch. Saves a duplicate
@@ -186,6 +175,7 @@ function handleRoomExpired() {
   if (cleanupRace) { cleanupRace(); cleanupRace = null; }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
+  currentRoom = null;
   document.getElementById('invite-modal')?.classList.add('hidden');
   showScreen('room-expired');
   // The switch can happen while the player is staring at the race screen, so
@@ -193,9 +183,15 @@ function handleRoomExpired() {
   screens['room-expired']?.focus();
 }
 
+// The room the live socket belongs to, kept so an in-place sign-in can
+// reconnect it — see the auth-changed listener below.
+let currentRoom = null;
+
 function enterRoom(roomId, { mode, difficulty } = {}) {
   if (!mode) history.replaceState(null, '', `/?room=${roomId}`);
+  if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
+  currentRoom = { roomId, mode, difficulty };
   lobbyHandle = attachLobby({
     roomId,
     screens,
@@ -208,6 +204,24 @@ function enterRoom(roomId, { mode, difficulty } = {}) {
   cleanupCaptcha = attachCaptchaUI({ client: lobbyHandle.client });
   showScreen('lobby-room');
 }
+
+// A room learns who you are once, at the WebSocket upgrade: the Worker stamps
+// the session's user id onto it (server/server.js) and the DO reads it in
+// onConnect. An email sign-in or sign-out with the room socket already open
+// therefore changes nothing until the next connect — race results would keep
+// landing as anonymous guest rows, which the one-time history claim (run at
+// signup) never revisits. Re-entering the room reconnects with the new
+// session; handleHello's reconnect branch re-stamps the seat's identity, and
+// a race in progress is rebuilt from the snapshot like any other reconnect.
+// 'oauth-return' is excluded: that page load's socket already connects with
+// the fresh cookie. Leaving and expiry clear currentRoom, so neither
+// reconnects into a room the player is no longer in.
+document.addEventListener('auth-changed', (e) => {
+  const reason = e.detail?.reason;
+  if (reason !== 'signin' && reason !== 'signup' && reason !== 'signout') return;
+  if (!currentRoom) return;
+  enterRoom(currentRoom.roomId, { mode: currentRoom.mode, difficulty: currentRoom.difficulty });
+});
 
 async function createRoom() {
   const res = await fetch('/api/rooms', { method: 'POST' });

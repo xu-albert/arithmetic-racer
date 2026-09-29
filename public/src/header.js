@@ -12,21 +12,7 @@
 // We listen for `auth-changed` to re-fetch and re-render.
 
 import { getMe, getStatsByDevice } from "./stats-api.js";
-
-// ---------- Local state helpers ----------
-
-function getDeviceId() {
-  let id = localStorage.getItem("deviceId");
-  if (!id) {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      id = crypto.randomUUID();
-    } else {
-      id = "dev-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    }
-    localStorage.setItem("deviceId", id);
-  }
-  return id;
-}
+import { getOrCreateDeviceId } from "./identity.js";
 
 // ---------- Rendering ----------
 
@@ -143,7 +129,7 @@ async function refresh(host) {
 
   // Logged-out: by-device race count only (no name display in header).
   renderLoggedOutCta(host);
-  const stats = await getStatsByDevice(getDeviceId()).catch(() => ({
+  const stats = await getStatsByDevice(getOrCreateDeviceId()).catch(() => ({
     total_races: 0,
   }));
   setPills(host, stats ? stats.total_races : 0);
