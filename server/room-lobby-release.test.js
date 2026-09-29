@@ -338,6 +338,31 @@ describe("PublicRaceRoom.handleHello — dead-end seating", () => {
     });
   }
 
+  it("a burst of hellos into a dead-end room reaches the router once", async () => {
+    await withRoom("lr-burst-" + crypto.randomUUID(), async (room) => {
+      const racerA = await join(room, makeConn("A"), "A");
+      room.state.state = "racing";
+      room.state.raceStartedAt = Date.now();
+      const router = spyLobbyRouter(room);
+
+      const refused = [];
+      for (let i = 0; i < 5; i++) {
+        const conn = makeConn("x" + i);
+        await join(room, conn, "x" + i);
+        refused.push(conn.lastOf("error")?.code);
+      }
+      const connA2 = makeConn("A2");
+      await room.handleHello(connA2, {
+        type: "hello", playerId: racerA, handle: "A", deviceId: "dev-A", difficulty: "medium",
+      });
+
+      expect(refused).toEqual(Array(5).fill("MATCH_OVER"));
+      expect(connA2.lastOf("hello-ack")).toBeTruthy();
+      expect(router.calls).toEqual([room.name]);
+      router.restore();
+    });
+  });
+
   it("a finished room the router still names is unpinned by the refused join (real router)", async () => {
     // XC-04 end to end: the pointer outlived the room's own release. The
     // next matchmake after the refusal must mint a fresh room. Router calls
