@@ -79,11 +79,11 @@ export class PublicRaceRoom extends RaceRoom {
     // scoreboard — and do not wait on the router before their hello-ack.
     if (this.state.state !== 'lobby') {
       if (isReconnect) {
-        this.releaseLobby().catch((e) => {
+        this.releaseLobbyFromHello().catch((e) => {
           logError(KINDS.LOBBY_RELEASE_FAILED, e, { roomId: this.name, difficulty: this.state.difficulty });
         });
       } else {
-        if (this.state.difficulty) await this.releaseLobby();
+        if (this.state.difficulty) await this.releaseLobbyFromHello();
         return this.sendError(connection, 'MATCH_OVER',
           this.state.state === 'finished'
             ? 'This match has ended; find a new match.'
@@ -101,7 +101,7 @@ export class PublicRaceRoom extends RaceRoom {
         // Full rooms are another dead end the router must stop naming — the
         // 6th join's release is what should have cleared the pointer, so a
         // rejected 7th hello means it never landed. Idempotent if it did.
-        if (this.state.difficulty) await this.releaseLobby();
+        if (this.state.difficulty) await this.releaseLobbyFromHello();
         return this.sendError(connection, 'ROOM_FULL',
           `This room is full (${MAX_PLAYERS}/${MAX_PLAYERS}); requeue for a fresh room.`);
       }
@@ -422,6 +422,20 @@ export class PublicRaceRoom extends RaceRoom {
 
   extraAlarmDeadlines() {
     return [this.state.autoStartDeadline, this.state.pendingLobbyRelease?.nextAttemptAt];
+  }
+
+  /**
+   * The backstop release a hello triggers. Any socket can send hellos, so it
+   * reaches the difficulty's router at most once per LOBBY_RELEASE_RETRY_MS
+   * per room: a release started inside that window has already cleared the
+   * pointer, is still clearing it, or armed the alarm's retry. In memory on
+   * purpose — an evicted room forgetting it costs one extra call.
+   */
+  async releaseLobbyFromHello() {
+    const now = Date.now();
+    if (this.lastHelloReleaseAt != null && now - this.lastHelloReleaseAt < LOBBY_RELEASE_RETRY_MS) return;
+    this.lastHelloReleaseAt = now;
+    await this.releaseLobby();
   }
 
   /**

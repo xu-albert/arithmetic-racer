@@ -403,7 +403,7 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
       }
     } else if (msg.type === 'error') {
       showError(msg.message || msg.code);
-      if (isPublic && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) showRefused();
+      if (isPublic && !raceStartHandled && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) showRefused();
     }
   });
 

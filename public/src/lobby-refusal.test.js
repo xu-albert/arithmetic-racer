@@ -116,11 +116,12 @@ async function flush(times = 5) {
   for (let i = 0; i < times; i++) await new Promise((r) => setImmediate(r));
 }
 
-function open({ mode = 'public', difficulty = 'easy' } = {}) {
+function open({ mode = 'public', difficulty = 'easy', onRaceStart } = {}) {
   const els = installDom({ search: ROOM_URL });
   attachLobby({
     roomId: 'm-old-room',
     screens: { 'lobby-room': fakeEl(), race: fakeEl(), results: fakeEl() },
+    onRaceStart,
     mode,
     difficulty,
     deviceId: 'dev-1',
@@ -216,6 +217,25 @@ describe('quick-match dead-end refusals point the player at a fresh match', () =
 
     assertStaysPut(els, 'This room is full (6/6); requeue for a fresh room.');
     assertPointedElsewhere(ws, els);
+  });
+
+  test('a race screen that already took the room keeps its socket through a refusal', async () => {
+    const handoffs = [];
+    const { ws, els } = open({ onRaceStart: (h) => handoffs.push(h) });
+    const racing = { ...FINISHED, state: 'racing', lastRace: null, players: [{ id: 'p-1', handle: 'Me', score: 3, finishMs: null }] };
+    ws.push({ type: 'state', state: racing, youAre: 'p-1' });
+    assert.equal(handoffs.length, 1);
+
+    // Away past the grace mid-race: the seat is gone, so the reconnect's
+    // snapshot names nobody and its hello is refused.
+    ws.push({ type: 'state', state: { ...racing, players: [] }, youAre: null });
+    ws.push({ type: 'error', code: 'MATCH_OVER', message: 'This race already started; find a new match.' });
+    await flush();
+
+    assertStaysPut(els, 'This race already started; find a new match.');
+    assert.notEqual(ws.closed, true);
+    assert.equal(quickMatchControls(els).findAnother.classList.contains('hidden'), true);
+    assert.equal(handoffs.length, 1);
   });
 
   test('private rooms keep the plain toast and their socket', async () => {
