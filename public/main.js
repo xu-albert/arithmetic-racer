@@ -265,7 +265,7 @@ findMatchBtn?.addEventListener('click', async () => {
       difficulty: diff,
       deviceId: getOrCreateDeviceId(),
     });
-    window.location.href = `/?room=${encodeURIComponent(roomId)}&mode=public&difficulty=${encodeURIComponent(difficulty)}`;
+    window.location.href = `/?room=${encodeURIComponent(roomId)}&mode=public&difficulty=${encodeURIComponent(difficulty)}&rq=0`;
   } catch (e) {
     matchStatus.textContent = e.message || 'Error finding match';
     findMatchBtn.disabled = false;
