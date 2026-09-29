@@ -183,6 +183,50 @@ describe("PublicRaceRoom.releaseLobby — bounded retry", () => {
     });
   });
 
+  it("a lobby that refilled before the retry drops the release without calling the router", async () => {
+    await withRoom("lr-refill-" + crypto.randomUUID(), async (room) => {
+      const router = breakLobbyRouter(room);
+      await room.releaseLobby();
+      expect(router.calls.length).toBe(1);
+
+      await join(room, makeConn("B"), "B");
+      room.state.autoStartDeadline = null;
+      room.state.pendingLobbyRelease.nextAttemptAt = Date.now() - 1;
+      await room.onAlarm();
+
+      expect(router.calls.length).toBe(1);
+      expect(room.state.pendingLobbyRelease).toBeNull();
+      expect(room.state.players.length).toBe(1);
+      router.restore();
+    });
+  });
+
+  for (const shape of ["empty", "full", "finished"]) {
+    it(`a room still ${shape} at the retry fires the release`, async () => {
+      await withRoom(`lr-owed-${shape}-` + crypto.randomUUID(), async (room) => {
+        const router = breakLobbyRouter(room);
+        if (shape === "full") {
+          for (let i = 0; i < 6; i++) await join(room, makeConn("p" + i), "p" + i);
+        } else if (shape === "finished") {
+          await join(room, makeConn("A"), "A");
+          room.state.state = "racing";
+          room.state.raceStartedAt = 1000;
+          room.finishRace(1100);
+        }
+        if (!room.state.pendingLobbyRelease) await room.releaseLobby();
+        const before = router.calls.length;
+
+        room.state.autoStartDeadline = null;
+        room.state.pendingLobbyRelease.nextAttemptAt = Date.now() - 1;
+        await room.onAlarm();
+
+        expect(router.calls.length).toBe(before + 1);
+        expect(room.state.pendingLobbyRelease.attempts).toBe(2);
+        router.restore();
+      });
+    });
+  }
+
   it("gives up after LOBBY_RELEASE_MAX_ATTEMPTS instead of retrying forever", async () => {
     await withRoom("lr-giveup-" + crypto.randomUUID(), async (room) => {
       const router = breakLobbyRouter(room);
