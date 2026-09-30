@@ -11,11 +11,17 @@ export const EXPIRED_ROOM_STATE = 'expired';
 export const ROOM_EXPIRED_TYPE = 'room-expired';
 
 /**
- * `reason` on a ROOM_EXPIRED_TYPE message sent by the Worker (server/server.js)
- * to a socket whose admission pass is missing or stale: the room may still be
- * running, but this link no longer opens it.
+ * `reason` on a ROOM_EXPIRED_TYPE message refusing a socket whose admission
+ * pass has expired, sent only when its room is gone too (RaceRoom.fetch in
+ * server/room.js): an expired pass still opens a room that is alive.
  */
 export const INVITE_EXPIRED_REASON = 'invite';
+
+/**
+ * `reason` on a ROOM_EXPIRED_TYPE message the Worker (server/server.js) sends
+ * a socket that carries no pass signed for its room at all.
+ */
+export const INVITE_INVALID_REASON = 'invalid-invite';
 
 /**
  * True for either shape that means "this room is gone": the explicit

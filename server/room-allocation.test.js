@@ -17,8 +17,8 @@
 //     while a room somebody is in keeps the full private-room idle lifetime
 //   - a name is never spent permanently by a request that merely minted room
 //     state without joining it — a plain GET to /parties/race-room/<name> that
-//     carries a valid pass does that, because partyserver initializes the room
-//     before it looks for an Upgrade header
+//     carries an unexpired pass does that, because partyserver initializes the
+//     room before it looks for an Upgrade header
 //
 // The reservation is atomic because a Durable Object is single-threaded per
 // name: reserveRoomName() reads and writes storage inside one RPC, so two
@@ -169,7 +169,7 @@ describe("allocateRoomId reserves a free name", () => {
     // Not an upgrade, so nobody joins anything — but partyserver initializes the
     // room (and onStart persists live state) before it ever reads the Upgrade
     // header, so the name is now held by a room with no players. Only a request
-    // carrying a pass for the name gets that far; the Worker refuses the rest.
+    // carrying an unexpired pass for the name gets that far.
     const admission = encodeURIComponent(await issueAdmissionPass(env, name, "private"));
     const res = await SELF.fetch(`https://racer.test/parties/race-room/${name}?admission=${admission}`);
     expect(res.status).toBe(404);
@@ -204,8 +204,6 @@ describe("allocateRoomId reserves a free name", () => {
     await withPrivateRoom(name, async (room) => {
       const idleSince = Date.now() - UNJOINED_ROOM_IDLE_MS - 1000;
       room.state.lastActivityAt = idleSince;
-      // The admission-pass refresh runs on an earlier timer of its own.
-      room.state.admissionRefreshAt = null;
       await room.persist();
       await room.onAlarm();
 
