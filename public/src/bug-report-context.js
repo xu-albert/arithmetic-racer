@@ -11,8 +11,11 @@
 // This file lives under public/src/ because that is the one place both halves
 // can reach: public/ has no build step, so the browser loads it as an ES module
 // exactly as written, and the Worker is esbuild-bundled, so the same file
-// imports cleanly there. Keep it dependency-free — `collect` takes a window
-// rather than reaching for a global, so it runs under node:test too.
+// imports cleanly there. Keep it free of browser globals — `collect` takes a
+// window rather than reaching for one, so it runs under node:test too; its one
+// import, identity.js, is handed that window's storage.
+
+import { getDeviceId } from "./identity.js";
 
 /**
  * @typedef {object} BugContextField
@@ -32,7 +35,8 @@
  *   — see CLIENT_CONTEXT_FIELDS.
  * @property {number} [maxLength] Cap the server applies to a text field.
  * @property {boolean} [pathOnly] Strip query string and fragment before storing.
- * @property {(win: Window) => string|number|undefined} [collect] Client fields.
+ * @property {(win: Window) => string|number|null|undefined} [collect] Client
+ *   fields. `null`, `undefined` and `""` all mean absent (see readValue).
  */
 
 /**
@@ -159,7 +163,7 @@ export const BUG_CONTEXT_FIELDS = [
     type: "text",
     storedIn: "column",
     maxLength: 128,
-    collect: (win) => win.localStorage?.getItem("deviceId") || undefined,
+    collect: (win) => getDeviceId(win.localStorage),
   },
   {
     // Not stored on the row, but it is the reason user_id above can be known:

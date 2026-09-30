@@ -112,6 +112,8 @@
   </main>
 
   <script type="module">
+    import { getDeviceId } from "/src/identity.js";
+
     const form = document.getElementById("contact-form");
     const note = document.getElementById("form-note");
     const btn = document.getElementById("submit-btn");
@@ -142,7 +144,7 @@
             message,
             kind: kind.value,
             email: document.getElementById("email").value.trim() || undefined,
-            device_id: localStorage.getItem("deviceId") || undefined,
+            device_id: getDeviceId(localStorage) || undefined,
           }),
         });
         if (res.status === 429) {

@@ -18,20 +18,9 @@ import { mountProfile } from './src/profile.js';
 import { mountLeaderboard } from './src/leaderboard.js';
 import { postRaceResult } from './src/stats-api.js';
 import { soloResultPayload } from './src/solo-result.js';
-import { getOrCreateDeviceId } from './src/identity.js';
+import { getOrCreateDeviceId, getOrCreateAnonHandle } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
-
-// ---- Identity helpers --------------------------------------------------
-
-function getOrCreateAnonHandle() {
-  let h = localStorage.getItem('anonHandle');
-  if (!h) {
-    h = generateHandle(Math.random);
-    localStorage.setItem('anonHandle', h);
-  }
-  return h;
-}
 
 // Cache of the logged-in user's username — set by the `session-ready`
 // event dispatched by header.js after its /api/me fetch. Saves a duplicate
@@ -208,6 +197,24 @@ function enterRoom(roomId, { mode, difficulty } = {}) {
   cleanupCaptcha = attachCaptchaUI({ client: lobbyHandle.client });
   showScreen('lobby-room');
 }
+
+// A room learns who you are once, at the WebSocket upgrade: the Worker stamps
+// the session's user id onto it (server/server.js) and the DO reads it in
+// onConnect. An email sign-in or sign-out with the room socket already open
+// therefore changes nothing until the next connect — race results would keep
+// landing as anonymous guest rows, which the one-time history claim (run at
+// signup) never revisits. Reconnecting the room's socket in place picks up the
+// new session: handleHello's reconnect branch re-stamps the seat's identity,
+// and the lobby, a race in progress and the captcha overlay — all still
+// subscribed to the same client — take the snapshot exactly as they do after a
+// network drop, without leaving the screen the player is on.
+// 'oauth-return' is excluded: that page load's socket already connects with
+// the fresh cookie. Expiry clears lobbyHandle, so it reconnects nothing.
+document.addEventListener('auth-changed', (e) => {
+  const reason = e.detail?.reason;
+  if (reason !== 'signin' && reason !== 'signup' && reason !== 'signout') return;
+  lobbyHandle?.client.reconnect();
+});
 
 async function createRoom() {
   const res = await fetch('/api/rooms', { method: 'POST' });

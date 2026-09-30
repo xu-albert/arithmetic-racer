@@ -1,4 +1,4 @@
-// Tests for the auth modal's Google return handling.
+// Tests for the auth modal's Google return handling and pure error-copy map.
 //
 // Runs on `node --test` with no DOM, so what is exercised here is the request
 // that starts Google sign-in and the reading of the page it comes back to. The
@@ -8,7 +8,12 @@
 
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { startGoogleSignIn, readGoogleReturn, mapAuthError } from "./auth.js";
+import {
+  buildGoogleReturnUrl,
+  startGoogleSignIn,
+  readGoogleReturn,
+  mapAuthError,
+} from "./auth.js";
 
 const realFetch = globalThis.fetch;
 
@@ -18,28 +23,53 @@ afterEach(() => {
 });
 
 /** Start Google sign-in against stubs; returns the body sent and the page navigated to. */
-async function startSignIn() {
+async function startSignIn(location = {}) {
   let sent = null;
   let navigatedTo = null;
   globalThis.fetch = async (_url, init) => {
     sent = JSON.parse(init.body);
     return Response.json({ url: "https://accounts.google.com/o/oauth2/v2/auth", redirect: true });
   };
-  globalThis.location = { assign: (url) => (navigatedTo = url) };
+  globalThis.location = { search: "", pathname: "/", assign: (url) => (navigatedTo = url), ...location };
   await startGoogleSignIn();
   return { sent, navigatedTo };
 }
 
-test("Google sign-in asks better-auth to send failures back into the app", async () => {
-  const { sent, navigatedTo } = await startSignIn();
+test("Google sign-in sends success and failure callbacks to the starting page", async () => {
+  const { sent, navigatedTo } = await startSignIn({
+    search: "?room=wild-tapir-hare&mode=public&difficulty=medium",
+  });
 
   assert.equal(navigatedTo, "https://accounts.google.com/o/oauth2/v2/auth");
   assert.equal(sent.provider, "google");
   assert.equal(sent.errorCallbackURL, sent.callbackURL);
   assert.deepEqual(readGoogleReturn(new URL(sent.callbackURL, "http://localhost").search), {
     error: null,
-    query: "",
+    query: "room=wild-tapir-hare&mode=public&difficulty=medium",
   });
+});
+
+test("buildGoogleReturnUrl: bare lobby returns to the bare lobby", () => {
+  assert.equal(buildGoogleReturnUrl(""), "/?auth=google");
+  assert.equal(buildGoogleReturnUrl("", "/"), "/?auth=google");
+});
+
+test("buildGoogleReturnUrl: a room sign-in returns to the room", () => {
+  assert.equal(
+    buildGoogleReturnUrl("?room=wild-tapir-hare"),
+    "/?room=wild-tapir-hare&auth=google",
+  );
+});
+
+test("buildGoogleReturnUrl: quick-match mode and difficulty survive the round trip", () => {
+  assert.equal(
+    buildGoogleReturnUrl("?room=m-mighty-tapir-heron&mode=public&difficulty=medium"),
+    "/?room=m-mighty-tapir-heron&mode=public&difficulty=medium&auth=google",
+  );
+});
+
+test("buildGoogleReturnUrl: a stale auth marker is replaced, not duplicated", () => {
+  assert.equal(buildGoogleReturnUrl("?auth=google"), "/?auth=google");
 });
 
 test("a refused link comes back explaining the existing account", async () => {
@@ -87,4 +117,27 @@ test("the return parameters are stripped and the rest of the query kept", () => 
 test("a page load that is not a Google return is left alone", () => {
   assert.equal(readGoogleReturn(""), null);
   assert.equal(readGoogleReturn("?room=brave-otter-sky&error=nope"), null);
+});
+
+test("mapAuthError: duplicate-email signup names the real 1.6.9 code", () => {
+  // Verified against a live worker: better-auth 1.6.9 returns
+  // USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL (422), which used to fall through
+  // to the generic message.
+  assert.equal(
+    mapAuthError("USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL"),
+    "An account with that email already exists. Log in instead.",
+  );
+  assert.equal(
+    mapAuthError("USER_ALREADY_EXISTS"),
+    "An account with that email already exists. Log in instead.",
+  );
+});
+
+test("mapAuthError: a malformed email rejected server-side says so", () => {
+  assert.equal(mapAuthError("VALIDATION_ERROR"), "Enter a valid email address.");
+});
+
+test("mapAuthError: unknown codes stay generic", () => {
+  assert.equal(mapAuthError("SOMETHING_NEW"), "Something went wrong. Please try again.");
+  assert.equal(mapAuthError(undefined), "Something went wrong. Please try again.");
 });
