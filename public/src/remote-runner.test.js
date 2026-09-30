@@ -118,6 +118,26 @@ describe('racer bootstrap from the initial state', () => {
     assert.equal(bot.tier, 'fast');
     assert.equal(bot.handle, 'Hp-3');
   });
+
+  test('a countdown snapshot does not add a new seat to the mounted roster', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 1 }),
+      youAre: ME,
+    });
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'countdown',
+        countdownN: 0,
+        players: [player('p-1'), player(ME), player('p-3')],
+      }),
+    });
+
+    assert.equal(runner.racers.some((r) => r.id === 'p-3'), false);
+  });
 });
 
 describe('race-start and countdown', () => {
