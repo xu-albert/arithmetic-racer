@@ -1,9 +1,14 @@
-// Signed, short-lived admission passes keep a room name from being a room
-// credential. The Worker issues a pass after matchmaking or room allocation,
-// and the room re-issues one to each seated member while it is alive; the
-// Worker verifies it before any request reaches a room.
+// Signed admission passes keep a room name from being a room credential. The
+// Worker issues a pass after matchmaking or room allocation and checks it
+// before any request reaches a room. Its short expiry bounds only what a pass
+// may create: an expired pass still joins or reconnects to a room that is
+// alive, but never creates or revives one (RaceRoom.fetch in ./room.js).
 
 export const ADMISSION_PASS_TTL_MS = 10 * 60 * 1000;
+
+// Set by the Worker on every request it lets through to a room, overwriting
+// whatever the client sent: the pass's verdict, 'fresh' or 'stale'.
+export const ADMISSION_HEADER = "x-arithmetic-admission";
 
 // Passes are signed with a key derived from BETTER_AUTH_SECRET, never with the
 // secret itself: that one signs sessions, and a key used for two purposes lets
@@ -45,25 +50,34 @@ export async function issueAdmissionPass(env, roomId, mode, now = Date.now()) {
   return `v1.${payload}.${base64Url(new Uint8Array(signature))}`;
 }
 
-export async function verifyAdmissionPass(env, pass, { roomId, mode, now = Date.now() }) {
-  if (typeof pass !== "string") return false;
+/**
+ * 'fresh' for a pass signed for this room and mode that has not expired,
+ * 'stale' for one that has, or null for anything else — a forgery, another
+ * room's or mode's pass, or no pass at all.
+ */
+export async function checkAdmissionPass(env, pass, { roomId, mode, now = Date.now() }) {
+  if (typeof pass !== "string") return null;
   const key = await keyFor(env);
-  if (!key) return false;
+  if (!key) return null;
   const parts = pass.split(".");
-  if (parts.length !== 3 || parts[0] !== "v1") return false;
+  if (parts.length !== 3 || parts[0] !== "v1") return null;
   let payload;
   let signature;
   try {
     payload = JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[1])));
     signature = decodeBase64Url(parts[2]);
   } catch {
-    return false;
+    return null;
   }
-  if (!payload || payload.roomId !== roomId || payload.mode !== mode
-    || !Number.isFinite(payload.exp) || payload.exp <= now) return false;
+  if (!payload || payload.roomId !== roomId || payload.mode !== mode || !Number.isFinite(payload.exp)) {
+    return null;
+  }
+  let authentic;
   try {
-    return await crypto.subtle.verify("HMAC", key, signature, text(parts[1]));
+    authentic = await crypto.subtle.verify("HMAC", key, signature, text(parts[1]));
   } catch {
-    return false;
+    return null;
   }
+  if (!authentic) return null;
+  return payload.exp > now ? "fresh" : "stale";
 }

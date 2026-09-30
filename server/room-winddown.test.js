@@ -165,10 +165,6 @@ describe("private room — the alarm follows the activity clock", () => {
   it("schedules the winddown one idle window after the last activity", async () => {
     await withPrivateRoom("winddown-alarm-" + crypto.randomUUID(), async (room, { conns }) => {
       await join(room, conns);
-      // A seated room also refreshes admission passes, on an earlier timer of
-      // its own; this is about the idle clock alone.
-      room.state.admissionRefreshAt = null;
-      await room.scheduleNextAlarm();
       const alarm = await room.ctx.storage.getAlarm();
       expectAlarmEnforces(alarm, room.state.lastActivityAt + PRIVATE_ROOM_IDLE_MS);
     });
@@ -177,8 +173,6 @@ describe("private room — the alarm follows the activity clock", () => {
   it("leaves a slightly-early alarm alone instead of rewriting it per frame", async () => {
     await withPrivateRoom("winddown-slop-" + crypto.randomUUID(), async (room, { conns }) => {
       await join(room, conns);
-      room.state.admissionRefreshAt = null;
-      await room.scheduleNextAlarm();
       const before = await room.ctx.storage.getAlarm();
       expect(before).not.toBeNull();
 
@@ -222,7 +216,6 @@ describe("private room — the alarm follows the activity clock", () => {
   it("every message pushes the alarm out, and persists the clock behind it", async () => {
     await withPrivateRoom("winddown-reschedule-" + crypto.randomUUID(), async (room, { conns }) => {
       const conn = await join(room, conns);
-      room.state.admissionRefreshAt = null;
       ageRoom(room, PRIVATE_ROOM_IDLE_MS - 5000);
       await room.scheduleNextAlarm();
       const early = await room.ctx.storage.getAlarm();

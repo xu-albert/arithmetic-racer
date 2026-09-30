@@ -1,19 +1,25 @@
 import { describe, it, expect } from "vitest";
 import { env, SELF, runInDurableObject } from "cloudflare:test";
-import { ADMISSION_PASS_TTL_MS, issueAdmissionPass, verifyAdmissionPass } from "./admission-pass.js";
-import { ADMISSION_PASS_REFRESH_MS } from "./room.js";
-import { ROOM_EXPIRED_TYPE, INVITE_EXPIRED_REASON } from "../public/src/room-expiry.js";
+import { issueAdmissionPass } from "./admission-pass.js";
+import { EXPIRED_ROOM_TTL_MS } from "./room.js";
+import {
+  EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE, INVITE_EXPIRED_REASON, INVITE_INVALID_REASON,
+} from "../public/src/room-expiry.js";
 
+const MINUTE = 60 * 1000;
 const tick = (ms = 10) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const privateRoom = (name) => env.RaceRoom.get(env.RaceRoom.idFromName(name));
 const publicRoom = (name) => env.PublicRaceRoom.get(env.PublicRaceRoom.idFromName(name));
 
+/** A pass for `name` issued `ageMs` ago; past ADMISSION_PASS_TTL_MS it is stale. */
+const passAged = (name, mode, ageMs) => issueAdmissionPass(env, name, mode, Date.now() - ageMs);
+
+const partyUrl = (party, roomId, admission) =>
+  `https://admission.test/parties/${party}/${roomId}${admission ? `?admission=${encodeURIComponent(admission)}` : ""}`;
+
 async function open(party, roomId, admission) {
-  const query = admission ? `?admission=${encodeURIComponent(admission)}` : "";
-  const res = await SELF.fetch(`https://admission.test/parties/${party}/${roomId}${query}`, {
-    headers: { Upgrade: "websocket" },
-  });
+  const res = await SELF.fetch(partyUrl(party, roomId, admission), { headers: { Upgrade: "websocket" } });
   expect(res.status).toBe(101);
   const ws = res.webSocket;
   const messages = [];
@@ -24,13 +30,8 @@ async function open(party, roomId, admission) {
   return {
     messages,
     get closed() { return closed; },
-    hello(handle) {
-      ws.send(JSON.stringify({
-        type: "hello", playerId: crypto.randomUUID(), handle, deviceId: crypto.randomUUID(),
-      }));
-    },
-    passes() {
-      return messages.filter((m) => m.type === "admission-pass").map((m) => m.admissionPass);
+    hello(handle, racerId = crypto.randomUUID()) {
+      ws.send(JSON.stringify({ type: "hello", playerId: racerId, handle, deviceId: crypto.randomUUID() }));
     },
     async wait(predicate) {
       const deadline = Date.now() + 3000;
@@ -47,50 +48,48 @@ async function open(party, roomId, admission) {
   };
 }
 
-async function expectRefused(client, roomId) {
+async function expectRefused(client, roomId, reason) {
   const refusal = await client.wait((m) => m.type === ROOM_EXPIRED_TYPE);
-  expect(refusal).toEqual({ type: ROOM_EXPIRED_TYPE, reason: INVITE_EXPIRED_REASON, roomId });
+  expect(refusal).toEqual({ type: ROOM_EXPIRED_TYPE, reason, roomId });
   for (let i = 0; i < 100 && !client.closed; i++) await tick(5);
   expect(client.closed).toBe(true);
-  // Refused before the room was reached: it never pushed its own snapshot.
+  // Refused before the room ran: it never pushed its own snapshot.
   expect(client.messages.some((m) => m.type === "state")).toBe(false);
+}
+
+async function storedState(stub) {
+  return runInDurableObject(stub, (_room, state) => state.storage.get("state"));
 }
 
 describe("the Worker admits nobody to a room without a pass", () => {
   it("refuses a pass-less socket, says why, and leaves the name unminted", async () => {
     const name = `adm-nopass-${crypto.randomUUID()}`;
-    await expectRefused(await open("race-room", name), name);
+    await expectRefused(await open("race-room", name), name, INVITE_INVALID_REASON);
     // Nothing was written under the name, so a real creation still gets it.
     expect(await privateRoom(name).reserveRoomName()).toBe(true);
   });
 
   it("refuses a plain request without a pass before the room can mint state", async () => {
     const name = `adm-get-${crypto.randomUUID()}`;
-    const res = await SELF.fetch(`https://admission.test/parties/race-room/${name}`);
-    expect(res.status).toBe(403);
+    expect((await SELF.fetch(partyUrl("race-room", name))).status).toBe(403);
     expect(await privateRoom(name).reserveRoomName()).toBe(true);
   });
 
   it("never creates a public room at a name the matchmaker did not hand out", async () => {
     const name = `m-adm-${crypto.randomUUID()}`;
-    expect((await SELF.fetch(`https://admission.test/parties/public-race-room/${name}`)).status).toBe(403);
-    await expectRefused(await open("public-race-room", name), name);
+    expect((await SELF.fetch(partyUrl("public-race-room", name))).status).toBe(403);
+    await expectRefused(await open("public-race-room", name), name, INVITE_INVALID_REASON);
     // A private pass for the same name is the wrong mode.
     const privatePass = await issueAdmissionPass(env, name, "private");
-    await expectRefused(await open("public-race-room", name, privatePass), name);
-    await runInDurableObject(publicRoom(name), async (_room, state) => {
-      expect(await state.storage.get("state")).toBeUndefined();
-    });
+    await expectRefused(await open("public-race-room", name, privatePass), name, INVITE_INVALID_REASON);
+    expect(await storedState(publicRoom(name))).toBeUndefined();
   });
 
   it("refuses a pass issued for another room, and any other routable party", async () => {
     const name = `adm-other-${crypto.randomUUID()}`;
     const elsewhere = await issueAdmissionPass(env, `adm-elsewhere-${crypto.randomUUID()}`, "private");
-    await expectRefused(await open("race-room", name, elsewhere), name);
-    const lobbyRouter = await SELF.fetch(
-      `https://admission.test/parties/lobby-router/medium?admission=${encodeURIComponent(elsewhere)}`,
-    );
-    expect(lobbyRouter.status).toBe(403);
+    await expectRefused(await open("race-room", name, elsewhere), name, INVITE_INVALID_REASON);
+    expect((await SELF.fetch(partyUrl("lobby-router", "medium", elsewhere))).status).toBe(403);
   });
 
   it("caps room creation attempts from one IP", async () => {
@@ -105,71 +104,91 @@ describe("the Worker admits nobody to a room without a pass", () => {
     expect(responses[10].status).toBe(429);
     expect(responses[10].headers.get("retry-after")).toBe("60");
   });
+
+  it("caps /parties/* requests from one IP", async () => {
+    const statuses = [];
+    for (let i = 0; i < 301; i++) {
+      const res = await SELF.fetch(partyUrl("lobby-router", `adm-flood-${i}`), {
+        headers: { "cf-connecting-ip": "203.0.113.88" },
+      });
+      statuses.push(res.status);
+      if (i === 300) expect(res.headers.get("retry-after")).toBe("60");
+    }
+    expect(statuses.slice(0, 300).every((status) => status === 403)).toBe(true);
+    expect(statuses[300]).toBe(429);
+  }, 30_000);
 });
 
-describe("a live private room keeps its invite link working", () => {
-  it("hands each seat a fresh pass that still admits after the original lapses", async () => {
-    const name = `adm-fresh-${crypto.randomUUID()}`;
+describe("a pass's expiry bounds only creating or reviving a room", () => {
+  it("lets a 30-minute-old invite join a live room", async () => {
+    const name = `adm-old-invite-${crypto.randomUUID()}`;
     expect(await privateRoom(name).reserveRoomName()).toBe(true);
-    // Minted so that it lapses one second from now.
-    const original = await issueAdmissionPass(env, name, "private", Date.now() - ADMISSION_PASS_TTL_MS + 1000);
-
-    const host = await open("race-room", name, original);
+    const host = await open("race-room", name, await issueAdmissionPass(env, name, "private"));
     host.hello("Host");
     await host.wait((m) => m.type === "hello-ack");
-    const { admissionPass: fresh } = await host.wait((m) => m.type === "admission-pass");
 
-    await tick(1100);
-    await expectRefused(await open("race-room", name, original), name);
-
-    const guest = await open("race-room", name, fresh);
+    const guest = await open("race-room", name, await passAged(name, "private", 30 * MINUTE));
     guest.hello("Guest");
     await guest.wait((m) => m.type === "hello-ack");
-    await guest.wait((m) => m.type === "admission-pass");
+    await runInDurableObject(privateRoom(name), async (room) => {
+      expect(room.state.players.map((p) => p.handle).sort()).toEqual(["Guest", "Host"]);
+    });
     host.close();
     guest.close();
   });
 
-  it("re-issues seated members a pass on the refresh cadence, and stops once none is connected", async () => {
-    const name = `adm-refresh-${crypto.randomUUID()}`;
-    expect(await privateRoom(name).reserveRoomName()).toBe(true);
-    const host = await open("race-room", name, await issueAdmissionPass(env, name, "private"));
-    host.hello("Host");
-    await host.wait((m) => m.type === "admission-pass");
-
-    await runInDurableObject(privateRoom(name), async (room) => {
-      const due = room.state.admissionRefreshAt;
-      expect(due).toBeGreaterThan(Date.now());
-      expect(due).toBeLessThanOrEqual(Date.now() + ADMISSION_PASS_REFRESH_MS);
-      expect(await room.ctx.storage.getAlarm()).toBeLessThanOrEqual(due);
-
-      room.state.admissionRefreshAt = Date.now() - 1;
-      await room.onAlarm();
-      expect(room.state.admissionRefreshAt).toBeGreaterThan(Date.now());
-    });
-    await host.wait(() => host.passes().length >= 2);
-    const refreshed = host.passes()[1];
-    expect(await verifyAdmissionPass(env, refreshed, { roomId: name, mode: "private" })).toBe(true);
-
-    host.close();
+  it("lets a Quick Match seat reconnect on an 11-minute-old pass", async () => {
+    const name = `m-adm-${crypto.randomUUID()}`;
+    const racerId = crypto.randomUUID();
+    const first = await open("public-race-room", name, await issueAdmissionPass(env, name, "public"));
+    first.hello("Racer", racerId);
+    const { playerId } = await first.wait((m) => m.type === "hello-ack");
+    first.close();
     await tick(50);
-    await runInDurableObject(privateRoom(name), async (room) => {
-      room.state.admissionRefreshAt = Date.now() - 1;
-      await room.onAlarm();
-      expect(room.state.admissionRefreshAt).toBeNull();
-    });
+
+    const back = await open("public-race-room", name, await passAged(name, "public", 11 * MINUTE));
+    back.hello("Racer", racerId);
+    expect((await back.wait((m) => m.type === "hello-ack")).playerId).toBe(playerId);
+    back.close();
   });
 
-  it("gives a public seat its pass at hello without arming a refresh", async () => {
-    const name = `m-adm-${crypto.randomUUID()}`;
-    const racer = await open("public-race-room", name, await issueAdmissionPass(env, name, "public"));
-    racer.hello("Racer");
-    await racer.wait((m) => m.type === "hello-ack");
-    const { admissionPass } = await racer.wait((m) => m.type === "admission-pass");
-    expect(await verifyAdmissionPass(env, admissionPass, { roomId: name, mode: "public" })).toBe(true);
-    await runInDurableObject(publicRoom(name), async (room) => {
-      expect(room.state.admissionRefreshAt ?? null).toBeNull();
+  it("does not let a stale pass create a room", async () => {
+    const name = `adm-stale-create-${crypto.randomUUID()}`;
+    const stale = await passAged(name, "private", 11 * MINUTE);
+    await expectRefused(await open("race-room", name, stale), name, INVITE_EXPIRED_REASON);
+    expect((await SELF.fetch(partyUrl("race-room", name, stale))).status).toBe(403);
+    expect(await privateRoom(name).reserveRoomName()).toBe(true);
+
+    const publicName = `m-adm-stale-${crypto.randomUUID()}`;
+    const stalePublic = await passAged(publicName, "public", 11 * MINUTE);
+    await expectRefused(await open("public-race-room", publicName, stalePublic), publicName, INVITE_EXPIRED_REASON);
+    expect(await storedState(publicRoom(publicName))).toBeUndefined();
+  });
+
+  it("does not let a stale pass revive a room that is gone, though a fresh one may", async () => {
+    const name = `adm-stale-revive-${crypto.randomUUID()}`;
+    expect(await privateRoom(name).reserveRoomName()).toBe(true);
+    await runInDurableObject(privateRoom(name), async (room) => {
+      if (!room.state) await room.onStart();
+      await room.expireRoom();
+      // Old enough that onStart would clear the tombstone for a new room.
+      room.state.expiredAt = Date.now() - EXPIRED_ROOM_TTL_MS - 1000;
+      await room.persist();
     });
-    racer.close();
+
+    const stale = await passAged(name, "private", 11 * MINUTE);
+    await expectRefused(await open("race-room", name, stale), name, INVITE_EXPIRED_REASON);
+    expect((await storedState(privateRoom(name))).state).toBe(EXPIRED_ROOM_STATE);
+
+    expect((await SELF.fetch(partyUrl("race-room", name, await issueAdmissionPass(env, name, "private")))).status)
+      .toBe(404);
+    expect((await storedState(privateRoom(name))).state).toBe("lobby");
+  });
+
+  it("lets nothing that bypassed the Worker's check create a room", async () => {
+    const name = `adm-bypass-${crypto.randomUUID()}`;
+    const res = await privateRoom(name).fetch(new Request(partyUrl("race-room", name)));
+    expect(res.status).toBe(403);
+    expect(await privateRoom(name).reserveRoomName()).toBe(true);
   });
 });

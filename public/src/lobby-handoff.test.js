@@ -205,7 +205,6 @@ test('private lobby renders all ten seats and hands the complete roster to the r
   assert.deepEqual(handoffs[0].initialState.players, players);
   cleanup.detach();
 });
-
 // Signing in with the room open reconnects the socket in place (main.js's
 // auth-changed listener) so the room hears the new session. It must stay the
 // same lobby: a second attachLobby would stack listeners and forget what this

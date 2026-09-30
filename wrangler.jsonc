@@ -107,6 +107,13 @@
       "namespace_id": "1006",
       "simple": { "limit": 10, "period": 60 }
     },
+    // Every /parties/* request, per IP: page loads and reconnects, sized for a
+    // classroom sharing one address rather than for one player.
+    {
+      "name": "PARTIES_IP_LIMIT",
+      "namespace_id": "1007",
+      "simple": { "limit": 300, "period": 60 }
+    },
     // Contact form: 1 message per IP per minute (the binding has no hourly window).
     {
       "name": "CONTACT_IP_LIMIT",
@@ -178,6 +185,7 @@
         },
         { "name": "MATCHMAKING_LIMIT", "namespace_id": "2004", "simple": { "limit": 3, "period": 60 } },
         { "name": "ROOM_CREATE_IP_LIMIT", "namespace_id": "2006", "simple": { "limit": 10, "period": 60 } },
+        { "name": "PARTIES_IP_LIMIT", "namespace_id": "2007", "simple": { "limit": 300, "period": 60 } },
         { "name": "CONTACT_IP_LIMIT", "namespace_id": "2005", "simple": { "limit": 1, "period": 60 } }
       ],
       "alias": {
