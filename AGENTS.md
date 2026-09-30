@@ -73,9 +73,10 @@ Traps this arrangement sets:
 - **A seat that carries a `finishMs` owns its result from that moment.** The
   race end is now routinely minutes after a racer crosses the line, and quitting
   or closing the tab in between must not rewrite their row: `dropRacer()` is the
-  only place `dropped` is set and refuses a finisher, and
-  `PublicRaceRoom.removePlayer` holds such a seat instead of splicing it, so
-  `finishRace()` can still build its payload. The hold is what makes that room's
+  only place `dropped` is set and refuses a finisher, and both rooms'
+  `removePlayer` hold every seat that departs mid-race (through `dropRacer()`)
+  instead of splicing it, so `finishRace()` can still build its payload — a
+  finish, or a dnf row for a straggler. The hold is what makes Quick Match's
   `players.length === 0` cleanup gates lie, so `finishRace()` prunes `departed`
   seats alongside the bots; `handleHello` clears the flag when the seat is
   claimed again. Coverage: `server/room-race-deadline.test.js`.
