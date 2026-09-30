@@ -12,15 +12,12 @@ import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDevice
 export function createRoomClient({ roomId, mode, difficulty, deviceId, admissionPass } = {}) {
   const party = mode === 'public' ? 'public-race-room' : 'race-room';
 
-  // The Worker refuses any socket, a reconnect included, that does not carry a
-  // current pass for this room. Read per connection attempt, so a reconnect
-  // presents the newest one the room has handed this seat.
-  let latestAdmissionPass = admissionPass;
+  // Checked by the Worker on every connection, a reconnect included.
   const ws = new PartySocket({
     host: location.host,
     party,
     room: roomId,
-    query: () => ({ admission: latestAdmissionPass }),
+    query: { admission: admissionPass },
   });
   const listeners = new Set();
   // The server's ephemeral, per-room id for this player, learned from
@@ -51,9 +48,6 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId, admission
       if (typeof msg.playerId === 'string') myPlayerId = msg.playerId;
       if (msg.handle) setStoredHandle(msg.handle);
     }
-    if (msg.type === 'admission-pass' && typeof msg.admissionPass === 'string') {
-      latestAdmissionPass = msg.admissionPass;
-    }
     if (msg.type === 'handle-changed') {
       if (myPlayerId != null && msg.playerId === myPlayerId) setStoredHandle(msg.handle);
     }
@@ -73,10 +67,6 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId, admission
     },
     get readyState() {
       return ws.readyState;
-    },
-    /** The newest admission pass this client holds for the room. */
-    get admissionPass() {
-      return latestAdmissionPass;
     },
   };
 }

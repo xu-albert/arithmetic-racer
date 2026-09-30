@@ -145,9 +145,9 @@ that hold it together:
   places such state is born both mark `state.unjoined` and arm the alarm:
   `reserveRoomName()`, and `onStart()` on a fresh mint. The second one is not
   optional — partyserver runs `onStart` before it looks at the `Upgrade` header,
-  so a plain `GET /parties/race-room/<name>` carrying a valid pass persists a
-  lobby and then 404s, and unmarked those rows would 503 every real creation
-  for good.
+  so a plain `GET /parties/race-room/<name>` carrying an unexpired pass
+  persists a lobby and then 404s, and unmarked those rows would 503 every real
+  creation for good.
   An unjoined room winds down after `UNJOINED_ROOM_IDLE_MS` (2 min) instead of
   `PRIVATE_ROOM_IDLE_MS`, because `POST /api/rooms` is unauthenticated and
   metered only by a coarse per-IP ceiling: at a 30-minute hold, a few requests
@@ -169,12 +169,15 @@ not a name we own. Coverage: `server/room-allocation.test.js`.
 Private rooms are **unlisted, not account-controlled**, and that is a deliberate
 product decision rather than a gap to close: the room name is still cheap to
 enumerate, but the Worker refuses any `/parties/*` request without a
-short-lived server-signed admission pass for that room, before the room's
-Durable Object is touched. The pass rides in the invite link, and the room
-re-issues it to seated members so a live room's link keeps working. Reserving
-fixes who *creates* a room, while the pass stops a guessed name from minting
-room state or seating a bot. Do not add a join capability, invite code or
-account admission check without a fresh decision.
+server-signed admission pass for that room and mode, before the room's Durable
+Object is touched, and caps `/parties/*` per IP. The pass rides in the invite
+link. Its 10-minute expiry bounds only creating or reviving room state: an
+expired pass still joins or reconnects to a room that is alive, and
+`RaceRoom.fetch` refuses it — before `onStart` can mint anything — when the
+room has no live state. Reserving fixes who *creates* a room, while the pass
+stops a guessed name from minting room state or seating a bot. Do not add a
+join capability, invite code or account admission check without a fresh
+decision.
 
 ## Every one-shot room broadcast needs a snapshot equivalent
 

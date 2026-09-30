@@ -20,11 +20,14 @@ import { handleContact } from "../worker/routes/contact.js";
 import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 import { handleLeaderboard } from "../worker/routes/leaderboard.js";
 import { handleCreateRoom } from "../worker/routes/rooms.js";
-import { verifyAdmissionPass } from "./admission-pass.js";
-import { expiredMessage } from "./room.js";
-import { INVITE_EXPIRED_REASON } from "../public/src/room-expiry.js";
+import { checkAdmissionPass, ADMISSION_HEADER } from "./admission-pass.js";
+import { refuseAdmission } from "./room.js";
+import { INVITE_INVALID_REASON } from "../public/src/room-expiry.js";
+import { allowRequest } from "../worker/rate-limit.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
+// Must match PARTIES_IP_LIMIT's period in wrangler.jsonc.
+const PARTIES_RATE_LIMIT_WINDOW_S = 60;
 
 // The pass mode each routable room class admits, keyed by the class name
 // partyserver resolves a /parties/<party>/<name> path to. Anything else it can
@@ -33,24 +36,16 @@ const ADMISSION_MODES = { RaceRoom: "private", PublicRaceRoom: "public" };
 
 // Checked against the name and class partyserver is about to route to, before
 // the room Durable Object is touched at all: a request that reached it would
-// already have run onStart and minted live state under that name.
-function admitted(request, lobby, env) {
+// already have run onStart and minted live state under that name. What passes
+// carries the pass's verdict on to the room, which alone knows whether it is
+// alive — the one thing an expired pass's admission depends on.
+async function admit(request, lobby, env) {
   const mode = ADMISSION_MODES[lobby.className];
-  if (!mode) return false;
   const pass = new URL(request.url).searchParams.get("admission");
-  return verifyAdmissionPass(env, pass, { roomId: lobby.name, mode });
-}
-
-// A refused upgrade is still answered as a socket. The browser hides an
-// upgrade's HTTP status, so a bare 403 reads to the client as a dropped
-// connection that PartySocket retries forever; this tells it why, and the
-// client's expiry latch stops reconnecting.
-function refuseSocket(roomId) {
-  const { 0: client, 1: server } = new WebSocketPair();
-  server.accept();
-  server.send(expiredMessage(roomId, INVITE_EXPIRED_REASON));
-  server.close(1000, "admission required");
-  return new Response(null, { status: 101, webSocket: client });
+  const verdict = mode ? await checkAdmissionPass(env, pass, { roomId: lobby.name, mode }) : null;
+  if (!verdict) return refuseAdmission(request, lobby.name, INVITE_INVALID_REASON);
+  request.headers.set(ADMISSION_HEADER, verdict);
+  return request;
 }
 
 export { RaceRoom } from "./room.js";
@@ -138,6 +133,17 @@ export default {
     // path that can reach a room DO then passes the gate.
     let upgradeRequest = request;
     const normalizedPathname = pathname.replace(/\/{2,}/g, "/");
+    // A coarse per-IP ceiling on everything that can reach a Durable Object,
+    // ahead of the session lookup and the pass check below.
+    if (normalizedPathname.startsWith("/parties/")) {
+      const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+      if (!(await allowRequest(env.PARTIES_IP_LIMIT, ip, "PARTIES_IP_LIMIT"))) {
+        return Response.json({ error: "rate_limited" }, {
+          status: 429,
+          headers: { "retry-after": String(PARTIES_RATE_LIMIT_WINDOW_S) },
+        });
+      }
+    }
     if (
       normalizedPathname.startsWith("/parties/race-room/")
       || normalizedPathname.startsWith("/parties/public-race-room/")
@@ -156,14 +162,8 @@ export default {
       });
     }
     const partyResponse = await routePartykitRequest(upgradeRequest, env, {
-      onBeforeConnect: async (req, lobby) => (
-        await admitted(req, lobby, env) ? undefined : refuseSocket(lobby.name)
-      ),
-      onBeforeRequest: async (req, lobby) => (
-        await admitted(req, lobby, env)
-          ? undefined
-          : Response.json({ error: "admission_required" }, { status: 403 })
-      ),
+      onBeforeConnect: (req, lobby) => admit(req, lobby, env),
+      onBeforeRequest: (req, lobby) => admit(req, lobby, env),
     });
     if (partyResponse) return partyResponse;
 

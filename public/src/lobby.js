@@ -13,7 +13,7 @@ const DIFFS = ['easy', 'medium', 'hard'];
  * @param {string} [opts.mode]       - 'public' activates public-mode UI
  * @param {string} [opts.difficulty] - forwarded to createRoomClient for public mode
  * @param {string} [opts.deviceId]   - forwarded to createRoomClient for public mode
- * @param {string} [opts.admissionPass] - the pass this page was opened with
+ * @param {string} [opts.admissionPass] - carried by the room socket and the invite link
  */
 export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode, difficulty, deviceId, admissionPass }) {
   const isPublic = mode === 'public';
@@ -69,23 +69,9 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   // Public matches are anonymous drop-ins — the internal room slug is
   // meaningless to players, so don't surface it.
   roomTitle.textContent = isPublic ? 'Quick Match' : `Room: ${roomId}`;
-
-  // The invite link and the address bar both carry the newest pass the room
-  // has handed this seat, so either one still opens the room when it is
-  // copied, or reloaded, long after the page was.
   const origin = location.origin ?? `http://${location.host}`;
-  function showRoomUrl(pass) {
-    const url = new URL('/', origin);
-    url.searchParams.set('room', roomId);
-    if (isPublic) {
-      url.searchParams.set('mode', 'public');
-      if (difficulty) url.searchParams.set('difficulty', difficulty);
-    }
-    if (pass) url.searchParams.set('admission', pass);
-    inviteUrlInput.value = url.href;
-    history.replaceState(null, '', url.href);
-  }
-  showRoomUrl(admissionPass);
+  const admissionQuery = admissionPass ? `&admission=${encodeURIComponent(admissionPass)}` : '';
+  inviteUrlInput.value = `${origin}/?room=${encodeURIComponent(roomId)}${admissionQuery}`;
 
   function meIsCreator() {
     if (!currentState || !youAre) return false;
@@ -407,8 +393,6 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
         const diff = msg.difficulty ? msg.difficulty[0].toUpperCase() + msg.difficulty.slice(1) : '';
         showToast(`Host set the race to ${diff} · ${msg.raceLength} problems`, 'info');
       }
-    } else if (msg.type === 'admission-pass') {
-      showRoomUrl(client.admissionPass);
     } else if (msg.type === 'error') {
       showError(msg.message || msg.code);
     }
