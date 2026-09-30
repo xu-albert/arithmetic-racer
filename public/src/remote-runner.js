@@ -243,8 +243,9 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // Apply an authoritative snapshot to the local racers and hand back the ones
   // whose painted state moved. The server is allowed to contradict us: a score
   // it never received rolls back, and a finish it never acknowledged is revoked
-  // by a null. Bots are the one exception — the room parks them at 0 until it
-  // finalizes them, so their progress lives only here.
+  // by a null. Two exceptions: bots — the room parks them at 0 until it
+  // finalizes them, so their progress lives only here — and this client's own
+  // row while a catch-up batch drains in a `racing` room (see below).
   function reconcilePlayers(players, roomState) {
     // Additions to the roster stop when the room stops gathering players for a
     // race this runner has not begun. Past that — a countdown that has handed
