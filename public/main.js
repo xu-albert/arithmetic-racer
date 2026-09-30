@@ -193,8 +193,12 @@ function handleRoomExpired() {
   screens['room-expired']?.focus();
 }
 
-function enterRoom(roomId, { mode, difficulty } = {}) {
-  if (!mode) history.replaceState(null, '', `/?room=${roomId}`);
+function enterRoom(roomId, { mode, difficulty, admissionPass } = {}) {
+  if (!mode) {
+    const url = new URL('/?room=' + encodeURIComponent(roomId), location.origin);
+    if (admissionPass) url.searchParams.set('admission', admissionPass);
+    history.replaceState(null, '', url.href);
+  }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   lobbyHandle = attachLobby({
     roomId,
@@ -204,6 +208,7 @@ function enterRoom(roomId, { mode, difficulty } = {}) {
     mode,
     difficulty,
     deviceId: getOrCreateDeviceId(),
+    admissionPass,
   });
   cleanupCaptcha = attachCaptchaUI({ client: lobbyHandle.client });
   showScreen('lobby-room');
@@ -212,8 +217,7 @@ function enterRoom(roomId, { mode, difficulty } = {}) {
 async function createRoom() {
   const res = await fetch('/api/rooms', { method: 'POST' });
   if (!res.ok) throw new Error(`Failed: ${res.status}`);
-  const { roomId } = await res.json();
-  return roomId;
+  return res.json();
 }
 
 // ---- Initial routing ----------------------------------------------------
@@ -222,9 +226,10 @@ const params = new URLSearchParams(location.search);
 const initialRoomId = params.get('room');
 const initialMode = params.get('mode') ?? undefined;
 const initialDifficulty = params.get('difficulty') ?? undefined;
+const initialAdmissionPass = params.get('admission') ?? undefined;
 
 if (initialRoomId) {
-  enterRoom(initialRoomId, { mode: initialMode, difficulty: initialDifficulty });
+  enterRoom(initialRoomId, { mode: initialMode, difficulty: initialDifficulty, admissionPass: initialAdmissionPass });
 } else {
   lobbyDiffButtons.forEach((btn) => {
     btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
@@ -254,11 +259,11 @@ findMatchBtn?.addEventListener('click', async () => {
   findMatchBtn.disabled = true;
   matchStatus.textContent = 'Searching…';
   try {
-    const { roomId, difficulty } = await joinMatchmaking({
+    const { roomId, difficulty, admissionPass } = await joinMatchmaking({
       difficulty: diff,
       deviceId: getOrCreateDeviceId(),
     });
-    window.location.href = `/?room=${encodeURIComponent(roomId)}&mode=public&difficulty=${encodeURIComponent(difficulty)}`;
+    window.location.href = `/?room=${encodeURIComponent(roomId)}&mode=public&difficulty=${encodeURIComponent(difficulty)}&admission=${encodeURIComponent(admissionPass)}`;
   } catch (e) {
     matchStatus.textContent = e.message || 'Error finding match';
     findMatchBtn.disabled = false;
@@ -268,7 +273,8 @@ findMatchBtn?.addEventListener('click', async () => {
 createRoomBtn.addEventListener('click', async () => {
   createRoomBtn.disabled = true;
   try {
-    enterRoom(await createRoom());
+    const room = await createRoom();
+    enterRoom(room.roomId, room);
   } catch (e) {
     console.error('create room failed', e);
     alert('Could not create room. Try again.');
@@ -291,8 +297,8 @@ expiredHomeBtn?.addEventListener('click', () => {
 expiredNewRoomBtn?.addEventListener('click', async () => {
   expiredNewRoomBtn.disabled = true;
   try {
-    const roomId = await createRoom();
-    location.assign(`/?room=${encodeURIComponent(roomId)}`);
+    const { roomId, admissionPass } = await createRoom();
+    location.assign(`/?room=${encodeURIComponent(roomId)}&admission=${encodeURIComponent(admissionPass)}`);
   } catch (e) {
     console.error('create room failed', e);
     alert('Could not create room. Try again.');

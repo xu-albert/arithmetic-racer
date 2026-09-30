@@ -295,7 +295,7 @@ describe("POST /api/rooms never hands back a live room", () => {
 
     const res = await createRoom();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ roomId });
+    expect(await res.json()).toMatchObject({ roomId, admissionPass: expect.any(String) });
 
     // And it is the caller's own room: their first connection reaches a lobby
     // where they are the creator.

@@ -10,7 +10,6 @@
 // falls through to env.ASSETS.
 
 import { routePartykitRequest } from "partyserver";
-import { allocateRoomId } from "./room-id.js";
 import { handleRaceResult } from "../worker/routes/race-result.js";
 import { handleGetMe, handleGetMyRaces, handlePostUsername, handleByDevice } from "../worker/routes/me.js";
 import { getAuth } from "../worker/auth.js";
@@ -20,7 +19,7 @@ import { handleAdminIndex, handleAdminUser, handleAdminContactHandled } from "..
 import { handleContact } from "../worker/routes/contact.js";
 import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 import { handleLeaderboard } from "../worker/routes/leaderboard.js";
-import { logError, KINDS } from "../worker/logger.js";
+import { handleCreateRoom } from "../worker/routes/rooms.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
 
@@ -95,23 +94,7 @@ export default {
 
     // Phase 6 — private multiplayer rooms
     if (request.method === "POST" && pathname === "/api/rooms") {
-      // Creating a room is the one moment we know a name is being claimed
-      // anew, so the name is *reserved* here rather than merely drawn: the
-      // namespace is ~13k words and a draw can land on a live room, whose
-      // lobby the caller must never be handed as their own. Reserving also
-      // clears an expired-room tombstone sitting on the name — otherwise the
-      // creator opens their brand-new room onto the "room expired" screen.
-      const roomId = await allocateRoomId(env, {
-        onError: (e, id) => logError(KINDS.ROOM_CLAIM_FAILED, e, { roomId: id }),
-      });
-      // Every draw was taken. Rare enough to be a load signal rather than a
-      // routine outcome, and the client already surfaces a non-ok response as
-      // "could not create room", so fail loudly instead of returning a name we
-      // could not reserve.
-      if (roomId == null) {
-        return Response.json({ error: "no room name available" }, { status: 503 });
-      }
-      return Response.json({ roomId });
+      return handleCreateRoom(request, env);
     }
 
     // Stamp the resolved user_id on race-room upgrades so the DO can

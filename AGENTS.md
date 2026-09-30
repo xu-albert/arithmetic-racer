@@ -164,10 +164,12 @@ Exhausting the attempts is a `503`, never a fallback to the last name drawn;
 throwing reservation counts as taken for the same reason — an unproven claim is
 not a name we own. Coverage: `server/room-allocation.test.js`.
 
-Private rooms are **unlisted, not access-controlled**, and that is a deliberate
-product decision rather than a gap to close: the name is the only credential and
-the namespace is cheap to enumerate. Reserving fixes who *creates* a room, not
-who can reach one. Do not add a join capability, invite code or admission check
+Private rooms are **unlisted, not account-controlled**, and that is a deliberate
+product decision rather than a gap to close: the room name is still cheap to
+enumerate, but a short-lived server-signed admission pass is required at `hello`
+and is carried by the creator's invite link. Reserving fixes who *creates* a
+room, while the pass stops a guessed name from seating a bot. Do not add a join
+capability, invite code or account admission check
 without a fresh decision.
 
 ## Every one-shot room broadcast needs a snapshot equivalent
