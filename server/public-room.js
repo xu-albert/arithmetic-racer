@@ -341,6 +341,17 @@ export class PublicRaceRoom extends RaceRoom {
       return true;
     }
 
+    // A grace-expired human still owns a row in the race that is in flight.
+    // Keep the seat until finishRace builds that row, but mark it out and tell
+    // clients immediately so its lane cannot remain a live, waiting racer.
+    if (this.state.state === 'racing') {
+      player.dropped = true;
+      player.departed = true;
+      this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
+      if (this.isRaceComplete()) this.finishRace();
+      return true;
+    }
+
     this.state.players.splice(idx, 1);
     this.cancelAbandonedCountdown();
     this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
