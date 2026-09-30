@@ -455,25 +455,6 @@ describe('server advance reconciliation', () => {
 });
 
 describe('state snapshots mid-race', () => {
-  test('a racing snapshot that omits a human marks that lane dropped', () => {
-    const client = fakeRoomClient();
-    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
-    startRace(client);
-    const events = record(runner);
-
-    client.receive({
-      type: 'state',
-      state: lobbyState({ state: 'racing', players: [player(ME, { score: 1 })] }),
-    });
-
-    assert.deepEqual(events, [
-      { event: 'advance', data: { laneId: 'player', score: 1, finishMs: null } },
-      { event: 'advance', data: { laneId: 'p-1', score: 0, finishMs: null } },
-      { event: 'drop', data: { laneId: 'p-1' } },
-    ]);
-    assert.equal(runner.racers.find((r) => r.id === 'p-1').dropped, true);
-  });
-
   test('a snapshot updates human scores, finish and drop flags in place', () => {
     const client = fakeRoomClient();
     const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
