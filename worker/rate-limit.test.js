@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { env } from "cloudflare:test";
-import { allowRequest, _resetFailOpenWarnings } from "./rate-limit.js";
+import { allowRequest, clientIpBucket, _resetFailOpenWarnings } from "./rate-limit.js";
 
 const allowing = { limit: async () => ({ success: true }) };
 const blocking = { limit: async () => ({ success: false }) };
@@ -144,6 +144,47 @@ describe("allowRequest", () => {
     // misbehaving binding silently disable the limit entirely.
     const weird = { limit: async () => ({}) };
     expect(await allowRequest(weird, "device-1")).toBe(false);
+  });
+});
+
+describe("clientIpBucket", () => {
+  const from = (ip) => clientIpBucket(new Request("https://bucket.test/", {
+    headers: ip === undefined ? {} : { "cf-connecting-ip": ip },
+  }));
+
+  it("keys an IPv4 client on its own address", () => {
+    expect(from("203.0.113.9")).toBe("203.0.113.9");
+    expect(from("203.0.113.10")).toBe("203.0.113.10");
+  });
+
+  it("keys a request with no client address on one shared bucket", () => {
+    expect(from(undefined)).toBe("unknown");
+  });
+
+  it("puts every address in one IPv6 /64 in one bucket, however it is written", () => {
+    const buckets = [
+      "2001:db8:1:2::1",
+      "2001:db8:1:2:ffff:ffff:ffff:ffff",
+      "2001:DB8:1:2:0:0:0:9",
+      "2001:0db8:0001:0002::abcd",
+      "2001:db8:1:2::",
+    ].map(from);
+    expect(new Set(buckets)).toEqual(new Set(["2001:db8:1:2::/64"]));
+  });
+
+  it("gives a neighbouring /64 its own bucket", () => {
+    expect(from("2001:db8:1:3::1")).not.toBe(from("2001:db8:1:2::1"));
+  });
+
+  it("expands a compressed run that reaches into the /64", () => {
+    expect(from("2001:db8::1:2:3:4:5")).toBe("2001:db8:0:1::/64");
+    expect(from("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(from("::1")).toBe("0:0:0:0::/64");
+  });
+
+  it("keys an IPv4-mapped address on the address, not on the all-zero /64", () => {
+    expect(from("::ffff:203.0.113.9")).toBe("::ffff:203.0.113.9");
+    expect(from("::ffff:203.0.113.10")).not.toBe(from("::ffff:203.0.113.9"));
   });
 });
 

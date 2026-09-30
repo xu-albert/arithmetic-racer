@@ -72,6 +72,25 @@ export function _resetFailOpenWarnings() {
 }
 
 /**
+ * The bucket a per-IP ceiling counts a request's client against: an IPv4
+ * address as is, an IPv6 address by its /64. One host is routinely handed a
+ * whole /64, so keying on the full address would let it rotate into a fresh
+ * budget on every request.
+ *
+ * @param {Request} request
+ * @returns {string}
+ */
+export function clientIpBucket(request) {
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  if (!ip.includes(":") || ip.includes(".")) return ip;
+  const [head, tail = ""] = ip.split("::");
+  const front = head ? head.split(":") : [];
+  const back = tail ? tail.split(":") : [];
+  const groups = [...front, ...Array(Math.max(0, 8 - front.length - back.length)).fill("0"), ...back];
+  return `${groups.slice(0, 4).map((group) => parseInt(group, 16).toString(16)).join(":")}::/64`;
+}
+
+/**
  * @param {{limit: (arg: {key: string}) => Promise<{success: boolean}>}|undefined} limiter
  *   A rate-limit binding from `env`, or undefined where none is configured.
  * @param {string} key The bucket to count against — a device id or client IP.

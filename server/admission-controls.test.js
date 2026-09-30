@@ -135,17 +135,33 @@ describe("nothing without a pass creates a room or takes a new seat", () => {
     expect(responses[10].headers.get("retry-after")).toBe("60");
   });
 
-  it("caps /parties/* requests from one IP", async () => {
+  it("caps room creation from one IPv6 /64, however its addresses rotate", async () => {
+    const create = (ip) => SELF.fetch("https://admission.test/api/rooms", {
+      method: "POST",
+      headers: { "cf-connecting-ip": ip },
+    });
+    const statuses = [];
+    for (let i = 0; i < 11; i++) statuses.push((await create(`2001:db8:77:1::${(i + 1).toString(16)}`)).status);
+    expect(statuses.slice(0, 10).every((status) => status === 200)).toBe(true);
+    expect(statuses[10]).toBe(429);
+    expect((await create("2001:db8:77:2::1")).status).toBe(200);
+  });
+
+  it("caps /parties/* requests from one IPv6 /64, however its addresses rotate", async () => {
     const statuses = [];
     for (let i = 0; i < 301; i++) {
       const res = await SELF.fetch(partyUrl("lobby-router", `adm-flood-${i}`), {
-        headers: { "cf-connecting-ip": "203.0.113.88" },
+        headers: { "cf-connecting-ip": `2001:db8:88:1::${(i + 1).toString(16)}` },
       });
       statuses.push(res.status);
       if (i === 300) expect(res.headers.get("retry-after")).toBe("60");
     }
     expect(statuses.slice(0, 300).every((status) => status === 403)).toBe(true);
     expect(statuses[300]).toBe(429);
+    const neighbour = await SELF.fetch(partyUrl("lobby-router", "adm-flood-neighbour"), {
+      headers: { "cf-connecting-ip": "2001:db8:88:2::1" },
+    });
+    expect(neighbour.status).toBe(403);
   }, 30_000);
 });
 
