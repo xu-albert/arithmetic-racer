@@ -188,13 +188,14 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // — an unknown seat has no lane and no car on the mounted screen, and
     // rankRacers would tier it above the player's own dnf row on the podium it
     // draws.
-    const rosterOpen = !raceStarted && (roomState === 'lobby' || roomState === 'countdown');
+    const rosterCanAdd = !raceStarted && roomState === 'lobby';
+    const rosterCanPrune = !raceStarted && (roomState === 'lobby' || roomState === 'countdown');
     const changed = [];
     for (const p of players ?? []) {
       const aliased = aliasId(p.id, youAre);
       const existing = racers.find((r) => r.id === aliased);
       if (!existing) {
-        if (rosterOpen) racers.push(toRacer(p, youAre));
+        if (rosterCanAdd) racers.push(toRacer(p, youAre));
         continue;
       }
       const before = { score: existing.score, finishMs: existing.finishMs, dropped: existing.dropped };
@@ -217,7 +218,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // Finished snapshots deliberately keep the local model intact: bots and
     // departed seats are stripped from state.players after finishRace, but
     // their final rows still rank locally.
-    if (rosterOpen) {
+    if (rosterCanPrune) {
       const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
       for (let i = racers.length - 1; i >= 0; i--) {
         if (!present.has(racers[i].id)) racers.splice(i, 1);
