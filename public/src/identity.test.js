@@ -20,6 +20,7 @@ const {
   getStoredHandle,
   setStoredHandle,
   getOrCreateDeviceId,
+  getDeviceId,
   getOrCreateAnonHandle,
 } = await import("./identity.js");
 
@@ -30,6 +31,13 @@ test("deviceId: created once under the 'deviceId' key, then stable", () => {
   assert.match(a, /^[0-9a-f-]{36}$/);
   assert.equal(store.get("deviceId"), a);
   assert.equal(getOrCreateDeviceId(), a);
+});
+
+test("deviceId read-only: never mints, and reads the id the game minted", () => {
+  assert.equal(getDeviceId(localStorage), null);
+  assert.equal(store.has("deviceId"), false, "reading must not create one");
+  const minted = getOrCreateDeviceId();
+  assert.equal(getDeviceId(localStorage), minted);
 });
 
 test("racerId: created once under the 'racerId' key, then stable", () => {

@@ -62,6 +62,11 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
     close() {
       ws.close();
     },
+    // A fresh upgrade on the same client: the open handler above says hello
+    // again, so everything subscribed takes the new snapshot in place.
+    reconnect() {
+      ws.reconnect();
+    },
     get readyState() {
       return ws.readyState;
     },

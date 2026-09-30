@@ -175,7 +175,6 @@ function handleRoomExpired() {
   if (cleanupRace) { cleanupRace(); cleanupRace = null; }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
-  currentRoom = null;
   document.getElementById('invite-modal')?.classList.add('hidden');
   showScreen('room-expired');
   // The switch can happen while the player is staring at the race screen, so
@@ -183,15 +182,9 @@ function handleRoomExpired() {
   screens['room-expired']?.focus();
 }
 
-// The room the live socket belongs to, kept so an in-place sign-in can
-// reconnect it — see the auth-changed listener below.
-let currentRoom = null;
-
 function enterRoom(roomId, { mode, difficulty } = {}) {
   if (!mode) history.replaceState(null, '', `/?room=${roomId}`);
-  if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
-  currentRoom = { roomId, mode, difficulty };
   lobbyHandle = attachLobby({
     roomId,
     screens,
@@ -210,17 +203,17 @@ function enterRoom(roomId, { mode, difficulty } = {}) {
 // onConnect. An email sign-in or sign-out with the room socket already open
 // therefore changes nothing until the next connect — race results would keep
 // landing as anonymous guest rows, which the one-time history claim (run at
-// signup) never revisits. Re-entering the room reconnects with the new
-// session; handleHello's reconnect branch re-stamps the seat's identity, and
-// a race in progress is rebuilt from the snapshot like any other reconnect.
+// signup) never revisits. Reconnecting the room's socket in place picks up the
+// new session: handleHello's reconnect branch re-stamps the seat's identity,
+// and the lobby, a race in progress and the captcha overlay — all still
+// subscribed to the same client — take the snapshot exactly as they do after a
+// network drop, without leaving the screen the player is on.
 // 'oauth-return' is excluded: that page load's socket already connects with
-// the fresh cookie. Leaving and expiry clear currentRoom, so neither
-// reconnects into a room the player is no longer in.
+// the fresh cookie. Expiry clears lobbyHandle, so it reconnects nothing.
 document.addEventListener('auth-changed', (e) => {
   const reason = e.detail?.reason;
   if (reason !== 'signin' && reason !== 'signup' && reason !== 'signout') return;
-  if (!currentRoom) return;
-  enterRoom(currentRoom.roomId, { mode: currentRoom.mode, difficulty: currentRoom.difficulty });
+  lobbyHandle?.client.reconnect();
 });
 
 async function createRoom() {

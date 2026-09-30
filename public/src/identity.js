@@ -42,6 +42,15 @@ export function getOrCreateDeviceId() {
 }
 
 /**
+ * Read-only: the deviceId this browser already has, or null. For pages that
+ * attach it to what they send (bug reports, contact messages) but must never
+ * mint one. Takes the storage so a caller holding a window can pass its own.
+ */
+export function getDeviceId(storage) {
+  return storage.getItem(KEY_DEVICE);
+}
+
+/**
  * The persistent guest display name for solo races — rooms instead use the
  * server-issued racerHandle above. Signed-in players race under their
  * username; this is what a guest's own lane is labelled with.

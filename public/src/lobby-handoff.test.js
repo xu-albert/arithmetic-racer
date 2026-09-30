@@ -42,6 +42,7 @@ function fakeEl() {
     addEventListener: () => {},
     removeEventListener: () => {},
     focus: () => {},
+    select: () => {},
     remove: () => {},
     querySelector: () => null,
     querySelectorAll: () => [],
@@ -92,6 +93,9 @@ class FakePartySocket {
   removeEventListener() {}
   send(raw) { this.sent.push(JSON.parse(raw)); }
   close() {}
+  reconnect() { this.reconnects = (this.reconnects ?? 0) + 1; }
+  /** The upgrade completing. */
+  opened() { for (const fn of this.listeners.open ?? []) fn(); }
   /** Deliver a server frame. */
   push(obj) { for (const fn of this.listeners.message ?? []) fn({ data: JSON.stringify(obj) }); }
 }
@@ -199,4 +203,60 @@ test('private lobby renders all ten seats and hands the complete roster to the r
   assert.equal(handoffs.length, 1);
   assert.deepEqual(handoffs[0].initialState.players, players);
   cleanup.detach();
+});
+
+// Signing in with the room open reconnects the socket in place (main.js's
+// auth-changed listener) so the room hears the new session. It must stay the
+// same lobby: a second attachLobby would stack listeners and forget what this
+// one already did.
+describe('an in-place reconnect', () => {
+  function lobbyAsHost() {
+    sockets.length = 0;
+    const els = installDom();
+    els.set('invite-modal', fakeEl());
+    els.get('invite-modal').classList.add('hidden');
+    const handoffs = [];
+    const lobby = attachLobby({
+      roomId: 'a-b-c',
+      screens: { 'lobby-room': fakeEl(), race: fakeEl(), results: fakeEl() },
+      onRaceStart: (arg) => handoffs.push(arg),
+      deviceId: 'dev-1',
+    });
+    const ws = sockets.at(-1);
+    ws.opened();
+    const players = racingState().players.map((p) => ({ ...p, isCreator: p.id === ME }));
+    return { els, handoffs, lobby, ws, players };
+  }
+
+  test('says hello again on the same client and does not reopen the invite', () => {
+    const { els, lobby, ws, players } = lobbyAsHost();
+    const waiting = racingState({ state: 'lobby', problemSequence: [], players });
+    ws.push({ type: 'state', state: waiting, youAre: ME });
+    const invite = els.get('invite-modal');
+    assert.equal(invite.classList.contains('hidden'), false, 'the host sees the invite once');
+    invite.classList.add('hidden');
+
+    lobby.client.reconnect();
+    ws.opened();
+    ws.push({ type: 'state', state: waiting, youAre: null });
+    ws.push({ type: 'state', state: waiting, youAre: ME });
+
+    assert.equal(ws.reconnects, 1);
+    assert.equal(sockets.length, 1, 'no second client');
+    assert.deepEqual(ws.sent.map((m) => m.type), ['hello', 'hello']);
+    assert.equal(invite.classList.contains('hidden'), true, 'the invite stays closed');
+  });
+
+  test('a race in progress is not handed off a second time', () => {
+    const { handoffs, lobby, ws, players } = lobbyAsHost();
+    ws.push({ type: 'state', state: racingState({ players }), youAre: ME });
+    assert.equal(handoffs.length, 1);
+
+    lobby.client.reconnect();
+    ws.opened();
+    ws.push({ type: 'state', state: racingState({ players }), youAre: null });
+    ws.push({ type: 'state', state: racingState({ players }), youAre: ME });
+
+    assert.equal(handoffs.length, 1, 'the mounted runner takes the snapshot');
+  });
 });
