@@ -6,7 +6,8 @@ import { env, SELF, runInDurableObject } from 'cloudflare:test';
 const admissionPasses = new Map();
 
 async function connect(roomId) {
-  const response = await SELF.fetch(`https://ten.test/parties/race-room/${roomId}`, {
+  const admission = encodeURIComponent(admissionPasses.get(roomId));
+  const response = await SELF.fetch(`https://ten.test/parties/race-room/${roomId}?admission=${admission}`, {
     headers: { Upgrade: 'websocket' },
   });
   expect(response.status).toBe(101);
@@ -17,7 +18,7 @@ async function connect(roomId) {
   let cursor = 0;
   return {
     messages,
-    send(message) { socket.send(JSON.stringify({ admissionPass: admissionPasses.get(roomId), ...message })); },
+    send(message) { socket.send(JSON.stringify(message)); },
     close() { socket.close(); },
     async wait(predicate) {
       const deadline = Date.now() + 5000;
