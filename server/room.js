@@ -1173,12 +1173,14 @@ export class RaceRoom extends Server {
   }
 
   /**
-   * The one place a seat is marked dropped, because there is one rule about
-   * when it may be: never once it carries a finishMs. A racer who crossed the
-   * line owns that result whatever they do next, and with a race deadline in
-   * play "next" is routinely quitting or closing the tab while the stragglers
-   * are still answering — `dropped` would rewrite the completed race into an
-   * unfinished row (buildRaceResultPayload). Returns true if it newly dropped.
+   * Marks a seat dropped under the one rule about when it may be: never once
+   * it carries a finishMs. A racer who crossed the line owns that result
+   * whatever they do next, and with a race deadline in play "next" is
+   * routinely quitting or closing the tab while the stragglers are still
+   * answering — `dropped` would rewrite the completed race into an unfinished
+   * row (buildRaceResultPayload). The only other writer is
+   * PublicRaceRoom.removePlayer's mid-race branch, which returns early for a
+   * finisher before it reaches the flag. Returns true if it newly dropped.
    */
   dropRacer(player) {
     if (player.dropped || player.finishMs != null) return false;
