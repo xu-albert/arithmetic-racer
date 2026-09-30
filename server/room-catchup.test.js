@@ -463,11 +463,12 @@ describe("catch-up in a Quick Match", () => {
       await room.removePlayer(room.playerFor(alice).id);
       expect(room.state.state).toBe("racing");
 
-      // Her reconnect is refused a seat, and the batch still follows hello.
+      // Her reconnect is refused a seat — with no seat left to reclaim it is
+      // a new join into a room past its lobby — and the batch still follows hello.
       const alice2 = makeConn("alice-2");
       conns.push(alice2);
       await room.handleHello(alice2, { type: "hello", playerId: aliceRacerId, handle: "Alice" });
-      expect(alice2.lastOf("error")).toMatchObject({ code: "BAD_STATE" });
+      expect(alice2.lastOf("error")).toMatchObject({ code: "MATCH_OVER" });
       await room.handleCatchUp(alice2, {
         type: "catch-up", batchId: 1, raceStartedAt, entries: [{ index: 0, value: "1" }],
       });
