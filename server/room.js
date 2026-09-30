@@ -13,6 +13,7 @@ import {
   needsCaptchaTrigger, newCaptchaSeed, captchaProblems, captchaWireProblems, captchaDeadline,
 } from './captcha.js';
 import { createSocketLimiter } from './socket-limit.js';
+import { verifyAdmissionPass } from './admission-pass.js';
 
 // Mirrors public/src/runner.js values. The default race length is not here —
 // it is `raceLength` in freshState() below, which the leaderboards filter on.
@@ -401,7 +402,14 @@ export class RaceRoom extends Server {
     // entry. Client-supplied values are stripped/overwritten there, so this
     // is trustworthy. Null for anon users.
     const userId = ctx?.request?.headers?.get('x-arithmetic-user-id') ?? null;
-    connection.setState({ ...(connection.state ?? {}), userId });
+    connection.setState({
+      ...(connection.state ?? {}),
+      userId,
+      // Direct handler tests do not model a Worker request. Real PartyServer
+      // sockets always carry a URL and therefore always take the admission
+      // check in handleHello.
+      admissionRequired: typeof ctx?.request?.url === 'string',
+    });
 
     // Don't add player yet — wait for `hello`.
     connection.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre: null }));
@@ -619,6 +627,16 @@ export class RaceRoom extends Server {
   // ---------- handlers ----------
 
   async handleHello(connection, msg) {
+    if (connection.state?.admissionRequired) {
+      const mode = this.expiresWhenIdle() ? 'private' : 'public';
+      const admitted = await verifyAdmissionPass(this.env, msg.admissionPass, {
+        roomId: this.name,
+        mode,
+      });
+      if (!admitted) {
+        return this.sendError(connection, 'ADMISSION_REQUIRED', 'A valid room invitation is required');
+      }
+    }
     // msg.playerId is the client's racerId — a long-lived secret that lives in
     // the sender's localStorage and nowhere else on the wire. It is the ONLY
     // thing that reattaches a socket to an existing seat, so the reconnect

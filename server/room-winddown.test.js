@@ -400,7 +400,7 @@ describe("POST /api/rooms claims the name it hands out", () => {
       new Request("https://racer.test/api/rooms", { method: "POST" }), env, {},
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ roomId });
+    expect(await res.json()).toMatchObject({ roomId, admissionPass: expect.any(String) });
 
     // The creator's very first connection has to reach a lobby, not the
     // expired screen.
