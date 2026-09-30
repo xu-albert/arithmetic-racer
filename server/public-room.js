@@ -329,14 +329,17 @@ export class PublicRaceRoom extends RaceRoom {
     const player = this.state.players[idx];
     delete this.state.disconnectDeadlines[playerId];
 
-    // A seat that already crossed the line owns a result, and splicing it out
-    // here would delete that result before finishRace could write it — with a
-    // race deadline in play the race end is routinely minutes away, held open
-    // by exactly the racer this room refuses to wait on forever. Hold the seat
-    // as the base room holds a dropped one; finishRace prunes it once its row
-    // is built, so the empty-room gates below still see a real headcount.
-    if (this.state.state === 'racing' && player.finishMs != null) {
+    // Mid-race, every seat owns a row in the race in flight: the finish of a
+    // racer who already crossed the line, or a DNF for one still answering.
+    // Splicing it out here would delete that row before finishRace could write
+    // it — with a race deadline in play the race end is routinely minutes
+    // away. Hold the seat as the base room does; dropRacer refuses a finisher
+    // and tells everyone else a straggler's lane is out. finishRace prunes the
+    // seat once its row is built, so the empty-room gates below still see a
+    // real headcount.
+    if (this.state.state === 'racing') {
       player.departed = true;
+      this.dropRacer(player);
       if (this.isRaceComplete()) this.finishRace();
       return true;
     }
@@ -345,11 +348,6 @@ export class PublicRaceRoom extends RaceRoom {
     this.cancelAbandonedCountdown();
     this.broadcast(JSON.stringify({ type: 'player-left', playerId }));
 
-    // Mid-race: treat removed unfinished player as drop for ranking.
-    if (this.state.state === 'racing') {
-      if (this.isRaceComplete() || this.state.players.length === 0) this.finishRace();
-    }
-
     // If we emptied the lobby, release the router slot.
     if (this.state.players.length === 0 && this.state.state === 'lobby') {
       this.state.autoStartDeadline = null;
@@ -357,9 +355,8 @@ export class PublicRaceRoom extends RaceRoom {
       if (this.state.difficulty) await this.releaseLobby();
     }
 
-    // Schedule idle cleanup whenever the room is empty of humans, regardless
-    // of state — finishRace strips bots, so .length is a real headcount.
-    // The base RaceRoom only sets this in lobby; we extend to finished/racing.
+    // Schedule idle cleanup whenever the room is empty of humans — finishRace
+    // strips bots, so .length is a real headcount.
     if (this.state.players.length === 0) {
       this.state.idleCleanupAt = Date.now() + IDLE_CLEANUP_MS;
     }

@@ -183,19 +183,19 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // finalizes them, so their progress lives only here.
   function reconcilePlayers(players, roomState) {
     // Additions to the roster stop when the room stops gathering players for a
-    // race this runner has not begun. Past that — a countdown that has handed
-    // off, a race in flight, a `finished` snapshot carrying somebody who took
-    // the invite link after the race ended — an unknown seat has no lane and no
-    // car on the mounted screen, and rankRacers would tier it above the
-    // player's own dnf row on the podium it draws. Only that direction: nothing
-    // here removes a seat the room spliced out of its own player list.
-    const rosterOpen = !raceStarted && roomState === 'lobby';
+    // race this runner has not begun. Past that — a race in flight, a `finished`
+    // snapshot carrying somebody who took the invite link after the race ended
+    // — an unknown seat has no lane and no car on the mounted screen, and
+    // rankRacers would tier it above the player's own dnf row on the podium it
+    // draws.
+    const rosterCanAdd = !raceStarted && roomState === 'lobby';
+    const rosterCanPrune = !raceStarted && (roomState === 'lobby' || roomState === 'countdown');
     const changed = [];
     for (const p of players ?? []) {
       const aliased = aliasId(p.id, youAre);
       const existing = racers.find((r) => r.id === aliased);
       if (!existing) {
-        if (rosterOpen) racers.push(toRacer(p, youAre));
+        if (rosterCanAdd) racers.push(toRacer(p, youAre));
         continue;
       }
       const before = { score: existing.score, finishMs: existing.finishMs, dropped: existing.dropped };
@@ -213,6 +213,16 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         || existing.finishMs !== before.finishMs
         || existing.dropped !== before.dropped
       ) changed.push(existing);
+    }
+
+    // Finished snapshots deliberately keep the local model intact: bots and
+    // departed seats are stripped from state.players after finishRace, but
+    // their final rows still rank locally.
+    if (rosterCanPrune) {
+      const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
+      for (let i = racers.length - 1; i >= 0; i--) {
+        if (!present.has(racers[i].id)) racers.splice(i, 1);
+      }
     }
     return changed;
   }
@@ -385,6 +395,19 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         break;
       }
       case 'drop': {
+        const r = findRacer(msg.playerId);
+        if (!r) break;
+        r.dropped = true;
+        emit('drop', { laneId: r.id });
+        break;
+      }
+      case 'player-left': {
+        // Only a countdown departure has anything to paint: the room splices
+        // that seat and the snapshot after it prunes the racer, but the race
+        // screen has already drawn its lane. A departure mid-race arrives as
+        // `drop`, and one after the race is somebody leaving the results
+        // screen, which must not relabel the row they finished the race with.
+        if (raceStarted) break;
         const r = findRacer(msg.playerId);
         if (!r) break;
         r.dropped = true;

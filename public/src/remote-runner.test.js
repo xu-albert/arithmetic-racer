@@ -114,6 +114,26 @@ describe('racer bootstrap from the initial state', () => {
     assert.equal(bot.tier, 'fast');
     assert.equal(bot.handle, 'Hp-3');
   });
+
+  test('a countdown snapshot does not add a new seat to the mounted roster', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 1 }),
+      youAre: ME,
+    });
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'countdown',
+        countdownN: 0,
+        players: [player('p-1'), player(ME), player('p-3')],
+      }),
+    });
+
+    assert.equal(runner.racers.some((r) => r.id === 'p-3'), false);
+  });
 });
 
 describe('race-start and countdown', () => {
@@ -802,6 +822,41 @@ describe('bot timelines (Quick Match)', () => {
 });
 
 describe('drop, finish and rankings', () => {
+  test('a countdown player-left greys the lane the race screen already drew', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 2 }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({ type: 'player-left', playerId: 'p-1' });
+
+    assert.deepEqual(events, [{ event: 'drop', data: { laneId: 'p-1' } }]);
+  });
+
+  test('a player-left after the race ended leaves the final rows alone', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    startRace(client);
+    client.receive({
+      type: 'finish',
+      rankings: [
+        { id: ME, score: 3, finishMs: 3000, dropped: false, dnf: false },
+        { id: 'p-1', score: 1, finishMs: null, dropped: false, dnf: true },
+      ],
+    });
+    const events = record(runner);
+
+    client.receive({ type: 'player-left', playerId: 'p-1' });
+
+    assert.deepEqual(events, []);
+    const p1 = runner.racers.find((r) => r.id === 'p-1');
+    assert.equal(p1.dropped, false);
+    assert.equal(p1.dnf, true);
+  });
+
   test('a drop marks the racer and is relayed', () => {
     const client = fakeRoomClient();
     const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
@@ -991,4 +1046,3 @@ describe('quit and stop', () => {
     assert.deepEqual(events, []);
   });
 });
-

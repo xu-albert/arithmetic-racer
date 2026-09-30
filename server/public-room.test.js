@@ -648,6 +648,37 @@ describe("PublicRaceRoom — race_results persistence", () => {
     await env.DB.exec("DELETE FROM race_results");
   });
 
+  it("keeps a grace-expired racer as a dropped DNF and persists their row", async () => {
+    const roomName = "test-disconnect-dnf-" + crypto.randomUUID();
+    await withRoom(roomName, async (room) => {
+      const broadcasts = [];
+      room.broadcast = (s) => broadcasts.push(JSON.parse(s));
+      room.state.raceLength = 10;
+      room.state.raceStartedAt = Date.now() - 10000;
+      room.state.state = "racing";
+      room.state.botTimelines = [];
+      room.state.players = [
+        { id: "h-1", connId: "sock-1", handle: "Alice", deviceId: "dev-1", userId: null, isBot: false, score: 4, finishMs: null, dropped: false, dnf: false },
+        { id: "h-2", handle: "Bob", deviceId: "dev-2", userId: null, isBot: false, score: 10, finishMs: 5000, dropped: false, dnf: false },
+      ];
+      room.state.disconnectDeadlines["h-1"] = Date.now() - 1;
+
+      let settled;
+      const persistResults = room.persistResults.bind(room);
+      room.persistResults = () => (settled = persistResults());
+      await room.onAlarm();
+      await settled;
+
+      expect(room.state.state).toBe("finished");
+      expect(broadcasts.some((m) => m.type === "drop" && m.playerId === "h-1")).toBe(true);
+      const finish = broadcasts.find((m) => m.type === "finish");
+      expect(finish.rankings.find((r) => r.id === "h-1")).toMatchObject({ dropped: true, score: 4 });
+      const rows = await env.DB.prepare("SELECT * FROM race_results WHERE room_id = ?").bind(room.name).all();
+      const dropped = rows.results.find((r) => r.device_id === "dev-1");
+      expect(dropped).toMatchObject({ finished: 0, finish_time_ms: null });
+    });
+  });
+
   it("inserts one row per non-bot finisher with room_id set", async () => {
     const roomName = "test-results-" + crypto.randomUUID();
     await withRoom(roomName, async (room) => {
