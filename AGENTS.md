@@ -98,9 +98,10 @@ Traps this arrangement sets:
   `public/src/runner.js`). That one is armed by the human's own finish, so the
   racers it cuts off are always bots; in a room they are people, and
   `raceGraceMs()` is scaled to the race length instead. Keep them separate.
-  Arming is driven by `handleAnswer`, so bots — which never answer — neither
-  arm nor are held by the window, matching `isRaceComplete()`'s human-only view
-  in public rooms. Coverage: `server/room-race-deadline.test.js`.
+  Arming is driven by a graded answer (`handleAnswer`, or `gradeCatchUp` for a
+  reconnect batch), so bots — which never answer — neither arm nor are held by
+  the window, matching `isRaceComplete()`'s human-only view in public rooms.
+  Coverage: `server/room-race-deadline.test.js`.
 
 For a private room the 5-minute cleanup no longer deletes DO storage — it
 re-mints state and persists it, carrying the idle clock forward — so an expired
@@ -186,8 +187,11 @@ them silently leaves the screen painted from the last event it saw. Worse, the
 snapshot is allowed to *contradict* this client — an answer whose frame died
 with the socket leaves an optimistic finish the room never recorded — so
 `reconcilePlayers()` takes the server's score and finish verbatim, including a
-`null` that revokes a finish, and `announce()` emits what moved. Bots are the
-one exception: the room parks them at 0, so their progress is client-owned.
+`null` that revokes a finish, and `announce()` emits what moved. There are two
+exceptions. Bots: the room parks them at 0, so their progress is client-owned.
+And this client's own row while its reconnect `catch-up` batch drains in a
+`racing` room: that snapshot is from before the batch was graded, so the
+`catch-up-ack` supplies the room's position instead.
 
 The terminal transition needs the same treatment. `finish` is sent once, and a
 race now ends on a deadline rather than only when everyone finishes, so a socket
@@ -312,7 +316,8 @@ recent-finishes through the existing `suspect = 0` predicates. Never a ban.
 **A challenge belongs to the racer who earned it, not to the race.** That is the
 whole shape of the lifecycle, and every part of it follows:
 
-- It is issued in `handleAnswer` the moment that racer's `finishMs` is stamped,
+- It is issued the moment that racer's `finishMs` is stamped — in
+  `handleAnswer` for a live finish, in `gradeCatchUp` for a reconnect batch —
   so the budget runs from *their* finish. Issuing at race end would aim the
   clock at whoever waited longest for the stragglers — which is always the fast
   racer the feature exists to check.
