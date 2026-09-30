@@ -198,21 +198,46 @@ describe('a race screen opened from a mid-race snapshot', () => {
 });
 
 describe('a disconnected racer on the mounted results screen', () => {
-  test('is not left waiting when player-left precedes the finish', () => {
+  test('is not left waiting when the drop precedes the finish', () => {
     mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 16_000 });
     const screen = openRaceScreen(racingState({
       players: [player('p-1', { score: 1 }), player(ME, { score: SEQ.length })],
     }));
 
-    screen.receive({ type: 'player-left', playerId: 'p-1' });
+    screen.receive({ type: 'drop', playerId: 'p-1' });
     screen.receive({
       type: 'finish',
-      rankings: [{ id: ME, score: SEQ.length, finishMs: 6_000, dropped: false, dnf: false }],
+      rankings: [
+        { id: ME, score: SEQ.length, finishMs: 6_000, dropped: false, dnf: false },
+        { id: 'p-1', score: 1, finishMs: null, dropped: true, dnf: false },
+      ],
     });
     mock.timers.tick(800);
 
+    assert.equal(screen.laneFor('p-1').classList.contains('dropped'), true);
     assert.match(screen.podium.children[1].textContent, /left mid-race at 1\/3/);
     assert.doesNotMatch(screen.podium.children[1].textContent, /waiting for results/);
+    screen.cleanup();
+  });
+
+  test("keeps a did-not-finish row when that racer leaves after the race ended", () => {
+    mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 16_000 });
+    const screen = openRaceScreen(racingState({
+      players: [player('p-1', { score: 1 }), player(ME, { score: SEQ.length })],
+    }));
+
+    screen.receive({
+      type: 'finish',
+      rankings: [
+        { id: ME, score: SEQ.length, finishMs: 6_000, dropped: false, dnf: false },
+        { id: 'p-1', score: 1, finishMs: null, dropped: false, dnf: true },
+      ],
+    });
+    mock.timers.tick(800);
+    screen.receive({ type: 'player-left', playerId: 'p-1' });
+
+    assert.match(screen.podium.children[1].textContent, /1\/3 — didn't finish/);
+    assert.equal(screen.laneFor('p-1').classList.contains('dropped'), false);
     screen.cleanup();
   });
 });

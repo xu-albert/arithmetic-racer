@@ -670,7 +670,9 @@ describe("PublicRaceRoom — race_results persistence", () => {
       await settled;
 
       expect(room.state.state).toBe("finished");
-      expect(broadcasts.some((m) => m.type === "player-left" && m.playerId === "h-1")).toBe(true);
+      expect(broadcasts.some((m) => m.type === "drop" && m.playerId === "h-1")).toBe(true);
+      const finish = broadcasts.find((m) => m.type === "finish");
+      expect(finish.rankings.find((r) => r.id === "h-1")).toMatchObject({ dropped: true, score: 4 });
       const rows = await env.DB.prepare("SELECT * FROM race_results WHERE room_id = ?").bind(room.name).all();
       const dropped = rows.results.find((r) => r.device_id === "dev-1");
       expect(dropped).toMatchObject({ finished: 0, finish_time_ms: null });
