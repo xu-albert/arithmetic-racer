@@ -20,8 +20,38 @@ import { handleContact } from "../worker/routes/contact.js";
 import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 import { handleLeaderboard } from "../worker/routes/leaderboard.js";
 import { handleCreateRoom } from "../worker/routes/rooms.js";
+import { verifyAdmissionPass } from "./admission-pass.js";
+import { expiredMessage } from "./room.js";
+import { INVITE_EXPIRED_REASON } from "../public/src/room-expiry.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
+
+// The pass mode each routable room class admits, keyed by the class name
+// partyserver resolves a /parties/<party>/<name> path to. Anything else it can
+// route to admits nobody.
+const ADMISSION_MODES = { RaceRoom: "private", PublicRaceRoom: "public" };
+
+// Checked against the name and class partyserver is about to route to, before
+// the room Durable Object is touched at all: a request that reached it would
+// already have run onStart and minted live state under that name.
+function admitted(request, lobby, env) {
+  const mode = ADMISSION_MODES[lobby.className];
+  if (!mode) return false;
+  const pass = new URL(request.url).searchParams.get("admission");
+  return verifyAdmissionPass(env, pass, { roomId: lobby.name, mode });
+}
+
+// A refused upgrade is still answered as a socket. The browser hides an
+// upgrade's HTTP status, so a bare 403 reads to the client as a dropped
+// connection that PartySocket retries forever; this tells it why, and the
+// client's expiry latch stops reconnecting.
+function refuseSocket(roomId) {
+  const { 0: client, 1: server } = new WebSocketPair();
+  server.accept();
+  server.send(expiredMessage(roomId, INVITE_EXPIRED_REASON));
+  server.close(1000, "admission required");
+  return new Response(null, { status: 101, webSocket: client });
+}
 
 export { RaceRoom } from "./room.js";
 export { LobbyRouter } from "./lobby-router.js";
@@ -125,7 +155,16 @@ export default {
         redirect: request.redirect,
       });
     }
-    const partyResponse = await routePartykitRequest(upgradeRequest, env);
+    const partyResponse = await routePartykitRequest(upgradeRequest, env, {
+      onBeforeConnect: async (req, lobby) => (
+        await admitted(req, lobby, env) ? undefined : refuseSocket(lobby.name)
+      ),
+      onBeforeRequest: async (req, lobby) => (
+        await admitted(req, lobby, env)
+          ? undefined
+          : Response.json({ error: "admission_required" }, { status: 403 })
+      ),
+    });
     if (partyResponse) return partyResponse;
 
     // Static assets (HTML, CSS, JS, etc.)

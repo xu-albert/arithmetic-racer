@@ -21,6 +21,7 @@ import { soloResultPayload } from './src/solo-result.js';
 import { getOrCreateDeviceId } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
+import { INVITE_EXPIRED_REASON } from './src/room-expiry.js';
 
 // ---- Identity helpers --------------------------------------------------
 
@@ -179,14 +180,19 @@ function handleRoomRaceStart({ roomClient, initialState, youAre }) {
   cleanupRace = attachRaceUI({ runner, raceLength: initialState.raceLength, screens });
 }
 
-// Terminal state for a private room: the server wound it down after 30 minutes
-// of inactivity. Tear everything room-shaped down so nothing keeps rendering
-// against a room that no longer exists, then offer the two ways out.
-function handleRoomExpired() {
+// Terminal state for a room link: the server wound the room down after 30
+// minutes of inactivity, or the link's admission pass is no longer good. Tear
+// everything room-shaped down so nothing keeps rendering against a room this
+// page cannot reach, then offer the two ways out.
+function handleRoomExpired(msg) {
   if (cleanupRace) { cleanupRace(); cleanupRace = null; }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
   document.getElementById('invite-modal')?.classList.add('hidden');
+  const reason = msg?.reason === INVITE_EXPIRED_REASON ? INVITE_EXPIRED_REASON : 'idle';
+  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-reason]') ?? []) {
+    el.classList.toggle('hidden', el.dataset.expiredReason !== reason);
+  }
   showScreen('room-expired');
   // The switch can happen while the player is staring at the race screen, so
   // move focus rather than leaving a screen reader on a lane that just vanished.
@@ -194,11 +200,6 @@ function handleRoomExpired() {
 }
 
 function enterRoom(roomId, { mode, difficulty, admissionPass } = {}) {
-  if (!mode) {
-    const url = new URL('/?room=' + encodeURIComponent(roomId), location.origin);
-    if (admissionPass) url.searchParams.set('admission', admissionPass);
-    history.replaceState(null, '', url.href);
-  }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   lobbyHandle = attachLobby({
     roomId,

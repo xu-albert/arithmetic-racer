@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import {
   EXPIRED_ROOM_STATE,
   ROOM_EXPIRED_TYPE,
+  INVITE_EXPIRED_REASON,
   isRoomExpiredMessage,
   createExpiryLatch,
 } from "./room-expiry.js";
@@ -96,4 +97,15 @@ test("works without an onExpired callback", () => {
   const handle = createExpiryLatch({ close: () => calls.push("close") });
   assert.equal(handle({ type: ROOM_EXPIRED_TYPE }), true);
   assert.deepEqual(calls, ["close"]);
+});
+
+test("hands the screen the message, so a refused invite reads as one", () => {
+  // The Worker refuses a socket whose pass is missing or stale with the same
+  // message type, and the same close-then-screen order applies; only the copy
+  // differs, and it is keyed on `reason`.
+  const seen = [];
+  const handle = createExpiryLatch({ close: () => {}, onExpired: (msg) => seen.push(msg) });
+  const refusal = { type: ROOM_EXPIRED_TYPE, reason: INVITE_EXPIRED_REASON, roomId: "a-b-c" };
+  assert.equal(handle(refusal), true);
+  assert.deepEqual(seen, [refusal]);
 });

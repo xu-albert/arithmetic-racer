@@ -30,7 +30,8 @@ function tick(ms = 5) {
 
 /** A browser-equivalent client: real socket, real JSON wire messages. */
 async function connect(roomId, label) {
-  const res = await SELF.fetch(`https://e2e.test/parties/race-room/${roomId}`, {
+  const admission = encodeURIComponent(admissionPasses.get(roomId));
+  const res = await SELF.fetch(`https://e2e.test/parties/race-room/${roomId}?admission=${admission}`, {
     headers: { Upgrade: "websocket" },
   });
   expect(res.status).toBe(101);
@@ -47,7 +48,7 @@ async function connect(roomId, label) {
     label,
     inbox,
     playerId: null,
-    send(msg) { ws.send(JSON.stringify({ admissionPass: admissionPasses.get(roomId), ...msg })); },
+    send(msg) { ws.send(JSON.stringify(msg)); },
     /** Say hello and remember the broadcast id the room hands back. */
     async hello(racerId, handle, deviceId) {
       this.send({ type: "hello", playerId: racerId, handle, deviceId });

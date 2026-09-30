@@ -32,7 +32,8 @@ async function seatedUserId(pathname, { header, sessionUserId }) {
       : `gate-${crypto.randomUUID()}`;
     const admissionPass = await issueAdmissionPass(env, name,
       pathname.includes("public-race-room") ? "public" : "private");
-    const res = await SELF.fetch(`https://gate.test${pathname.replace("<name>", name)}`, {
+    const admission = `?admission=${encodeURIComponent(admissionPass)}`;
+    const res = await SELF.fetch(`https://gate.test${pathname.replace("<name>", name)}${admission}`, {
       headers: {
         Upgrade: "websocket",
         ...(header ? { "x-arithmetic-user-id": header } : {}),
@@ -48,7 +49,6 @@ async function seatedUserId(pathname, { header, sessionUserId }) {
       playerId: crypto.randomUUID(),
       handle: "GateTest",
       deviceId: "gate-device",
-      admissionPass,
     }));
 
     const binding = pathname.includes("public-race-room") ? env.PublicRaceRoom : env.RaceRoom;

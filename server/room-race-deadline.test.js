@@ -284,6 +284,8 @@ describe("private room — the ceiling on a race nobody finishes", () => {
       expect(room.state.graceDeadline).toBeNull();
       const ceiling = room.state.raceStartedAt + RACE_MAX_MS_PER_PROBLEM * room.state.raceLength;
       expect(room.raceDeadlineAt()).toBe(ceiling);
+      // The admission-pass refresh runs on an earlier timer of its own.
+      room.state.admissionRefreshAt = null;
       await room.ctx.storage.deleteAlarm();
       await room.scheduleNextAlarm();
       expect(await room.ctx.storage.getAlarm()).toBe(ceiling);
@@ -479,9 +481,10 @@ describe("race deadlines do not outlive their race", () => {
       expect(room.state.state).toBe("finished");
 
       // No race timer survives the race: only the idle winddown is left to
-      // wake this room for.
+      // wake this room for, beside the admission-pass refresh's own cadence.
       expect(room.state.graceDeadline).toBeNull();
       expect(room.raceDeadlineAt()).toBeNull();
+      room.state.admissionRefreshAt = null;
       await room.ctx.storage.deleteAlarm();
       await room.scheduleNextAlarm();
       expect(await room.ctx.storage.getAlarm()).toBe(room.idleExpiryAt());

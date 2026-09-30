@@ -11,6 +11,13 @@ export const EXPIRED_ROOM_STATE = 'expired';
 export const ROOM_EXPIRED_TYPE = 'room-expired';
 
 /**
+ * `reason` on a ROOM_EXPIRED_TYPE message sent by the Worker (server/server.js)
+ * to a socket whose admission pass is missing or stale: the room may still be
+ * running, but this link no longer opens it.
+ */
+export const INVITE_EXPIRED_REASON = 'invite';
+
+/**
  * True for either shape that means "this room is gone": the explicit
  * `room-expired` push, or a state snapshot carrying the tombstone. Both are
  * accepted because the state snapshot is what an older client — or any future
@@ -33,7 +40,8 @@ export function isRoomExpiredMessage(msg) {
  *
  * @param {object} opts
  * @param {function} opts.close     - close the room socket
- * @param {function} [opts.onExpired] - show the expired screen
+ * @param {function} [opts.onExpired] - show the expired screen; receives the
+ *   message, whose `reason` tells an expired invite from an idle room
  * @returns {(msg: object) => boolean} true when the message was the winddown
  */
 export function createExpiryLatch({ close, onExpired }) {
@@ -43,7 +51,7 @@ export function createExpiryLatch({ close, onExpired }) {
     if (handled) return true;
     handled = true;
     close();
-    onExpired?.();
+    onExpired?.(msg);
     return true;
   };
 }
