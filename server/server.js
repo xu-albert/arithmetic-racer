@@ -23,7 +23,7 @@ import { handleCreateRoom } from "../worker/routes/rooms.js";
 import { checkAdmissionPass, ADMISSION_HEADER } from "./admission-pass.js";
 import { refuseAdmission } from "./room.js";
 import { INVITE_INVALID_REASON } from "../public/src/room-expiry.js";
-import { allowRequest } from "../worker/rate-limit.js";
+import { allowRequest, clientIpBucket } from "../worker/rate-limit.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
 // Must match PARTIES_IP_LIMIT's period in wrangler.jsonc.
@@ -136,8 +136,7 @@ export default {
     // A coarse per-IP ceiling on everything that can reach a Durable Object,
     // ahead of the session lookup and the pass check below.
     if (normalizedPathname.startsWith("/parties/")) {
-      const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-      if (!(await allowRequest(env.PARTIES_IP_LIMIT, ip, "PARTIES_IP_LIMIT"))) {
+      if (!(await allowRequest(env.PARTIES_IP_LIMIT, clientIpBucket(request), "PARTIES_IP_LIMIT"))) {
         return Response.json({ error: "rate_limited" }, {
           status: 429,
           headers: { "retry-after": String(PARTIES_RATE_LIMIT_WINDOW_S) },

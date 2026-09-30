@@ -102,6 +102,7 @@
       "namespace_id": "1004",
       "simple": { "limit": 3, "period": 60 }
     },
+    // A classroom behind one address creating many rooms at once is throttled; raising this raises how many room names one address can hold.
     {
       "name": "ROOM_CREATE_IP_LIMIT",
       "namespace_id": "1006",
@@ -184,6 +185,7 @@
           "simple": { "limit": 900, "period": 60 }
         },
         { "name": "MATCHMAKING_LIMIT", "namespace_id": "2004", "simple": { "limit": 3, "period": 60 } },
+        // A classroom behind one address creating many rooms at once is throttled; raising this raises how many room names one address can hold.
         { "name": "ROOM_CREATE_IP_LIMIT", "namespace_id": "2006", "simple": { "limit": 10, "period": 60 } },
         { "name": "PARTIES_IP_LIMIT", "namespace_id": "2007", "simple": { "limit": 300, "period": 60 } },
         { "name": "CONTACT_IP_LIMIT", "namespace_id": "2005", "simple": { "limit": 1, "period": 60 } }
