@@ -89,11 +89,13 @@ Traps this arrangement sets:
   that mutates race state has to `persist()` for itself. Coverage:
   `server/room-answer-persistence.test.js`.
 - **`PublicRaceRoom.expiresWhenIdle()` returns false**, and everything winddown
-  reads that hook. Quickmatch rooms are single-shot and unlinkable — expiring
-  one would strand a player on a screen whose only exit is a room they cannot
-  reach. Gate any new lifecycle behavior on the same hook. It is also why the
-  race deadline above is not gated on it: quickmatch has no winddown to fall
-  back on, so it is the only thing bounding a public race.
+  reads that hook. Quickmatch rooms are single-shot and unlinkable, so
+  auto-start and idle cleanup already reclaim them. A refused socket still
+  lands a Quick Match player on the expired screen, which is why
+  `expiredScreen()` picks its copy and exit by mode. Gate any new lifecycle
+  behavior on the same hook. It is also why the race deadline above is not
+  gated on it: quickmatch has no winddown to fall back on, so it is the only
+  thing bounding a public race.
 - **The race grace is not the solo game's `GRACE_PERIOD_MS`** (5s, in
   `public/src/runner.js`). That one is armed by the human's own finish, so the
   racers it cuts off are always bots; in a room they are people, and
