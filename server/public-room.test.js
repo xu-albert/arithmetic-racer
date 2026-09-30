@@ -18,7 +18,8 @@ function makeConn() {
   return {
     id: "sock-" + crypto.randomUUID(),
     sent: [],
-    state: undefined,
+    // A socket the Worker let through carrying a pass (see onConnect).
+    state: { hasAdmissionPass: true },
     send(s) { this.sent.push(JSON.parse(s)); },
     setState(s) { this.state = s; },
   };
@@ -697,7 +698,7 @@ describe("PublicRaceRoom.handleHello — identity stamping", () => {
       const conn = makeConn();
       // connection.state.userId is set server-side from the cookie-derived
       // x-arithmetic-user-id header in onConnect — the trusted source.
-      conn.state = { userId: "user-from-cookie" };
+      conn.state = { userId: "user-from-cookie", hasAdmissionPass: true };
       await room.handleHello(conn, {
         type: "hello", playerId, handle: "A", difficulty: "medium",
         deviceId: "dev-stamp", userId: "user-spoofed",
@@ -862,7 +863,7 @@ describe("PublicRaceRoom.handleHello — seat ownership", () => {
   it("a stranger replaying a broadcast id cannot take over the seat", async () => {
     await withRoom("test-hijack-" + crypto.randomUUID(), async (room) => {
       const victimConn = makeConn();
-      victimConn.state = { userId: "victim-user" };
+      victimConn.state = { userId: "victim-user", hasAdmissionPass: true };
       await room.handleHello(victimConn, {
         type: "hello", playerId: crypto.randomUUID(), handle: "Victim",
         deviceId: "victim-device", difficulty: "medium",
@@ -870,7 +871,7 @@ describe("PublicRaceRoom.handleHello — seat ownership", () => {
       const victim = room.state.players[0];
 
       const attacker = makeConn();
-      attacker.state = { userId: "attacker-user" };
+      attacker.state = { userId: "attacker-user", hasAdmissionPass: true };
       await room.handleHello(attacker, {
         type: "hello", playerId: victim.id, handle: "Attacker",
         deviceId: "attacker-device", difficulty: "medium",

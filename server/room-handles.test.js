@@ -122,7 +122,8 @@ function makeConn() {
   return {
     id: "sock-" + crypto.randomUUID(),
     sent: [],
-    state: undefined,
+    // A socket the Worker let through carrying a pass (see onConnect).
+    state: { hasAdmissionPass: true },
     send(s) { this.sent.push(JSON.parse(s)); },
     setState(s) { this.state = s; },
   };

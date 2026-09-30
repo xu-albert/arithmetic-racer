@@ -48,23 +48,24 @@ async function open(party, roomId, admission) {
   };
 }
 
-async function expectRefused(client, roomId, reason) {
+/** Refused, told why, and closed — by default before the room ever ran. */
+async function expectRefused(client, roomId, reason, { atHello = false } = {}) {
   const refusal = await client.wait((m) => m.type === ROOM_EXPIRED_TYPE);
   expect(refusal).toEqual({ type: ROOM_EXPIRED_TYPE, reason, roomId });
   for (let i = 0; i < 100 && !client.closed; i++) await tick(5);
   expect(client.closed).toBe(true);
-  // Refused before the room ran: it never pushed its own snapshot.
-  expect(client.messages.some((m) => m.type === "state")).toBe(false);
+  expect(client.messages.some((m) => m.type === "state")).toBe(atHello);
+  expect(client.messages.some((m) => m.type === "hello-ack")).toBe(false);
 }
 
 async function storedState(stub) {
   return runInDurableObject(stub, (_room, state) => state.storage.get("state"));
 }
 
-describe("the Worker admits nobody to a room without a pass", () => {
-  it("refuses a pass-less socket, says why, and leaves the name unminted", async () => {
+describe("nothing without a pass creates a room or takes a new seat", () => {
+  it("refuses a pass-less socket to a room that does not exist, and leaves the name unminted", async () => {
     const name = `adm-nopass-${crypto.randomUUID()}`;
-    await expectRefused(await open("race-room", name), name, INVITE_INVALID_REASON);
+    await expectRefused(await open("race-room", name), name, INVITE_EXPIRED_REASON);
     // Nothing was written under the name, so a real creation still gets it.
     expect(await privateRoom(name).reserveRoomName()).toBe(true);
   });
@@ -78,18 +79,47 @@ describe("the Worker admits nobody to a room without a pass", () => {
   it("never creates a public room at a name the matchmaker did not hand out", async () => {
     const name = `m-adm-${crypto.randomUUID()}`;
     expect((await SELF.fetch(partyUrl("public-race-room", name))).status).toBe(403);
-    await expectRefused(await open("public-race-room", name), name, INVITE_INVALID_REASON);
-    // A private pass for the same name is the wrong mode.
+    await expectRefused(await open("public-race-room", name), name, INVITE_EXPIRED_REASON);
+    // A private pass for the same name is the wrong mode: no pass at all.
     const privatePass = await issueAdmissionPass(env, name, "private");
-    await expectRefused(await open("public-race-room", name, privatePass), name, INVITE_INVALID_REASON);
+    await expectRefused(await open("public-race-room", name, privatePass), name, INVITE_EXPIRED_REASON);
     expect(await storedState(publicRoom(name))).toBeUndefined();
   });
 
-  it("refuses a pass issued for another room, and any other routable party", async () => {
+  it("refuses a new entrant with no pass for the room at hello, even while it is live", async () => {
     const name = `adm-other-${crypto.randomUUID()}`;
+    expect(await privateRoom(name).reserveRoomName()).toBe(true);
+    const host = await open("race-room", name, await issueAdmissionPass(env, name, "private"));
+    host.hello("Host");
+    await host.wait((m) => m.type === "hello-ack");
+
     const elsewhere = await issueAdmissionPass(env, `adm-elsewhere-${crypto.randomUUID()}`, "private");
-    await expectRefused(await open("race-room", name, elsewhere), name, INVITE_INVALID_REASON);
-    expect((await SELF.fetch(partyUrl("lobby-router", "medium", elsewhere))).status).toBe(403);
+    for (const admission of [elsewhere, undefined]) {
+      const stranger = await open("race-room", name, admission);
+      await stranger.wait((m) => m.type === "state");
+      stranger.hello("Stranger");
+      await expectRefused(stranger, name, INVITE_INVALID_REASON, { atHello: true });
+    }
+    await runInDurableObject(privateRoom(name), async (room) => {
+      expect(room.state.players.map((p) => p.handle)).toEqual(["Host"]);
+    });
+    host.close();
+  });
+
+  it("does not let a pass-less socket keep a room nobody has joined alive", async () => {
+    const name = `adm-unjoined-${crypto.randomUUID()}`;
+    expect(await privateRoom(name).reserveRoomName()).toBe(true);
+    const before = (await storedState(privateRoom(name))).lastActivityAt;
+    await tick(5);
+    await expectRefused(await open("race-room", name), name, INVITE_INVALID_REASON);
+    const after = await storedState(privateRoom(name));
+    expect(after.unjoined).toBe(true);
+    expect(after.lastActivityAt).toBe(before);
+  });
+
+  it("refuses any other routable party outright", async () => {
+    const pass = await issueAdmissionPass(env, "medium", "private");
+    expect((await SELF.fetch(partyUrl("lobby-router", "medium", pass))).status).toBe(403);
   });
 
   it("caps room creation attempts from one IP", async () => {
@@ -117,6 +147,31 @@ describe("the Worker admits nobody to a room without a pass", () => {
     expect(statuses.slice(0, 300).every((status) => status === 403)).toBe(true);
     expect(statuses[300]).toBe(429);
   }, 30_000);
+});
+
+describe("a seat is its own admission", () => {
+  it("lets a seated racer reconnect with no pass at all", async () => {
+    const name = `adm-seat-${crypto.randomUUID()}`;
+    expect(await privateRoom(name).reserveRoomName()).toBe(true);
+    const racerId = crypto.randomUUID();
+    const first = await open("race-room", name, await issueAdmissionPass(env, name, "private"));
+    first.hello("Host", racerId);
+    const { playerId } = await first.wait((m) => m.type === "hello-ack");
+    first.close();
+    await tick(50);
+
+    // What a page opened before passes existed sends after a deploy drops it:
+    // the same racerId, and no admission param at all. The seat is on its
+    // reconnect grace, and presenting its racerId reclaims it.
+    const back = await open("race-room", name);
+    back.hello("Host", racerId);
+    expect((await back.wait((m) => m.type === "hello-ack")).playerId).toBe(playerId);
+    await runInDurableObject(privateRoom(name), async (room) => {
+      expect(room.state.players).toHaveLength(1);
+      expect(room.state.disconnectDeadlines).toEqual({});
+    });
+    back.close();
+  });
 });
 
 describe("a pass's expiry bounds only creating or reviving a room", () => {

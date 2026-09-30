@@ -16,6 +16,8 @@ import {
   EXPIRED_ROOM_STATE,
   ROOM_EXPIRED_TYPE,
   INVITE_EXPIRED_REASON,
+  INVITE_INVALID_REASON,
+  expiredScreen,
   isRoomExpiredMessage,
   createExpiryLatch,
 } from "./room-expiry.js";
@@ -108,4 +110,35 @@ test("hands the screen the message, so a refused invite reads as one", () => {
   const refusal = { type: ROOM_EXPIRED_TYPE, reason: INVITE_EXPIRED_REASON, roomId: "a-b-c" };
   assert.equal(handle(refusal), true);
   assert.deepEqual(seen, [refusal]);
+});
+
+// ---------- expiredScreen ----------
+
+test("a refused Quick Match gets Quick Match copy and Find Another Match, whatever the reason", () => {
+  // A Quick Match has no invite to have expired and no room of its own to
+  // create, so private-room copy and Create a New Room are both wrong there.
+  for (const reason of [INVITE_EXPIRED_REASON, INVITE_INVALID_REASON, "idle", undefined]) {
+    assert.deepEqual(
+      expiredScreen({ type: ROOM_EXPIRED_TYPE, reason, roomId: "m-a-b-c" }, "public"),
+      { copy: "quick-match", exit: "find-match" },
+    );
+  }
+});
+
+test("a private room's screen follows the reason and offers a new room", () => {
+  const privateScreen = (msg) => expiredScreen(msg, undefined);
+  assert.deepEqual(privateScreen({ type: ROOM_EXPIRED_TYPE, reason: "idle" }), { copy: "idle", exit: "new-room" });
+  assert.deepEqual(
+    privateScreen({ type: ROOM_EXPIRED_TYPE, reason: INVITE_EXPIRED_REASON }),
+    { copy: INVITE_EXPIRED_REASON, exit: "new-room" },
+  );
+  assert.deepEqual(
+    privateScreen({ type: ROOM_EXPIRED_TYPE, reason: INVITE_INVALID_REASON }),
+    { copy: INVITE_INVALID_REASON, exit: "new-room" },
+  );
+  // The tombstone snapshot carries no reason: it is the idle winddown.
+  assert.deepEqual(
+    privateScreen({ type: "state", state: { state: EXPIRED_ROOM_STATE } }),
+    { copy: "idle", exit: "new-room" },
+  );
 });

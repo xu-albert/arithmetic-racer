@@ -1,13 +1,14 @@
 // Signed admission passes keep a room name from being a room credential. The
-// Worker issues a pass after matchmaking or room allocation and checks it
-// before any request reaches a room. Its short expiry bounds only what a pass
-// may create: an expired pass still joins or reconnects to a room that is
-// alive, but never creates or revives one (RaceRoom.fetch in ./room.js).
+// Worker issues a pass after matchmaking or room allocation and checks it on
+// every request to a room. A pass is what a new seat needs; a seat already
+// held needs none. Its short expiry bounds only what a pass may create: an
+// expired pass still joins a room that is alive, but never creates or revives
+// one (RaceRoom.fetch and handleHello in ./room.js).
 
 export const ADMISSION_PASS_TTL_MS = 10 * 60 * 1000;
 
 // Set by the Worker on every request it lets through to a room, overwriting
-// whatever the client sent: the pass's verdict, 'fresh' or 'stale'.
+// whatever the client sent: the pass's verdict, 'fresh', 'stale' or 'none'.
 export const ADMISSION_HEADER = "x-arithmetic-admission";
 
 // Passes are signed with a key derived from BETTER_AUTH_SECRET, never with the

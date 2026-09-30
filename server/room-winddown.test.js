@@ -28,6 +28,7 @@ import {
   ALARM_SLOP_MS,
 } from "./room.js";
 import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE } from "../public/src/room-expiry.js";
+import { ADMISSION_HEADER } from "./admission-pass.js";
 
 let connSeq = 0;
 
@@ -66,7 +67,7 @@ const withPublicRoom = (name, fn) => withRoom(env.PublicRaceRoom, name, fn);
 async function join(room, conns, handle = "Alice") {
   const conn = makeConn({ userId: null });
   conns.push(conn);
-  await room.onConnect(conn, { request: { headers: new Headers() } });
+  await room.onConnect(conn, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
   await room.onMessage(conn, JSON.stringify({
     type: "hello", playerId: crypto.randomUUID(), handle, deviceId: `dev-${handle}`,
   }));
@@ -296,7 +297,7 @@ describe("private room — what a client hitting an expired room gets", () => {
 
       const visitor = makeConn();
       conns.push(visitor);
-      await room.onConnect(visitor, { request: { headers: new Headers() } });
+      await room.onConnect(visitor, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
 
       const msgs = visitor.messages();
       expect(msgs.length).toBe(1);
@@ -365,7 +366,7 @@ describe("private room — what a client hitting an expired room gets", () => {
       await room.onStart();
       expect(room.state.state).toBe("lobby");
       const visitor = makeConn();
-      await room.onConnect(visitor, { request: { headers: new Headers() } });
+      await room.onConnect(visitor, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
       expect(visitor.messages()[0].type).toBe("state");
     });
 
@@ -408,7 +409,7 @@ describe("POST /api/rooms claims the name it hands out", () => {
       await room.onStart();
       expect(room.state.state).toBe("lobby");
       const creator = makeConn();
-      await room.onConnect(creator, { request: { headers: new Headers() } });
+      await room.onConnect(creator, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
       expect(creator.messages()[0].type).toBe("state");
       expect(creator.closed).toBeNull();
     });
@@ -420,7 +421,7 @@ describe("public quickmatch rooms are not wound down", () => {
     await withPublicRoom("m-winddown-" + crypto.randomUUID(), async (room, { conns }) => {
       const conn = makeConn({ userId: null });
       conns.push(conn);
-      await room.onConnect(conn, { request: { headers: new Headers() } });
+      await room.onConnect(conn, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
 
       expect(room.expiresWhenIdle()).toBe(false);
       expect(room.idleExpiryAt()).toBeNull();

@@ -168,16 +168,17 @@ not a name we own. Coverage: `server/room-allocation.test.js`.
 
 Private rooms are **unlisted, not account-controlled**, and that is a deliberate
 product decision rather than a gap to close: the room name is still cheap to
-enumerate, but the Worker refuses any `/parties/*` request without a
-server-signed admission pass for that room and mode, before the room's Durable
-Object is touched, and caps `/parties/*` per IP. The pass rides in the invite
-link. Its 10-minute expiry bounds only creating or reviving room state: an
-expired pass still joins or reconnects to a room that is alive, and
-`RaceRoom.fetch` refuses it — before `onStart` can mint anything — when the
-room has no live state. Reserving fixes who *creates* a room, while the pass
-stops a guessed name from minting room state or seating a bot. Do not add a
-join capability, invite code or account admission check without a fresh
-decision.
+enumerate, but a *new* seat needs a server-signed admission pass for that room
+and mode. It rides in the invite link; the Worker checks it on every
+`/parties/*` request (and caps those per IP) and hands the room its verdict. A
+seat is its own admission: a `hello` presenting a seated racerId reconnects
+with or without a pass, so open pages survive a deploy. The pass's 10-minute
+expiry bounds only creating or reviving room state — `RaceRoom.fetch` refuses,
+before `onStart` can mint anything, whatever is not a fresh pass when the room
+has no live state, and a pass-less request when it has no human seat. Reserving
+fixes who *creates* a room, while the pass stops a guessed name from minting
+room state or seating a bot. Do not add a join capability, invite code or
+account admission check without a fresh decision.
 
 ## Every one-shot room broadcast needs a snapshot equivalent
 

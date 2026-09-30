@@ -2,7 +2,9 @@ import { Server } from 'partyserver';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
 import { isConfigurableState } from '../public/src/room-config-rules.js';
-import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE, INVITE_EXPIRED_REASON } from '../public/src/room-expiry.js';
+import {
+  EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE, INVITE_EXPIRED_REASON, INVITE_INVALID_REASON,
+} from '../public/src/room-expiry.js';
 import { insertRaceResult, MAX_DEVICE_ID_LENGTH } from '../worker/race-result-store.js';
 import { CAPTCHA_PROBLEM_COUNT } from '../worker/plausibility.js';
 import { containsProfanity } from '../worker/username-validator.js';
@@ -349,19 +351,26 @@ export class RaceRoom extends Server {
   }
 
   /**
-   * Every request the Worker lets through carries its pass's verdict. A stale
-   * pass is still a pass for this room, so it joins or reconnects to a room
-   * that is alive — however long ago it was issued — but it must never be what
-   * creates or revives one, and onStart, which super.fetch runs first, does
-   * exactly that for a name with no state or a tombstone past its TTL. Only
-   * an explicit 'fresh' skips the check, so a request that bypassed the
-   * Worker cannot create a room either.
+   * Every request the Worker lets through carries its pass's verdict: 'fresh',
+   * 'stale', or 'none'. Only a fresh pass may be what creates or revives a
+   * room, and onStart, which super.fetch runs first, does exactly that for a
+   * name with no state or a tombstone past its TTL — so anything else is
+   * refused here unless the room is alive. A stale pass joins a live room
+   * however old it is; no pass at all gets in only as a possible seat holder
+   * (handleHello admits a seat's racerId without a pass, and nothing else), so
+   * never into a room with no human seat, whose lifetime it would only
+   * extend. Anything but an explicit 'fresh' takes these checks, so a request
+   * that bypassed the Worker cannot create a room either.
    */
   async fetch(request) {
-    if (request.headers.get(ADMISSION_HEADER) !== 'fresh') {
+    const verdict = request.headers.get(ADMISSION_HEADER);
+    if (verdict !== 'fresh') {
       const stored = await this.ctx.storage.get('state');
       if (stored == null || stored.state === EXPIRED_ROOM_STATE) {
         return refuseAdmission(request, this.name, INVITE_EXPIRED_REASON);
+      }
+      if (verdict !== 'stale' && !stored.players.some((p) => !p.isBot)) {
+        return refuseAdmission(request, this.name, INVITE_INVALID_REASON);
       }
     }
     return super.fetch(request);
@@ -433,7 +442,11 @@ export class RaceRoom extends Server {
     // entry. Client-supplied values are stripped/overwritten there, so this
     // is trustworthy. Null for anon users.
     const userId = ctx?.request?.headers?.get('x-arithmetic-user-id') ?? null;
-    connection.setState({ ...(connection.state ?? {}), userId });
+    // Whether this socket carried a pass signed for this room, of any age —
+    // the Worker's verdict, stamped like the user id. Only a new seat needs one.
+    const admission = ctx?.request?.headers?.get(ADMISSION_HEADER);
+    const hasAdmissionPass = admission === 'fresh' || admission === 'stale';
+    connection.setState({ ...(connection.state ?? {}), userId, hasAdmissionPass });
 
     // Don't add player yet — wait for `hello`.
     connection.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre: null }));
@@ -698,6 +711,14 @@ export class RaceRoom extends Server {
       await this.persist();
       this.broadcastState();
       await this.scheduleNextAlarm();
+      return;
+    }
+
+    // A seat is its own admission — the reconnect above needs no pass, so an
+    // open page survives a deploy or a dropped socket — but a new seat does.
+    if (!connection.state?.hasAdmissionPass) {
+      connection.send(expiredMessage(this.name, INVITE_INVALID_REASON));
+      closeQuietly(connection, 'admission refused');
       return;
     }
 
