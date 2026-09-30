@@ -254,7 +254,6 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // rankRacers would tier it above the player's own dnf row on the podium it
     // draws.
     const rosterOpen = !raceStarted && (roomState === 'lobby' || roomState === 'countdown');
-    const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
     const changed = [];
     for (const p of players ?? []) {
       const aliased = aliasId(p.id, youAre);
@@ -286,20 +285,11 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       ) changed.push(existing);
     }
 
-    // A Quick Match eviction is broadcast as `player-left` and normally lands
-    // before the next snapshot. If this socket was away for that push, the
-    // snapshot still has to make the same seat a DNF instead of leaving its
-    // locally mounted lane in the waiting tier. Finished snapshots deliberately
-    // keep the local model intact: bots and departed seats are stripped from
-    // state.players after finishRace, but their final rows still rank locally.
-    if (roomState === 'racing') {
-      for (const racer of racers) {
-        if (racer.isBot || racer.finishMs != null || present.has(racer.id)) continue;
-        if (racer.dropped) continue;
-        racer.dropped = true;
-        changed.push(racer);
-      }
-    } else if (rosterOpen) {
+    // Finished snapshots deliberately keep the local model intact: bots and
+    // departed seats are stripped from state.players after finishRace, but
+    // their final rows still rank locally.
+    if (rosterOpen) {
+      const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
       for (let i = racers.length - 1; i >= 0; i--) {
         if (!present.has(racers[i].id)) racers.splice(i, 1);
       }
