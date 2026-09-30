@@ -13,7 +13,7 @@ import {
   needsCaptchaTrigger, newCaptchaSeed, captchaProblems, captchaWireProblems, captchaDeadline,
 } from './captcha.js';
 import { createSocketLimiter } from './socket-limit.js';
-import { verifyAdmissionPass } from './admission-pass.js';
+import { issueAdmissionPass, ADMISSION_PASS_TTL_MS } from './admission-pass.js';
 
 // Mirrors public/src/runner.js values. The default race length is not here —
 // it is `raceLength` in freshState() below, which the leaderboards filter on.
@@ -103,10 +103,18 @@ function owedResults(state, now) {
 // those would drop a real timer.
 export const ALARM_SLOP_MS = 60 * 1000;
 
+// A private room re-issues every seated member an admission pass this often
+// while any of them is connected, so the invite link each one holds keeps
+// opening the room for as long as the room is alive, however long after
+// creation it is copied. Half the TTL leaves the newest pass at least that
+// long to run. Bounded by the idle winddown, which is why only rooms that have
+// one refresh; a public room's seat gets its one pass at hello.
+export const ADMISSION_PASS_REFRESH_MS = ADMISSION_PASS_TTL_MS / 2;
+
 // Public wire payload for a wound-down room. Sent to anyone attached when the
 // winddown happens, and to anyone who connects to the tombstone afterwards.
-export function expiredMessage(roomId) {
-  return JSON.stringify({ type: ROOM_EXPIRED_TYPE, reason: 'idle', roomId });
+export function expiredMessage(roomId, reason = 'idle') {
+  return JSON.stringify({ type: ROOM_EXPIRED_TYPE, reason, roomId });
 }
 
 // The room's whole client protocol: dispatch table and activity gate at once,
@@ -167,6 +175,9 @@ export function freshState(id) {
     // Drives the private-room idle winddown. Bumped by touchActivity(); see
     // PRIVATE_ROOM_IDLE_MS for what counts as activity.
     lastActivityAt: Date.now(),
+    // When seated members are next handed a fresh admission pass, or null while
+    // nobody seated is connected. See ADMISSION_PASS_REFRESH_MS.
+    admissionRefreshAt: null,
     // Counter behind the ephemeral broadcast ids handed out by nextBroadcastId.
     nextPid: 1,
     disconnectDeadlines: {}, // broadcast id -> deadline ms (Task 9 reconnection grace)
@@ -402,14 +413,7 @@ export class RaceRoom extends Server {
     // entry. Client-supplied values are stripped/overwritten there, so this
     // is trustworthy. Null for anon users.
     const userId = ctx?.request?.headers?.get('x-arithmetic-user-id') ?? null;
-    connection.setState({
-      ...(connection.state ?? {}),
-      userId,
-      // Direct handler tests do not model a Worker request. Real PartyServer
-      // sockets always carry a URL and therefore always take the admission
-      // check in handleHello.
-      admissionRequired: typeof ctx?.request?.url === 'string',
-    });
+    connection.setState({ ...(connection.state ?? {}), userId });
 
     // Don't add player yet — wait for `hello`.
     connection.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre: null }));
@@ -514,6 +518,12 @@ export class RaceRoom extends Server {
         delete this.state.disconnectDeadlines[pid];
         if (await this.removePlayer(pid)) mutated = true;
       }
+    }
+
+    // Admission-pass refresh. Nothing public changes, so no state broadcast.
+    if (this.state.admissionRefreshAt != null && this.state.admissionRefreshAt <= now) {
+      await this.refreshAdmissionPasses(now);
+      await this.persist();
     }
 
     // Countdown tick.
@@ -627,16 +637,6 @@ export class RaceRoom extends Server {
   // ---------- handlers ----------
 
   async handleHello(connection, msg) {
-    if (connection.state?.admissionRequired) {
-      const mode = this.expiresWhenIdle() ? 'private' : 'public';
-      const admitted = await verifyAdmissionPass(this.env, msg.admissionPass, {
-        roomId: this.name,
-        mode,
-      });
-      if (!admitted) {
-        return this.sendError(connection, 'ADMISSION_REQUIRED', 'A valid room invitation is required');
-      }
-    }
     // msg.playerId is the client's racerId — a long-lived secret that lives in
     // the sender's localStorage and nowhere else on the wire. It is the ONLY
     // thing that reattaches a socket to an existing seat, so the reconnect
@@ -676,6 +676,7 @@ export class RaceRoom extends Server {
       connection.send(JSON.stringify({
         type: 'hello-ack', playerId: existing.id, handle: existing.handle,
       }));
+      await this.sendAdmissionPass(connection);
       // A challenge can be pending across a disconnect (the race ended, the
       // socket dropped before the captcha was answered). The new socket would
       // otherwise never learn about it and the race would silently record as
@@ -752,6 +753,7 @@ export class RaceRoom extends Server {
 
     connection.setState({ ...currentConnState, playerId: player.id, racerId });
     connection.send(JSON.stringify({ type: 'hello-ack', playerId: player.id, handle }));
+    await this.sendAdmissionPass(connection);
     this.broadcast(JSON.stringify({ type: 'player-joined', player: publicPlayer(player) }));
     await this.persist();
     this.broadcastState();
@@ -1233,6 +1235,46 @@ export class RaceRoom extends Server {
     }
   }
 
+  /** A fresh admission pass for this room, as the message that hands it over. */
+  async admissionPassMessage() {
+    const mode = this.expiresWhenIdle() ? 'private' : 'public';
+    return JSON.stringify({
+      type: 'admission-pass',
+      admissionPass: await issueAdmissionPass(this.env, this.name, mode),
+    });
+  }
+
+  /**
+   * Hand a seat that was just claimed its own pass, and make sure the room
+   * keeps its members' passes fresh from here on. Left alone when already
+   * armed: moving it would leave everyone else's pass that much older.
+   */
+  async sendAdmissionPass(connection) {
+    connection.send(await this.admissionPassMessage());
+    if (this.expiresWhenIdle()) this.state.admissionRefreshAt ??= Date.now() + ADMISSION_PASS_REFRESH_MS;
+  }
+
+  /**
+   * Re-issue every connected seat a pass, or stop refreshing once none is
+   * connected — the next seat claimed arms it again. Resolved through
+   * playerFor, so a socket that never said hello, or whose seat is gone, gets
+   * nothing.
+   */
+  async refreshAdmissionPasses(now) {
+    const seated = [];
+    for (const conn of this.getConnections()) if (this.playerFor(conn)) seated.push(conn);
+    this.state.admissionRefreshAt = seated.length > 0 ? now + ADMISSION_PASS_REFRESH_MS : null;
+    if (seated.length === 0) return;
+    const raw = await this.admissionPassMessage();
+    for (const conn of seated) {
+      try {
+        conn.send(raw);
+      } catch {
+        /* socket gone; its seat is on the reconnect grace */
+      }
+    }
+  }
+
   async persistRaceResults(raceAt) {
     this.queueRaceResults(raceAt);
     await this.flushRaceResults();
@@ -1509,11 +1551,11 @@ export class RaceRoom extends Server {
   publicState() {
     // Strip server-only Player fields (attempts/streak counters, identity), the
     // captcha table (seeds, answers, held result rows), the result outbox
-    // (row payloads carry deviceId/userId) and the unjoined flag (a lifecycle
-    // detail no client acts on) before broadcasting.
+    // (row payloads carry deviceId/userId), and the unjoined flag and pass
+    // refresh time (lifecycle details no client acts on) before broadcasting.
     // `serverNow` is the room's clock at send, for a client reading race time
     // off `raceStartedAt` (remote-runner.js).
-    const { captchaChallenges, unjoined, pendingResults, ...rest } = this.state;
+    const { captchaChallenges, unjoined, pendingResults, admissionRefreshAt, ...rest } = this.state;
     return { ...rest, players: this.state.players.map(publicPlayer), serverNow: Date.now() };
   }
 
@@ -1662,6 +1704,7 @@ export class RaceRoom extends Server {
     if (this.state.idleCleanupAt != null) candidates.push(this.state.idleCleanupAt);
     for (const dl of Object.values(this.state.disconnectDeadlines)) candidates.push(dl);
     for (const ch of Object.values(this.state.captchaChallenges ?? {})) candidates.push(ch.deadline);
+    if (this.state.admissionRefreshAt != null) candidates.push(this.state.admissionRefreshAt);
     // A queued row with no retry time yet is due now: the in-line drain right
     // after queueing normally settles it, and the alarm is the backstop for
     // the crash that landed in between.

@@ -12,10 +12,15 @@ import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDevice
 export function createRoomClient({ roomId, mode, difficulty, deviceId, admissionPass } = {}) {
   const party = mode === 'public' ? 'public-race-room' : 'race-room';
 
+  // The Worker refuses any socket, a reconnect included, that does not carry a
+  // current pass for this room. Read per connection attempt, so a reconnect
+  // presents the newest one the room has handed this seat.
+  let latestAdmissionPass = admissionPass;
   const ws = new PartySocket({
     host: location.host,
     party,
     room: roomId,
+    query: () => ({ admission: latestAdmissionPass }),
   });
   const listeners = new Set();
   // Fired on every (re)open, after hello has been sent. The catch-up batch a
@@ -38,7 +43,6 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId, admission
       // attribute race_results. Fall back to the local helper if the caller
       // didn't pass one through the constructor.
       deviceId: deviceId ?? getOrCreateDeviceId(),
-      admissionPass,
       ...(mode === 'public' && { difficulty }),
     };
     ws.send(JSON.stringify(helloMsg));
@@ -51,6 +55,9 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId, admission
     if (msg.type === 'hello-ack') {
       if (typeof msg.playerId === 'string') myPlayerId = msg.playerId;
       if (msg.handle) setStoredHandle(msg.handle);
+    }
+    if (msg.type === 'admission-pass' && typeof msg.admissionPass === 'string') {
+      latestAdmissionPass = msg.admissionPass;
     }
     if (msg.type === 'handle-changed') {
       if (myPlayerId != null && msg.playerId === myPlayerId) setStoredHandle(msg.handle);
@@ -80,6 +87,10 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId, admission
     },
     get readyState() {
       return ws.readyState;
+    },
+    /** The newest admission pass this client holds for the room. */
+    get admissionPass() {
+      return latestAdmissionPass;
     },
   };
 }

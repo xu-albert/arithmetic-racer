@@ -136,10 +136,15 @@
     <!-- Focused (not announced) on arrival: the copy is static, so a live
          region has nothing to report when the screen is merely unhidden. -->
     <section id="room-expired" class="screen hidden" tabindex="-1">
-      <h2>Room expired</h2>
-      <p id="room-expired-message" class="lobby-hint">
+      <h2 data-expired-reason="idle">Room expired</h2>
+      <p id="room-expired-message" class="lobby-hint" data-expired-reason="idle">
         This private room was closed after 30 minutes with nobody playing. Its
         invite link no longer works — start a new room and share that instead.
+      </p>
+      <h2 class="hidden" data-expired-reason="invite">Invite expired</h2>
+      <p class="lobby-hint hidden" data-expired-reason="invite">
+        This link no longer opens its room. Anyone still in the room has a
+        fresh invite link — ask them for it, or start a new room of your own.
       </p>
       <div class="room-actions">
         <button id="expired-new-room-btn" class="primary">Create a New Room</button>

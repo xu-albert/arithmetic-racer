@@ -14,7 +14,7 @@ export default defineConfig({
         compatibilityFlags: ["nodejs_compat"],
         bindings: {
           TEST_MIGRATIONS: migrations,
-          ADMISSION_PASS_SECRET: "test-admission-pass-secret-0123456789",
+          BETTER_AUTH_SECRET: "test-better-auth-secret-0123456789",
         },
       },
     }),
