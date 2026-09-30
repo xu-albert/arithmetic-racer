@@ -34,17 +34,17 @@ const PARTIES_RATE_LIMIT_WINDOW_S = 60;
 // route to admits nobody.
 const ADMISSION_MODES = { RaceRoom: "private", PublicRaceRoom: "public" };
 
-// Checked against the name and class partyserver is about to route to, before
-// the room Durable Object is touched at all: a request that reached it would
-// already have run onStart and minted live state under that name. What passes
-// carries the pass's verdict on to the room, which alone knows whether it is
-// alive — the one thing an expired pass's admission depends on.
+// Checked against the name and class partyserver is about to route to. The
+// verdict — 'fresh', 'stale', or 'none' for a missing or forged pass — goes on
+// to the room, which alone knows what it admits: whether it is alive, and
+// whether a hello's racerId already holds a seat (RaceRoom.fetch and
+// handleHello). Set on every request, so no client value survives.
 async function admit(request, lobby, env) {
   const mode = ADMISSION_MODES[lobby.className];
+  if (!mode) return refuseAdmission(request, lobby.name, INVITE_INVALID_REASON);
   const pass = new URL(request.url).searchParams.get("admission");
-  const verdict = mode ? await checkAdmissionPass(env, pass, { roomId: lobby.name, mode }) : null;
-  if (!verdict) return refuseAdmission(request, lobby.name, INVITE_INVALID_REASON);
-  request.headers.set(ADMISSION_HEADER, verdict);
+  const verdict = await checkAdmissionPass(env, pass, { roomId: lobby.name, mode });
+  request.headers.set(ADMISSION_HEADER, verdict ?? "none");
   return request;
 }
 

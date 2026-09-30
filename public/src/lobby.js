@@ -69,9 +69,8 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   // Public matches are anonymous drop-ins — the internal room slug is
   // meaningless to players, so don't surface it.
   roomTitle.textContent = isPublic ? 'Quick Match' : `Room: ${roomId}`;
-  const origin = location.origin ?? `http://${location.host}`;
   const admissionQuery = admissionPass ? `&admission=${encodeURIComponent(admissionPass)}` : '';
-  inviteUrlInput.value = `${origin}/?room=${encodeURIComponent(roomId)}${admissionQuery}`;
+  inviteUrlInput.value = `${location.origin}/?room=${encodeURIComponent(roomId)}${admissionQuery}`;
 
   function meIsCreator() {
     if (!currentState || !youAre) return false;
