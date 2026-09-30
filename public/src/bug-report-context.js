@@ -35,7 +35,8 @@ import { getDeviceId } from "./identity.js";
  *   — see CLIENT_CONTEXT_FIELDS.
  * @property {number} [maxLength] Cap the server applies to a text field.
  * @property {boolean} [pathOnly] Strip query string and fragment before storing.
- * @property {(win: Window) => string|number|undefined} [collect] Client fields.
+ * @property {(win: Window) => string|number|null|undefined} [collect] Client
+ *   fields. `null`, `undefined` and `""` all mean absent (see readValue).
  */
 
 /**
