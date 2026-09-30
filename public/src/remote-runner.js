@@ -500,13 +500,14 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         break;
       }
       case 'player-left': {
+        // Only a countdown departure has anything to paint: the room splices
+        // that seat and the snapshot after it prunes the racer, but the race
+        // screen has already drawn its lane. A departure mid-race arrives as
+        // `drop`, and one after the race is somebody leaving the results
+        // screen, which must not relabel the row they finished the race with.
+        if (raceStarted) break;
         const r = findRacer(msg.playerId);
         if (!r) break;
-        // During a race the server holds this seat to write its DNF row. The
-        // wire message names the departure, while the runner exposes the same
-        // dropped event as every other race path so the lane and rankings
-        // update immediately.
-        if (r.finishMs != null || r.dropped) break;
         r.dropped = true;
         emit('drop', { laneId: r.id });
         break;
