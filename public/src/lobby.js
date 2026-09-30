@@ -13,8 +13,9 @@ const DIFFS = ['easy', 'medium', 'hard'];
  * @param {string} [opts.mode]       - 'public' activates public-mode UI
  * @param {string} [opts.difficulty] - forwarded to createRoomClient for public mode
  * @param {string} [opts.deviceId]   - forwarded to createRoomClient for public mode
+ * @param {string} [opts.admissionPass] - forwarded to the room hello
  */
-export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode, difficulty, deviceId }) {
+export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode, difficulty, deviceId, admissionPass }) {
   const isPublic = mode === 'public';
 
   const roomTitle = document.getElementById('room-title');
@@ -57,7 +58,7 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
     findAnotherBtn.classList.add('hidden');
   }
 
-  const client = createRoomClient({ roomId, mode, difficulty, deviceId });
+  const client = createRoomClient({ roomId, mode, difficulty, deviceId, admissionPass });
 
   let currentState = null;
   let youAre = null;
@@ -68,7 +69,9 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   // Public matches are anonymous drop-ins — the internal room slug is
   // meaningless to players, so don't surface it.
   roomTitle.textContent = isPublic ? 'Quick Match' : `Room: ${roomId}`;
-  inviteUrlInput.value = `${location.origin}/?room=${roomId}`;
+  const origin = location.origin ?? `http://${location.host}`;
+  const admissionQuery = admissionPass ? `&admission=${encodeURIComponent(admissionPass)}` : '';
+  inviteUrlInput.value = `${origin}/?room=${encodeURIComponent(roomId)}${admissionQuery}`;
 
   function meIsCreator() {
     if (!currentState || !youAre) return false;

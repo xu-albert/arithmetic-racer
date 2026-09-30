@@ -12,7 +12,10 @@ export default defineConfig({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
         compatibilityFlags: ["nodejs_compat"],
-        bindings: { TEST_MIGRATIONS: migrations },
+        bindings: {
+          TEST_MIGRATIONS: migrations,
+          ADMISSION_PASS_SECRET: "test-admission-pass-secret-0123456789",
+        },
       },
     }),
   ],

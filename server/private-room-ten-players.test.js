@@ -3,6 +3,8 @@
 import { it, expect } from 'vitest';
 import { env, SELF, runInDurableObject } from 'cloudflare:test';
 
+const admissionPasses = new Map();
+
 async function connect(roomId) {
   const response = await SELF.fetch(`https://ten.test/parties/race-room/${roomId}`, {
     headers: { Upgrade: 'websocket' },
@@ -15,7 +17,7 @@ async function connect(roomId) {
   let cursor = 0;
   return {
     messages,
-    send(message) { socket.send(JSON.stringify(message)); },
+    send(message) { socket.send(JSON.stringify({ admissionPass: admissionPasses.get(roomId), ...message })); },
     close() { socket.close(); },
     async wait(predicate) {
       const deadline = Date.now() + 5000;
@@ -36,7 +38,8 @@ async function connect(roomId) {
 it('ten private-room players join, race concurrently, receive all standings, and store ten results', async () => {
   const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
   expect(created.ok).toBe(true);
-  const { roomId } = await created.json();
+  const { roomId, admissionPass } = await created.json();
+  admissionPasses.set(roomId, admissionPass);
   const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
   const clients = [];
   try {
@@ -133,7 +136,8 @@ it('ten private-room players join, race concurrently, receive all standings, and
 
 it('refuses an 11th new racer in lobby and finished states, but still accepts a seated reconnect', async () => {
   const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
-  const { roomId } = await created.json();
+  const { roomId, admissionPass } = await created.json();
+  admissionPasses.set(roomId, admissionPass);
   const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
   const clients = [];
   const racerIds = [];
@@ -174,7 +178,8 @@ it('refuses an 11th new racer in lobby and finished states, but still accepts a 
 
 it('a departed seat keeps its place until rematch: replacement refused, original reconnects, never more than ten seats', async () => {
   const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
-  const { roomId } = await created.json();
+  const { roomId, admissionPass } = await created.json();
+  admissionPasses.set(roomId, admissionPass);
   const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
   const clients = [];
   const racerIds = [];

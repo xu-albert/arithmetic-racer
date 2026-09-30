@@ -12,6 +12,7 @@
 // read+write per join against the free daily quota.
 
 import { allowRequest } from "../rate-limit.js";
+import { issueAdmissionPass } from "../../server/admission-pass.js";
 
 const DIFFICULTIES = new Set(["easy", "medium", "hard"]);
 // Native rate-limit binding periods are 10 or 60s only; must match wrangler.jsonc.
@@ -50,5 +51,10 @@ export async function handleMatchmakeJoin(request, env) {
     return Response.json({ error: "router_unavailable" }, { status: 503, headers: { "retry-after": "1" } });
   }
 
-  return Response.json({ roomId, mode: "public", difficulty });
+  try {
+    const admissionPass = await issueAdmissionPass(env, roomId, "public");
+    return Response.json({ roomId, mode: "public", difficulty, admissionPass });
+  } catch {
+    return Response.json({ error: "admission_unavailable" }, { status: 503 });
+  }
 }

@@ -7,8 +7,9 @@ import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDevice
  * @param {string} [opts.mode]        - 'public' routes to public-race-room party
  * @param {string} [opts.difficulty]  - included in hello for public mode
  * @param {string} [opts.deviceId]    - included in hello for public mode
+ * @param {string} [opts.admissionPass] - short-lived server-issued room pass
  */
-export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
+export function createRoomClient({ roomId, mode, difficulty, deviceId, admissionPass } = {}) {
   const party = mode === 'public' ? 'public-race-room' : 'race-room';
 
   const ws = new PartySocket({
@@ -37,6 +38,7 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
       // attribute race_results. Fall back to the local helper if the caller
       // didn't pass one through the constructor.
       deviceId: deviceId ?? getOrCreateDeviceId(),
+      admissionPass,
       ...(mode === 'public' && { difficulty }),
     };
     ws.send(JSON.stringify(helloMsg));

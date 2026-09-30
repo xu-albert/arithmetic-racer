@@ -22,6 +22,7 @@ import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 
 const TRANSCRIPT = [];
 const log = (line = "") => TRANSCRIPT.push(line);
+const admissionPasses = new Map();
 
 function tick(ms = 5) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -46,7 +47,7 @@ async function connect(roomId, label) {
     label,
     inbox,
     playerId: null,
-    send(msg) { ws.send(JSON.stringify(msg)); },
+    send(msg) { ws.send(JSON.stringify({ admissionPass: admissionPasses.get(roomId), ...msg })); },
     /** Say hello and remember the broadcast id the room hands back. */
     async hello(racerId, handle, deviceId) {
       this.send({ type: "hello", playerId: racerId, handle, deviceId });
@@ -85,7 +86,8 @@ const inRoom = (roomId, fn) => runInDurableObject(roomStub(roomId), fn);
 
 async function createRoom() {
   const res = await SELF.fetch("https://e2e.test/api/rooms", { method: "POST" });
-  const { roomId } = await res.json();
+  const { roomId, admissionPass } = await res.json();
+  admissionPasses.set(roomId, admissionPass);
   return roomId;
 }
 
