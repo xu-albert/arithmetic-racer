@@ -31,7 +31,7 @@ import { env, runInDurableObject, SELF } from "cloudflare:test";
 import worker from "./server.js";
 import { generateRoomId, allocateRoomId, ROOM_ID_ATTEMPTS } from "./room-id.js";
 import { PRIVATE_ROOM_IDLE_MS, UNJOINED_ROOM_IDLE_MS } from "./room.js";
-import { issueAdmissionPass } from "./admission-pass.js";
+import { issueAdmissionPass, ADMISSION_HEADER } from "./admission-pass.js";
 import { EXPIRED_ROOM_STATE } from "../public/src/room-expiry.js";
 
 let connSeq = 0;
@@ -77,7 +77,7 @@ async function occupy(name, handle = "Alice") {
   return withPrivateRoom(name, async (room, { conns }) => {
     const conn = makeConn({ userId: null });
     conns.push(conn);
-    await room.onConnect(conn, { request: { headers: new Headers() } });
+    await room.onConnect(conn, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
     await room.onMessage(conn, JSON.stringify({
       type: "hello", playerId: crypto.randomUUID(), handle, deviceId: `dev-${handle}`,
     }));
@@ -305,7 +305,7 @@ describe("POST /api/rooms never hands back a live room", () => {
     await withPrivateRoom(roomId, async (room, { conns }) => {
       const creator = makeConn({ userId: null });
       conns.push(creator);
-      await room.onConnect(creator, { request: { headers: new Headers() } });
+      await room.onConnect(creator, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
       expect(creator.closed).toBeNull();
       await room.onMessage(creator, JSON.stringify({
         type: "hello", playerId: crypto.randomUUID(), handle: "Creator", deviceId: "dev-creator",

@@ -11,17 +11,32 @@ export const EXPIRED_ROOM_STATE = 'expired';
 export const ROOM_EXPIRED_TYPE = 'room-expired';
 
 /**
- * `reason` on a ROOM_EXPIRED_TYPE message refusing a socket whose admission
- * pass has expired, sent only when its room is gone too (RaceRoom.fetch in
- * server/room.js): an expired pass still opens a room that is alive.
+ * `reason` on a ROOM_EXPIRED_TYPE message refusing a socket to a room that is
+ * gone, which only a fresh pass may create or revive (RaceRoom.fetch in
+ * server/room.js). An expired pass still opens a room that is alive.
  */
 export const INVITE_EXPIRED_REASON = 'invite';
 
 /**
- * `reason` on a ROOM_EXPIRED_TYPE message the Worker (server/server.js) sends
- * a socket that carries no pass signed for its room at all.
+ * `reason` on a ROOM_EXPIRED_TYPE message refusing a socket that neither holds
+ * a seat in the room nor carries a pass signed for it (server/room.js).
  */
 export const INVITE_INVALID_REASON = 'invalid-invite';
+
+/**
+ * Which copy and which way out the expired screen shows for `msg` in a room of
+ * `mode`. A Quick Match has no invite to have expired and no room of its own to
+ * create, so whatever the reason it gets its own copy and the Find Another
+ * Match exit; a private room's copy follows the reason, 'idle' when none is
+ * given (a tombstone snapshot).
+ *
+ * @returns {{ copy: string, exit: 'new-room' | 'find-match' }}
+ */
+export function expiredScreen(msg, mode) {
+  if (mode === 'public') return { copy: 'quick-match', exit: 'find-match' };
+  const known = [INVITE_EXPIRED_REASON, INVITE_INVALID_REASON].includes(msg?.reason);
+  return { copy: known ? msg.reason : 'idle', exit: 'new-room' };
+}
 
 /**
  * True for either shape that means "this room is gone": the explicit

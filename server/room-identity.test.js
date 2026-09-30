@@ -29,7 +29,8 @@ function makeConn(state) {
   return {
     id,
     raw: [],
-    state,
+    // A socket the Worker let through carrying a pass (see onConnect).
+    state: { hasAdmissionPass: true, ...state },
     send(s) { this.raw.push(s); },
     setState(s) { this.state = s; },
     messages() { return this.raw.map((s) => JSON.parse(s)); },

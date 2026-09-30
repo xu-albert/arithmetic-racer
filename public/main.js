@@ -21,7 +21,7 @@ import { soloResultPayload } from './src/solo-result.js';
 import { getOrCreateDeviceId, getOrCreateAnonHandle } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
-import { INVITE_EXPIRED_REASON, INVITE_INVALID_REASON } from './src/room-expiry.js';
+import { expiredScreen } from './src/room-expiry.js';
 
 // Cache of the logged-in user's username — set by the `session-ready`
 // event dispatched by header.js after its /api/me fetch. Saves a duplicate
@@ -170,18 +170,21 @@ function handleRoomRaceStart({ roomClient, initialState, youAre }) {
 }
 
 // Terminal state for a room link: the server wound the room down after 30
-// minutes of inactivity, the link's pass has expired and its room is gone, or
-// the link carries no valid pass at all. Tear everything room-shaped down so
+// minutes of inactivity, the room is gone, or this page can neither reclaim a
+// seat nor show a pass for a new one. Tear everything room-shaped down so
 // nothing keeps rendering against a room this page cannot reach, then offer
-// the two ways out.
-function handleRoomExpired(msg) {
+// the ways out that fit the room: a new room, or another Quick Match.
+function handleRoomExpired(msg, mode) {
   if (cleanupRace) { cleanupRace(); cleanupRace = null; }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
   document.getElementById('invite-modal')?.classList.add('hidden');
-  const reason = [INVITE_EXPIRED_REASON, INVITE_INVALID_REASON].includes(msg?.reason) ? msg.reason : 'idle';
-  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-reason]') ?? []) {
-    el.classList.toggle('hidden', el.dataset.expiredReason !== reason);
+  const { copy, exit } = expiredScreen(msg, mode);
+  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-copy]') ?? []) {
+    el.classList.toggle('hidden', el.dataset.expiredCopy !== copy);
+  }
+  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-exit]') ?? []) {
+    el.classList.toggle('hidden', el.dataset.expiredExit !== exit);
   }
   showScreen('room-expired');
   // The switch can happen while the player is staring at the race screen, so
@@ -200,7 +203,7 @@ function enterRoom(roomId, { mode, difficulty, admissionPass } = {}) {
     roomId,
     screens,
     onRaceStart: handleRoomRaceStart,
-    onRoomExpired: handleRoomExpired,
+    onRoomExpired: (msg) => handleRoomExpired(msg, mode),
     mode,
     difficulty,
     deviceId: getOrCreateDeviceId(),

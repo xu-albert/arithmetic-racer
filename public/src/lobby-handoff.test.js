@@ -68,7 +68,7 @@ function installDom() {
     body: fakeEl(),
     addEventListener: () => {},
   };
-  globalThis.location = { host: 'localhost', search: '', assign: () => {} };
+  globalThis.location = { host: 'localhost', origin: 'http://localhost', search: '', assign: () => {} };
   globalThis.history = { replaceState: () => {} };
   const store = new Map();
   globalThis.localStorage = {
