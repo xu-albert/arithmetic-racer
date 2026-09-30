@@ -248,13 +248,13 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // row while a catch-up batch drains in a `racing` room (see below).
   function reconcilePlayers(players, roomState) {
     // Additions to the roster stop when the room stops gathering players for a
-    // race this runner has not begun. Past that — a countdown that has handed
-    // off, a race in flight, a `finished` snapshot carrying somebody who took
-    // the invite link after the race ended — an unknown seat has no lane and no
-    // car on the mounted screen, and rankRacers would tier it above the
-    // player's own dnf row on the podium it draws. Only that direction: nothing
-    // here removes a seat the room spliced out of its own player list.
-    const rosterOpen = !raceStarted && roomState === 'lobby';
+    // race this runner has not begun. Past that — a race in flight, a `finished`
+    // snapshot carrying somebody who took the invite link after the race ended
+    // — an unknown seat has no lane and no car on the mounted screen, and
+    // rankRacers would tier it above the player's own dnf row on the podium it
+    // draws.
+    const rosterOpen = !raceStarted && (roomState === 'lobby' || roomState === 'countdown');
+    const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
     const changed = [];
     for (const p of players ?? []) {
       const aliased = aliasId(p.id, youAre);
@@ -284,6 +284,25 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         || existing.finishMs !== before.finishMs
         || existing.dropped !== before.dropped
       ) changed.push(existing);
+    }
+
+    // A Quick Match eviction is broadcast as `player-left` and normally lands
+    // before the next snapshot. If this socket was away for that push, the
+    // snapshot still has to make the same seat a DNF instead of leaving its
+    // locally mounted lane in the waiting tier. Finished snapshots deliberately
+    // keep the local model intact: bots and departed seats are stripped from
+    // state.players after finishRace, but their final rows still rank locally.
+    if (roomState === 'racing') {
+      for (const racer of racers) {
+        if (racer.isBot || racer.finishMs != null || present.has(racer.id)) continue;
+        if (racer.dropped) continue;
+        racer.dropped = true;
+        changed.push(racer);
+      }
+    } else if (rosterOpen) {
+      for (let i = racers.length - 1; i >= 0; i--) {
+        if (!present.has(racers[i].id)) racers.splice(i, 1);
+      }
     }
     return changed;
   }
@@ -487,6 +506,18 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
           }
         }
         emit('catchup-end', { rejected: msg.rejected ?? null, gaps: msg.gaps ?? [] });
+        break;
+      }
+      case 'player-left': {
+        const r = findRacer(msg.playerId);
+        if (!r) break;
+        // During a race the server holds this seat to write its DNF row. The
+        // wire message names the departure, while the runner exposes the same
+        // dropped event as every other race path so the lane and rankings
+        // update immediately.
+        if (r.finishMs != null || r.dropped) break;
+        r.dropped = true;
+        emit('drop', { laneId: r.id });
         break;
       }
       case 'finish': {
