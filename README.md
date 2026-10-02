@@ -14,7 +14,7 @@ Live: https://arithmetic-racer.albertwxu.workers.dev
 npm run dev
 ```
 
-Runs `wrangler dev`. Open http://localhost:8787.
+Runs `wrangler dev`. Open http://localhost:8787. Private rooms and Quick Match need `BETTER_AUTH_SECRET` in `.dev.vars` (their admission passes are signed with a key derived from it); the header of `worker/auth.js` lists every variable.
 
 ## Tests
 
