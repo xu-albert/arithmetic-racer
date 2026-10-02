@@ -256,6 +256,26 @@ describe("a pass's expiry bounds only creating or reviving a room", () => {
     expect((await storedState(privateRoom(name))).state).toBe("lobby");
   });
 
+  it("still refuses a stale pass when the room's instance carries no name of its own", async () => {
+    // An alarm can wake a room on an id with no name, and every request after
+    // it lands on that instance. Its name is then only partyserver's stored
+    // record, which a refusal — running before partyserver initializes — has
+    // to read for itself.
+    const name = `adm-nameless-${crypto.randomUUID()}`;
+    const nameless = env.RaceRoom.get(env.RaceRoom.idFromString(env.RaceRoom.idFromName(name).toString()));
+    await runInDurableObject(nameless, async (room, state) => {
+      expect(state.id.name).toBeUndefined();
+      await state.storage.put({
+        state: { ...room.freshState(name), state: EXPIRED_ROOM_STATE, expiredAt: Date.now(), lastActivityAt: null },
+        __ps_name: name,
+      });
+    });
+
+    const stale = await passAged(name, "private", 11 * MINUTE);
+    await expectRefused(await open("race-room", name, stale), name, INVITE_EXPIRED_REASON);
+    await expectRefused(await open("race-room", name), name, INVITE_EXPIRED_REASON);
+  });
+
   it("lets nothing that bypassed the Worker's check create a room", async () => {
     const name = `adm-bypass-${crypto.randomUUID()}`;
     const res = await privateRoom(name).fetch(new Request(partyUrl("race-room", name)));

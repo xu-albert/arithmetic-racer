@@ -367,16 +367,22 @@ export class RaceRoom extends Server {
    * never into a room with no human seat, whose lifetime it would only
    * extend. Anything but an explicit 'fresh' takes these checks, so a request
    * that bypassed the Worker cannot create a room either.
+   *
+   * A refusal answers before partyserver initializes, so it cannot read
+   * this.name: an instance an alarm woke has no ctx.id.name, and the getter's
+   * fallback is the `__ps_name` record only that initialization loads.
    */
   async fetch(request) {
     const verdict = request.headers.get(ADMISSION_HEADER);
     if (verdict !== 'fresh') {
       const stored = await this.ctx.storage.get('state');
+      const refuse = async (reason) =>
+        refuseAdmission(request, this.ctx.id.name ?? await this.ctx.storage.get('__ps_name'), reason);
       if (stored == null || stored.state === EXPIRED_ROOM_STATE) {
-        return refuseAdmission(request, this.name, INVITE_EXPIRED_REASON);
+        return refuse(INVITE_EXPIRED_REASON);
       }
       if (verdict !== 'stale' && !stored.players.some((p) => !p.isBot)) {
-        return refuseAdmission(request, this.name, INVITE_INVALID_REASON);
+        return refuse(INVITE_INVALID_REASON);
       }
     }
     return super.fetch(request);
