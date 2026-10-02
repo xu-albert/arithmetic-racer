@@ -22,7 +22,10 @@
 //   LOOPS_TEMPLATE_WELCOME   — transactionalId for the welcome template
 //   LOOPS_TEMPLATE_RESET     — transactionalId for the password-reset template
 //                              (template must declare a `resetUrl` variable)
-//   BETTER_AUTH_SECRET       — random 32+ byte secret used by better-auth
+//   BETTER_AUTH_SECRET       — random 32+ byte secret used by better-auth; also
+//                              the root of the room admission-pass key
+//                              (server/admission-pass.js), so private rooms
+//                              and Quick Match answer 503 without it
 //   BETTER_AUTH_URL          — optional explicit base URL (better-auth derives
 //                              one from the request if absent)
 //
