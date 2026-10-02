@@ -15,6 +15,21 @@ const publicRoom = (name) => env.PublicRaceRoom.get(env.PublicRaceRoom.idFromNam
 /** A pass for `name` issued `ageMs` ago; past ADMISSION_PASS_TTL_MS it is stale. */
 const passAged = (name, mode, ageMs) => issueAdmissionPass(env, name, mode, Date.now() - ageMs);
 
+/**
+ * Runs a rate-limit flood inside one limiter window. The local ratelimit
+ * simulator buckets by `floor(now / period)`, so a flood that straddles a
+ * minute boundary sees its counter reset partway; when that happens the flood
+ * is re-run once on a fresh key (`attempt` picks the address), which a 60s
+ * window cannot cross twice in a test's span.
+ */
+async function inOneWindow(flood) {
+  for (let attempt = 0; ; attempt++) {
+    const epoch = Math.floor(Date.now() / MINUTE);
+    const result = await flood(attempt);
+    if (Math.floor(Date.now() / MINUTE) === epoch || attempt > 0) return result;
+  }
+}
+
 const partyUrl = (party, roomId, admission) =>
   `https://admission.test/parties/${party}/${roomId}${admission ? `?admission=${encodeURIComponent(admission)}` : ""}`;
 
@@ -123,13 +138,16 @@ describe("nothing without a pass creates a room or takes a new seat", () => {
   });
 
   it("caps room creation attempts from one IP", async () => {
-    const responses = [];
-    for (let i = 0; i < 11; i++) {
-      responses.push(await SELF.fetch("https://admission.test/api/rooms", {
-        method: "POST",
-        headers: { "cf-connecting-ip": "203.0.113.77" },
-      }));
-    }
+    const responses = await inOneWindow(async (attempt) => {
+      const flood = [];
+      for (let i = 0; i < 11; i++) {
+        flood.push(await SELF.fetch("https://admission.test/api/rooms", {
+          method: "POST",
+          headers: { "cf-connecting-ip": `203.0.113.${77 + attempt}` },
+        }));
+      }
+      return flood;
+    });
     expect(responses.slice(0, 10).every((response) => response.status === 200)).toBe(true);
     expect(responses[10].status).toBe(429);
     expect(responses[10].headers.get("retry-after")).toBe("60");
@@ -140,22 +158,29 @@ describe("nothing without a pass creates a room or takes a new seat", () => {
       method: "POST",
       headers: { "cf-connecting-ip": ip },
     });
-    const statuses = [];
-    for (let i = 0; i < 11; i++) statuses.push((await create(`2001:db8:77:1::${(i + 1).toString(16)}`)).status);
+    const statuses = await inOneWindow(async (attempt) => {
+      const flood = [];
+      for (let i = 0; i < 11; i++) flood.push((await create(`2001:db8:77:${1 + 2 * attempt}::${(i + 1).toString(16)}`)).status);
+      return flood;
+    });
     expect(statuses.slice(0, 10).every((status) => status === 200)).toBe(true);
     expect(statuses[10]).toBe(429);
     expect((await create("2001:db8:77:2::1")).status).toBe(200);
   });
 
   it("caps /parties/* requests from one IPv6 /64, however its addresses rotate", async () => {
-    const statuses = [];
-    for (let i = 0; i < 301; i++) {
-      const res = await SELF.fetch(partyUrl("lobby-router", `adm-flood-${i}`), {
-        headers: { "cf-connecting-ip": `2001:db8:88:1::${(i + 1).toString(16)}` },
-      });
-      statuses.push(res.status);
-      if (i === 300) expect(res.headers.get("retry-after")).toBe("60");
-    }
+    const { statuses, retryAfter } = await inOneWindow(async (attempt) => {
+      const flood = [];
+      let last;
+      for (let i = 0; i < 301; i++) {
+        last = await SELF.fetch(partyUrl("lobby-router", `adm-flood-${i}`), {
+          headers: { "cf-connecting-ip": `2001:db8:88:${1 + 2 * attempt}::${(i + 1).toString(16)}` },
+        });
+        flood.push(last.status);
+      }
+      return { statuses: flood, retryAfter: last.headers.get("retry-after") };
+    });
+    expect(retryAfter).toBe("60");
     expect(statuses.slice(0, 300).every((status) => status === 403)).toBe(true);
     expect(statuses[300]).toBe(429);
     const neighbour = await SELF.fetch(partyUrl("lobby-router", "adm-flood-neighbour"), {
