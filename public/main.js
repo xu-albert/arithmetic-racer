@@ -304,12 +304,14 @@ createRoomBtn.addEventListener('click', async () => {
 
 const expiredHomeBtn = document.getElementById('expired-home-btn');
 const expiredNewRoomBtn = document.getElementById('expired-new-room-btn');
+const expiredFindMatchBtn = document.getElementById('expired-find-match-btn');
 
-expiredHomeBtn?.addEventListener('click', () => {
-  // Full navigation, not showScreen: the URL still carries ?room=<dead id>,
-  // and a reload of it would land right back on this screen.
-  location.assign('/');
-});
+// Full navigation, not showScreen: the URL still carries ?room=<dead id>,
+// and a reload of it would land right back on this screen. Home is also where
+// Find a Match lives, so a refused Quick Match leaves the same way.
+for (const btn of [expiredHomeBtn, expiredFindMatchBtn]) {
+  btn?.addEventListener('click', () => location.assign('/'));
+}
 
 expiredNewRoomBtn?.addEventListener('click', async () => {
   expiredNewRoomBtn.disabled = true;

@@ -20,6 +20,9 @@ async function connect(roomId) {
     messages,
     send(message) { socket.send(JSON.stringify(message)); },
     close() { socket.close(); },
+    // Stop the next wait from matching a frame that has already arrived, so it
+    // can only be answered by something sent after this call.
+    skip() { cursor = messages.length; },
     async wait(predicate) {
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline) {
@@ -218,6 +221,9 @@ it('a departed seat keeps its place until rematch: replacement refused, original
       expect(room.state.players).toHaveLength(10);
     });
 
+    // The pre-race lobby already sent a ten-seat snapshot; without the skip
+    // that one satisfies the wait and start-race can reach a 'finished' room.
+    clients[0].skip();
     clients[0].send({ type: 'rematch' });
     await clients[0].wait((m) => m.type === 'state' && m.state.state === 'lobby'
       && m.state.players.length === 10);
