@@ -6,8 +6,10 @@
 //     or mints a new prefixed one ('e-...', 'm-...', 'h-...'). The prefix
 //     lets PublicRaceRoom derive difficulty from its own DO name instead
 //     of trusting the client's hello — closes the difficulty-hijack vector.
-//   - PublicRaceRoom calls release(roomId) when the room locks (6 players) or
-//     when it auto-starts. Idempotent if currentRoomId no longer matches.
+//   - PublicRaceRoom calls release(roomId) whenever it stops being the room
+//     to send joiners to (full, started or emptied), and retries a failed
+//     call — see releaseLobby() in public-room.js. Idempotent if
+//     currentRoomId no longer matches.
 
 import { DurableObject } from "cloudflare:workers";
 import { generateRoomId } from "./room-id.js";

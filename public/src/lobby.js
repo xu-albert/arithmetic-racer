@@ -332,6 +332,17 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
     showToast(msg, 'error');
   }
 
+  // Quick match only: the room refused this page (full, started, or
+  // finished). Nothing it broadcasts from here on is ours to show, so drop
+  // the socket and its roster and point the player at a fresh match.
+  function showRefused() {
+    client.close();
+    playersList.innerHTML = '';
+    searchingPill.classList.add('hidden');
+    findAnotherBtn.classList.remove('hidden');
+    hint.textContent = 'That match is no longer open — find another one.';
+  }
+
   // ----- subscribe -----
   const handleExpiry = createExpiryLatch({
     close: () => client.close(),
@@ -392,6 +403,7 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
       }
     } else if (msg.type === 'error') {
       showError(msg.message || msg.code);
+      if (isPublic && !raceStartHandled && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) showRefused();
     }
   });
 
