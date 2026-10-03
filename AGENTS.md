@@ -89,11 +89,13 @@ Traps this arrangement sets:
   that mutates race state has to `persist()` for itself. Coverage:
   `server/room-answer-persistence.test.js`.
 - **`PublicRaceRoom.expiresWhenIdle()` returns false**, and everything winddown
-  reads that hook. Quickmatch rooms are single-shot and unlinkable — expiring
-  one would strand a player on a screen whose only exit is a room they cannot
-  reach. Gate any new lifecycle behavior on the same hook. It is also why the
-  race deadline above is not gated on it: quickmatch has no winddown to fall
-  back on, so it is the only thing bounding a public race.
+  reads that hook. Quickmatch rooms are single-shot and unlinkable, so
+  auto-start and idle cleanup already reclaim them. A refused socket still
+  lands a Quick Match player on the expired screen, which is why
+  `expiredScreen()` picks its copy and exit by mode. Gate any new lifecycle
+  behavior on the same hook. It is also why the race deadline above is not
+  gated on it: quickmatch has no winddown to fall back on, so it is the only
+  thing bounding a public race.
 - **The race grace is not the solo game's `GRACE_PERIOD_MS`** (5s, in
   `public/src/runner.js`). That one is armed by the human's own finish, so the
   racers it cuts off are always bots; in a room they are people, and
@@ -146,30 +148,40 @@ that hold it together:
   places such state is born both mark `state.unjoined` and arm the alarm:
   `reserveRoomName()`, and `onStart()` on a fresh mint. The second one is not
   optional — partyserver runs `onStart` before it looks at the `Upgrade` header,
-  so a plain `GET /parties/race-room/<name>` persists a lobby and then 404s,
-  and unmarked those rows would 503 every real creation for good.
+  so a plain `GET /parties/race-room/<name>` carrying an unexpired pass
+  persists a lobby and then 404s, and unmarked those rows would 503 every real
+  creation for good.
   An unjoined room winds down after `UNJOINED_ROOM_IDLE_MS` (2 min) instead of
-  `PRIVATE_ROOM_IDLE_MS`, because both paths are unauthenticated and unmetered
-  by design: at a 30-minute hold, a few requests a second would take all 13,248
-  names. Two minutes is generous for the only client that legitimately holds a
-  name it has not joined — the creator's socket is opening while the `POST`
-  response is still in flight. The flag is dropped by the first seat
-  `handleHello()` creates, so the short clock can never shorten a room somebody
-  is in, nor one that emptied out after having someone (the idle-cleanup
-  re-mint carries the clock forward and never re-marks it). The cost accepted in
-  exchange is that every created room — joined or not — leaves a storage row, on
-  the same reasoning as the tombstone row above.
+  `PRIVATE_ROOM_IDLE_MS`, because `POST /api/rooms` is unauthenticated and
+  metered only by a coarse per-IP ceiling: at a 30-minute hold, a few requests
+  a second would take all 13,248 names. Two minutes is generous for the only
+  client that legitimately holds a name it has not joined — the creator's
+  socket is opening while the `POST` response is still in flight. The flag is
+  dropped by the first seat `handleHello()` creates, so the short clock can
+  never shorten a room somebody is in, nor one that emptied out after having
+  someone (the idle-cleanup re-mint carries the clock forward and never
+  re-marks it). The cost accepted in exchange is that every created room —
+  joined or not — leaves a storage row, on the same reasoning as the tombstone
+  row above.
 
 Exhausting the attempts is a `503`, never a fallback to the last name drawn;
 `public/main.js`'s create-room button already surfaces a non-ok response. A
 throwing reservation counts as taken for the same reason — an unproven claim is
 not a name we own. Coverage: `server/room-allocation.test.js`.
 
-Private rooms are **unlisted, not access-controlled**, and that is a deliberate
-product decision rather than a gap to close: the name is the only credential and
-the namespace is cheap to enumerate. Reserving fixes who *creates* a room, not
-who can reach one. Do not add a join capability, invite code or admission check
-without a fresh decision.
+Private rooms are **unlisted, not account-controlled**, and that is a deliberate
+product decision rather than a gap to close: the room name is still cheap to
+enumerate, but a *new* seat needs a server-signed admission pass for that room
+and mode. It rides in the invite link; the Worker checks it on every
+`/parties/*` request (and caps those per IP) and hands the room its verdict. A
+seat is its own admission: a `hello` presenting a seated racerId reconnects
+with or without a pass, so open pages survive a deploy. The pass's 10-minute
+expiry bounds only creating or reviving room state — `RaceRoom.fetch` refuses,
+before `onStart` can mint anything, whatever is not a fresh pass when the room
+has no live state, and a pass-less request when it has no human seat. Reserving
+fixes who *creates* a room, while the pass stops a guessed name from minting
+room state or seating a bot. Do not add a join capability, invite code or
+account admission check without a fresh decision.
 
 ## Every one-shot room broadcast needs a snapshot equivalent
 

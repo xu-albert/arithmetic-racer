@@ -16,7 +16,9 @@ function makeConn(label) {
     label,
     id: "sock-" + crypto.randomUUID(),
     sent: [],
-    state: undefined,
+    // Direct handler tests stand in for a socket the Worker admitted with a
+    // signed room pass; without this marker a new hello is correctly refused.
+    state: { hasAdmissionPass: true },
     send(s) { this.sent.push(JSON.parse(s)); },
     setState(s) { this.state = s; },
     lastOf(type) { return [...this.sent].reverse().find((m) => m.type === type) ?? null; },

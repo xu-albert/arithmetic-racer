@@ -3,8 +3,11 @@
 import { it, expect } from 'vitest';
 import { env, SELF, runInDurableObject } from 'cloudflare:test';
 
+const admissionPasses = new Map();
+
 async function connect(roomId) {
-  const response = await SELF.fetch(`https://ten.test/parties/race-room/${roomId}`, {
+  const admission = encodeURIComponent(admissionPasses.get(roomId));
+  const response = await SELF.fetch(`https://ten.test/parties/race-room/${roomId}?admission=${admission}`, {
     headers: { Upgrade: 'websocket' },
   });
   expect(response.status).toBe(101);
@@ -17,6 +20,9 @@ async function connect(roomId) {
     messages,
     send(message) { socket.send(JSON.stringify(message)); },
     close() { socket.close(); },
+    // Stop the next wait from matching a frame that has already arrived, so it
+    // can only be answered by something sent after this call.
+    skip() { cursor = messages.length; },
     async wait(predicate) {
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline) {
@@ -36,7 +42,8 @@ async function connect(roomId) {
 it('ten private-room players join, race concurrently, receive all standings, and store ten results', async () => {
   const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
   expect(created.ok).toBe(true);
-  const { roomId } = await created.json();
+  const { roomId, admissionPass } = await created.json();
+  admissionPasses.set(roomId, admissionPass);
   const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
   const clients = [];
   try {
@@ -133,7 +140,8 @@ it('ten private-room players join, race concurrently, receive all standings, and
 
 it('refuses an 11th new racer in lobby and finished states, but still accepts a seated reconnect', async () => {
   const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
-  const { roomId } = await created.json();
+  const { roomId, admissionPass } = await created.json();
+  admissionPasses.set(roomId, admissionPass);
   const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
   const clients = [];
   const racerIds = [];
@@ -174,7 +182,8 @@ it('refuses an 11th new racer in lobby and finished states, but still accepts a 
 
 it('a departed seat keeps its place until rematch: replacement refused, original reconnects, never more than ten seats', async () => {
   const created = await SELF.fetch('https://ten.test/api/rooms', { method: 'POST' });
-  const { roomId } = await created.json();
+  const { roomId, admissionPass } = await created.json();
+  admissionPasses.set(roomId, admissionPass);
   const stub = env.RaceRoom.get(env.RaceRoom.idFromName(roomId));
   const clients = [];
   const racerIds = [];
@@ -212,6 +221,9 @@ it('a departed seat keeps its place until rematch: replacement refused, original
       expect(room.state.players).toHaveLength(10);
     });
 
+    // The pre-race lobby already sent a ten-seat snapshot; without the skip
+    // that one satisfies the wait and start-race can reach a 'finished' room.
+    clients[0].skip();
     clients[0].send({ type: 'rematch' });
     await clients[0].wait((m) => m.type === 'state' && m.state.state === 'lobby'
       && m.state.players.length === 10);

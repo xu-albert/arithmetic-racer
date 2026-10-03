@@ -22,6 +22,7 @@ import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 
 const TRANSCRIPT = [];
 const log = (line = "") => TRANSCRIPT.push(line);
+const admissionPasses = new Map();
 
 function tick(ms = 5) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -29,7 +30,8 @@ function tick(ms = 5) {
 
 /** A browser-equivalent client: real socket, real JSON wire messages. */
 async function connect(roomId, label) {
-  const res = await SELF.fetch(`https://e2e.test/parties/race-room/${roomId}`, {
+  const admission = encodeURIComponent(admissionPasses.get(roomId));
+  const res = await SELF.fetch(`https://e2e.test/parties/race-room/${roomId}?admission=${admission}`, {
     headers: { Upgrade: "websocket" },
   });
   expect(res.status).toBe(101);
@@ -85,7 +87,8 @@ const inRoom = (roomId, fn) => runInDurableObject(roomStub(roomId), fn);
 
 async function createRoom() {
   const res = await SELF.fetch("https://e2e.test/api/rooms", { method: "POST" });
-  const { roomId } = await res.json();
+  const { roomId, admissionPass } = await res.json();
+  admissionPasses.set(roomId, admissionPass);
   return roomId;
 }
 

@@ -2,7 +2,9 @@ import { Server } from 'partyserver';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
 import { isConfigurableState } from '../public/src/room-config-rules.js';
-import { EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE } from '../public/src/room-expiry.js';
+import {
+  EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE, INVITE_EXPIRED_REASON, INVITE_INVALID_REASON,
+} from '../public/src/room-expiry.js';
 import { CATCHUP_MAX_ENTRIES_PER_PROBLEM } from '../public/src/catch-up-rules.js';
 import { insertRaceResult, MAX_DEVICE_ID_LENGTH } from '../worker/race-result-store.js';
 import { CAPTCHA_PROBLEM_COUNT } from '../worker/plausibility.js';
@@ -13,6 +15,7 @@ import {
   needsCaptchaTrigger, newCaptchaSeed, captchaProblems, captchaWireProblems, captchaDeadline,
 } from './captcha.js';
 import { createSocketLimiter } from './socket-limit.js';
+import { ADMISSION_HEADER } from './admission-pass.js';
 
 // Mirrors public/src/runner.js values. The default race length is not here —
 // it is `raceLength` in freshState() below, which the leaderboards filter on.
@@ -104,8 +107,26 @@ export const ALARM_SLOP_MS = 60 * 1000;
 
 // Public wire payload for a wound-down room. Sent to anyone attached when the
 // winddown happens, and to anyone who connects to the tombstone afterwards.
-export function expiredMessage(roomId) {
-  return JSON.stringify({ type: ROOM_EXPIRED_TYPE, reason: 'idle', roomId });
+export function expiredMessage(roomId, reason = 'idle') {
+  return JSON.stringify({ type: ROOM_EXPIRED_TYPE, reason, roomId });
+}
+
+/**
+ * The answer to a request refused admission to room `roomId`, before any room
+ * state is touched. An upgrade is still answered as a socket: the browser hides
+ * an upgrade's HTTP status, so a bare 403 reads to the client as a dropped
+ * connection that PartySocket retries forever. This one says why and closes,
+ * and the client's expiry latch stops reconnecting.
+ */
+export function refuseAdmission(request, roomId, reason) {
+  if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+    return Response.json({ error: 'admission_refused', reason }, { status: 403 });
+  }
+  const { 0: client, 1: server } = new WebSocketPair();
+  server.accept();
+  server.send(expiredMessage(roomId, reason));
+  server.close(1000, 'admission refused');
+  return new Response(null, { status: 101, webSocket: client });
 }
 
 // The room's whole client protocol: dispatch table and activity gate at once,
@@ -335,6 +356,38 @@ export class RaceRoom extends Server {
     return true;
   }
 
+  /**
+   * Every request the Worker lets through carries its pass's verdict: 'fresh',
+   * 'stale', or 'none'. Only a fresh pass may be what creates or revives a
+   * room, and onStart, which super.fetch runs first, does exactly that for a
+   * name with no state or a tombstone past its TTL — so anything else is
+   * refused here unless the room is alive. A stale pass joins a live room
+   * however old it is; no pass at all gets in only as a possible seat holder
+   * (handleHello admits a seat's racerId without a pass, and nothing else), so
+   * never into a room with no human seat, whose lifetime it would only
+   * extend. Anything but an explicit 'fresh' takes these checks, so a request
+   * that bypassed the Worker cannot create a room either.
+   *
+   * A refusal answers before partyserver initializes, so it cannot read
+   * this.name: an instance an alarm woke has no ctx.id.name, and the getter's
+   * fallback is the `__ps_name` record only that initialization loads.
+   */
+  async fetch(request) {
+    const verdict = request.headers.get(ADMISSION_HEADER);
+    if (verdict !== 'fresh') {
+      const stored = await this.ctx.storage.get('state');
+      const refuse = async (reason) =>
+        refuseAdmission(request, this.ctx.id.name ?? await this.ctx.storage.get('__ps_name'), reason);
+      if (stored == null || stored.state === EXPIRED_ROOM_STATE) {
+        return refuse(INVITE_EXPIRED_REASON);
+      }
+      if (verdict !== 'stale' && !stored.players.some((p) => !p.isBot)) {
+        return refuse(INVITE_INVALID_REASON);
+      }
+    }
+    return super.fetch(request);
+  }
+
   async onStart() {
     const stored = await this.ctx.storage.get('state');
     this.state = stored ?? this.freshState(this.name);
@@ -401,7 +454,11 @@ export class RaceRoom extends Server {
     // entry. Client-supplied values are stripped/overwritten there, so this
     // is trustworthy. Null for anon users.
     const userId = ctx?.request?.headers?.get('x-arithmetic-user-id') ?? null;
-    connection.setState({ ...(connection.state ?? {}), userId });
+    // Whether this socket carried a pass signed for this room, of any age —
+    // the Worker's verdict, stamped like the user id. Only a new seat needs one.
+    const admission = ctx?.request?.headers?.get(ADMISSION_HEADER);
+    const hasAdmissionPass = admission === 'fresh' || admission === 'stale';
+    connection.setState({ ...(connection.state ?? {}), userId, hasAdmissionPass });
 
     // Don't add player yet — wait for `hello`.
     connection.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre: null }));
@@ -666,6 +723,14 @@ export class RaceRoom extends Server {
       await this.persist();
       this.broadcastState();
       await this.scheduleNextAlarm();
+      return;
+    }
+
+    // A seat is its own admission — the reconnect above needs no pass, so an
+    // open page survives a deploy or a dropped socket — but a new seat does.
+    if (!connection.state?.hasAdmissionPass) {
+      connection.send(expiredMessage(this.name, INVITE_INVALID_REASON));
+      closeQuietly(connection, 'admission refused');
       return;
     }
 

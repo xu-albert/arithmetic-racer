@@ -16,9 +16,9 @@
 //   - a reservation nobody joins releases its name on the short unjoined clock,
 //     while a room somebody is in keeps the full private-room idle lifetime
 //   - a name is never spent permanently by a request that merely minted room
-//     state without joining it — a plain GET to /parties/race-room/<name> does
-//     that, because partyserver initializes the room before it looks for an
-//     Upgrade header
+//     state without joining it — a plain GET to /parties/race-room/<name> that
+//     carries an unexpired pass does that, because partyserver initializes the
+//     room before it looks for an Upgrade header
 //
 // The reservation is atomic because a Durable Object is single-threaded per
 // name: reserveRoomName() reads and writes storage inside one RPC, so two
@@ -31,6 +31,7 @@ import { env, runInDurableObject, SELF } from "cloudflare:test";
 import worker from "./server.js";
 import { generateRoomId, allocateRoomId, ROOM_ID_ATTEMPTS } from "./room-id.js";
 import { PRIVATE_ROOM_IDLE_MS, UNJOINED_ROOM_IDLE_MS } from "./room.js";
+import { issueAdmissionPass, ADMISSION_HEADER } from "./admission-pass.js";
 import { EXPIRED_ROOM_STATE } from "../public/src/room-expiry.js";
 
 let connSeq = 0;
@@ -76,7 +77,7 @@ async function occupy(name, handle = "Alice") {
   return withPrivateRoom(name, async (room, { conns }) => {
     const conn = makeConn({ userId: null });
     conns.push(conn);
-    await room.onConnect(conn, { request: { headers: new Headers() } });
+    await room.onConnect(conn, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
     await room.onMessage(conn, JSON.stringify({
       type: "hello", playerId: crypto.randomUUID(), handle, deviceId: `dev-${handle}`,
     }));
@@ -167,8 +168,10 @@ describe("allocateRoomId reserves a free name", () => {
 
     // Not an upgrade, so nobody joins anything — but partyserver initializes the
     // room (and onStart persists live state) before it ever reads the Upgrade
-    // header, so the name is now held by a room with no players.
-    const res = await SELF.fetch(`https://racer.test/parties/race-room/${name}`);
+    // header, so the name is now held by a room with no players. Only a request
+    // carrying an unexpired pass for the name gets that far.
+    const admission = encodeURIComponent(await issueAdmissionPass(env, name, "private"));
+    const res = await SELF.fetch(`https://racer.test/parties/race-room/${name}?admission=${admission}`);
     expect(res.status).toBe(404);
     expect(await reserve(name)).toBe(false);
 
@@ -295,14 +298,14 @@ describe("POST /api/rooms never hands back a live room", () => {
 
     const res = await createRoom();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ roomId });
+    expect(await res.json()).toMatchObject({ roomId, admissionPass: expect.any(String) });
 
     // And it is the caller's own room: their first connection reaches a lobby
     // where they are the creator.
     await withPrivateRoom(roomId, async (room, { conns }) => {
       const creator = makeConn({ userId: null });
       conns.push(creator);
-      await room.onConnect(creator, { request: { headers: new Headers() } });
+      await room.onConnect(creator, { request: { headers: new Headers({ [ADMISSION_HEADER]: "fresh" }) } });
       expect(creator.closed).toBeNull();
       await room.onMessage(creator, JSON.stringify({
         type: "hello", playerId: crypto.randomUUID(), handle: "Creator", deviceId: "dev-creator",

@@ -12,7 +12,10 @@ export default defineConfig({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
         compatibilityFlags: ["nodejs_compat"],
-        bindings: { TEST_MIGRATIONS: migrations },
+        bindings: {
+          TEST_MIGRATIONS: migrations,
+          BETTER_AUTH_SECRET: "test-better-auth-secret-0123456789",
+        },
       },
     }),
   ],

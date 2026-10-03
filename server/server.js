@@ -10,7 +10,6 @@
 // falls through to env.ASSETS.
 
 import { routePartykitRequest } from "partyserver";
-import { allocateRoomId } from "./room-id.js";
 import { handleRaceResult } from "../worker/routes/race-result.js";
 import { handleGetMe, handleGetMyRaces, handlePostUsername, handleByDevice } from "../worker/routes/me.js";
 import { getAuth } from "../worker/auth.js";
@@ -20,9 +19,34 @@ import { handleAdminIndex, handleAdminUser, handleAdminContactHandled } from "..
 import { handleContact } from "../worker/routes/contact.js";
 import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 import { handleLeaderboard } from "../worker/routes/leaderboard.js";
-import { logError, KINDS } from "../worker/logger.js";
+import { handleCreateRoom } from "../worker/routes/rooms.js";
+import { checkAdmissionPass, ADMISSION_HEADER } from "./admission-pass.js";
+import { refuseAdmission } from "./room.js";
+import { INVITE_INVALID_REASON } from "../public/src/room-expiry.js";
+import { allowRequest, clientIpBucket } from "../worker/rate-limit.js";
 
 const USER_ID_HEADER = "x-arithmetic-user-id";
+// Must match PARTIES_IP_LIMIT's period in wrangler.jsonc.
+const PARTIES_RATE_LIMIT_WINDOW_S = 60;
+
+// The pass mode each routable room class admits, keyed by the class name
+// partyserver resolves a /parties/<party>/<name> path to. Anything else it can
+// route to admits nobody.
+const ADMISSION_MODES = { RaceRoom: "private", PublicRaceRoom: "public" };
+
+// Checked against the name and class partyserver is about to route to. The
+// verdict — 'fresh', 'stale', or 'none' for a missing or forged pass — goes on
+// to the room, which alone knows what it admits: whether it is alive, and
+// whether a hello's racerId already holds a seat (RaceRoom.fetch and
+// handleHello). Set on every request, so no client value survives.
+async function admit(request, lobby, env) {
+  const mode = ADMISSION_MODES[lobby.className];
+  if (!mode) return refuseAdmission(request, lobby.name, INVITE_INVALID_REASON);
+  const pass = new URL(request.url).searchParams.get("admission");
+  const verdict = await checkAdmissionPass(env, pass, { roomId: lobby.name, mode });
+  request.headers.set(ADMISSION_HEADER, verdict ?? "none");
+  return request;
+}
 
 export { RaceRoom } from "./room.js";
 export { LobbyRouter } from "./lobby-router.js";
@@ -95,23 +119,7 @@ export default {
 
     // Phase 6 — private multiplayer rooms
     if (request.method === "POST" && pathname === "/api/rooms") {
-      // Creating a room is the one moment we know a name is being claimed
-      // anew, so the name is *reserved* here rather than merely drawn: the
-      // namespace is ~13k words and a draw can land on a live room, whose
-      // lobby the caller must never be handed as their own. Reserving also
-      // clears an expired-room tombstone sitting on the name — otherwise the
-      // creator opens their brand-new room onto the "room expired" screen.
-      const roomId = await allocateRoomId(env, {
-        onError: (e, id) => logError(KINDS.ROOM_CLAIM_FAILED, e, { roomId: id }),
-      });
-      // Every draw was taken. Rare enough to be a load signal rather than a
-      // routine outcome, and the client already surfaces a non-ok response as
-      // "could not create room", so fail loudly instead of returning a name we
-      // could not reserve.
-      if (roomId == null) {
-        return Response.json({ error: "no room name available" }, { status: 503 });
-      }
-      return Response.json({ roomId });
+      return handleCreateRoom(request, env);
     }
 
     // Stamp the resolved user_id on race-room upgrades so the DO can
@@ -125,6 +133,16 @@ export default {
     // path that can reach a room DO then passes the gate.
     let upgradeRequest = request;
     const normalizedPathname = pathname.replace(/\/{2,}/g, "/");
+    // A coarse per-IP ceiling on everything that can reach a Durable Object,
+    // ahead of the session lookup and the pass check below.
+    if (normalizedPathname.startsWith("/parties/")) {
+      if (!(await allowRequest(env.PARTIES_IP_LIMIT, clientIpBucket(request), "PARTIES_IP_LIMIT"))) {
+        return Response.json({ error: "rate_limited" }, {
+          status: 429,
+          headers: { "retry-after": String(PARTIES_RATE_LIMIT_WINDOW_S) },
+        });
+      }
+    }
     if (
       normalizedPathname.startsWith("/parties/race-room/")
       || normalizedPathname.startsWith("/parties/public-race-room/")
@@ -142,7 +160,10 @@ export default {
         redirect: request.redirect,
       });
     }
-    const partyResponse = await routePartykitRequest(upgradeRequest, env);
+    const partyResponse = await routePartykitRequest(upgradeRequest, env, {
+      onBeforeConnect: (req, lobby) => admit(req, lobby, env),
+      onBeforeRequest: (req, lobby) => admit(req, lobby, env),
+    });
     if (partyResponse) return partyResponse;
 
     // Static assets (HTML, CSS, JS, etc.)

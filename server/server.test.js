@@ -12,6 +12,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { _setTestUserId } from "../worker/session.js";
+import { issueAdmissionPass } from "./admission-pass.js";
 
 function tick(ms = 5) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -29,7 +30,10 @@ async function seatedUserId(pathname, { header, sessionUserId }) {
     const name = pathname.includes("public-race-room")
       ? `e-${crypto.randomUUID()}`
       : `gate-${crypto.randomUUID()}`;
-    const res = await SELF.fetch(`https://gate.test${pathname.replace("<name>", name)}`, {
+    const admissionPass = await issueAdmissionPass(env, name,
+      pathname.includes("public-race-room") ? "public" : "private");
+    const admission = `?admission=${encodeURIComponent(admissionPass)}`;
+    const res = await SELF.fetch(`https://gate.test${pathname.replace("<name>", name)}${admission}`, {
       headers: {
         Upgrade: "websocket",
         ...(header ? { "x-arithmetic-user-id": header } : {}),

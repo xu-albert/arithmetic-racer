@@ -7,14 +7,17 @@ import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDevice
  * @param {string} [opts.mode]        - 'public' routes to public-race-room party
  * @param {string} [opts.difficulty]  - included in hello for public mode
  * @param {string} [opts.deviceId]    - included in hello for public mode
+ * @param {string} [opts.admissionPass] - short-lived server-issued room pass
  */
-export function createRoomClient({ roomId, mode, difficulty, deviceId } = {}) {
+export function createRoomClient({ roomId, mode, difficulty, deviceId, admissionPass } = {}) {
   const party = mode === 'public' ? 'public-race-room' : 'race-room';
 
+  // Checked by the Worker on every connection, a reconnect included.
   const ws = new PartySocket({
     host: location.host,
     party,
     room: roomId,
+    query: { admission: admissionPass },
   });
   const listeners = new Set();
   // Fired on every (re)open, after hello has been sent. The catch-up batch a

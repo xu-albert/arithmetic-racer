@@ -21,6 +21,7 @@ import { soloResultPayload } from './src/solo-result.js';
 import { getOrCreateDeviceId, getOrCreateAnonHandle } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
+import { expiredScreen } from './src/room-expiry.js';
 
 // Cache of the logged-in user's username — set by the `session-ready`
 // event dispatched by header.js after its /api/me fetch. Saves a duplicate
@@ -168,31 +169,45 @@ function handleRoomRaceStart({ roomClient, initialState, youAre }) {
   cleanupRace = attachRaceUI({ runner, raceLength: initialState.raceLength, screens });
 }
 
-// Terminal state for a private room: the server wound it down after 30 minutes
-// of inactivity. Tear everything room-shaped down so nothing keeps rendering
-// against a room that no longer exists, then offer the two ways out.
-function handleRoomExpired() {
+// Terminal state for a room link: the server wound the room down after 30
+// minutes of inactivity, the room is gone, or this page can neither reclaim a
+// seat nor show a pass for a new one. Tear everything room-shaped down so
+// nothing keeps rendering against a room this page cannot reach, then offer
+// the ways out that fit the room: a new room, or another Quick Match.
+function handleRoomExpired(msg, mode) {
   if (cleanupRace) { cleanupRace(); cleanupRace = null; }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
   document.getElementById('invite-modal')?.classList.add('hidden');
+  const { copy, exit } = expiredScreen(msg, mode);
+  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-copy]') ?? []) {
+    el.classList.toggle('hidden', el.dataset.expiredCopy !== copy);
+  }
+  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-exit]') ?? []) {
+    el.classList.toggle('hidden', el.dataset.expiredExit !== exit);
+  }
   showScreen('room-expired');
   // The switch can happen while the player is staring at the race screen, so
   // move focus rather than leaving a screen reader on a lane that just vanished.
   screens['room-expired']?.focus();
 }
 
-function enterRoom(roomId, { mode, difficulty } = {}) {
-  if (!mode) history.replaceState(null, '', `/?room=${roomId}`);
+function enterRoom(roomId, { mode, difficulty, admissionPass } = {}) {
+  if (!mode) {
+    const url = new URL('/?room=' + encodeURIComponent(roomId), location.origin);
+    if (admissionPass) url.searchParams.set('admission', admissionPass);
+    history.replaceState(null, '', url.href);
+  }
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   lobbyHandle = attachLobby({
     roomId,
     screens,
     onRaceStart: handleRoomRaceStart,
-    onRoomExpired: handleRoomExpired,
+    onRoomExpired: (msg) => handleRoomExpired(msg, mode),
     mode,
     difficulty,
     deviceId: getOrCreateDeviceId(),
+    admissionPass,
   });
   cleanupCaptcha = attachCaptchaUI({ client: lobbyHandle.client });
   showScreen('lobby-room');
@@ -219,8 +234,7 @@ document.addEventListener('auth-changed', (e) => {
 async function createRoom() {
   const res = await fetch('/api/rooms', { method: 'POST' });
   if (!res.ok) throw new Error(`Failed: ${res.status}`);
-  const { roomId } = await res.json();
-  return roomId;
+  return res.json();
 }
 
 // ---- Initial routing ----------------------------------------------------
@@ -229,9 +243,10 @@ const params = new URLSearchParams(location.search);
 const initialRoomId = params.get('room');
 const initialMode = params.get('mode') ?? undefined;
 const initialDifficulty = params.get('difficulty') ?? undefined;
+const initialAdmissionPass = params.get('admission') ?? undefined;
 
 if (initialRoomId) {
-  enterRoom(initialRoomId, { mode: initialMode, difficulty: initialDifficulty });
+  enterRoom(initialRoomId, { mode: initialMode, difficulty: initialDifficulty, admissionPass: initialAdmissionPass });
 } else {
   lobbyDiffButtons.forEach((btn) => {
     btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
@@ -261,11 +276,11 @@ findMatchBtn?.addEventListener('click', async () => {
   findMatchBtn.disabled = true;
   matchStatus.textContent = 'Searching…';
   try {
-    const { roomId, difficulty } = await joinMatchmaking({
+    const { roomId, difficulty, admissionPass } = await joinMatchmaking({
       difficulty: diff,
       deviceId: getOrCreateDeviceId(),
     });
-    window.location.href = `/?room=${encodeURIComponent(roomId)}&mode=public&difficulty=${encodeURIComponent(difficulty)}`;
+    window.location.href = `/?room=${encodeURIComponent(roomId)}&mode=public&difficulty=${encodeURIComponent(difficulty)}&admission=${encodeURIComponent(admissionPass)}`;
   } catch (e) {
     matchStatus.textContent = e.message || 'Error finding match';
     findMatchBtn.disabled = false;
@@ -275,7 +290,8 @@ findMatchBtn?.addEventListener('click', async () => {
 createRoomBtn.addEventListener('click', async () => {
   createRoomBtn.disabled = true;
   try {
-    enterRoom(await createRoom());
+    const room = await createRoom();
+    enterRoom(room.roomId, room);
   } catch (e) {
     console.error('create room failed', e);
     alert('Could not create room. Try again.');
@@ -288,18 +304,20 @@ createRoomBtn.addEventListener('click', async () => {
 
 const expiredHomeBtn = document.getElementById('expired-home-btn');
 const expiredNewRoomBtn = document.getElementById('expired-new-room-btn');
+const expiredFindMatchBtn = document.getElementById('expired-find-match-btn');
 
-expiredHomeBtn?.addEventListener('click', () => {
-  // Full navigation, not showScreen: the URL still carries ?room=<dead id>,
-  // and a reload of it would land right back on this screen.
-  location.assign('/');
-});
+// Full navigation, not showScreen: the URL still carries ?room=<dead id>,
+// and a reload of it would land right back on this screen. Home is also where
+// Find a Match lives, so a refused Quick Match leaves the same way.
+for (const btn of [expiredHomeBtn, expiredFindMatchBtn]) {
+  btn?.addEventListener('click', () => location.assign('/'));
+}
 
 expiredNewRoomBtn?.addEventListener('click', async () => {
   expiredNewRoomBtn.disabled = true;
   try {
-    const roomId = await createRoom();
-    location.assign(`/?room=${encodeURIComponent(roomId)}`);
+    const { roomId, admissionPass } = await createRoom();
+    location.assign(`/?room=${encodeURIComponent(roomId)}&admission=${encodeURIComponent(admissionPass)}`);
   } catch (e) {
     console.error('create room failed', e);
     alert('Could not create room. Try again.');

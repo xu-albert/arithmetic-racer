@@ -23,8 +23,9 @@ function tick(ms = 5) {
 }
 
 /** A browser-equivalent guest client: real socket, no cookies. */
-async function connect(party, roomId, label) {
-  const res = await SELF.fetch(`https://guest.test/parties/${party}/${roomId}`, {
+async function connect(party, roomId, label, admissionPass) {
+  const admission = admissionPass ? `?admission=${encodeURIComponent(admissionPass)}` : "";
+  const res = await SELF.fetch(`https://guest.test/parties/${party}/${roomId}${admission}`, {
     headers: { Upgrade: "websocket" },
   });
   expect(res.status).toBe(101);
@@ -106,10 +107,10 @@ describe("guest access — every mode plays without an account", () => {
       body: JSON.stringify({ difficulty: "medium", device_id: "guest-qm-device" }),
     });
     expect(res.status).toBe(200);
-    const { roomId, mode } = await res.json();
+    const { roomId, mode, admissionPass } = await res.json();
     expect(mode).toBe("public");
 
-    const guest = await connect("public-race-room", roomId, "qm-guest");
+    const guest = await connect("public-race-room", roomId, "qm-guest", admissionPass);
     await guest.hello(crypto.randomUUID(), null, "guest-qm-device", { difficulty: "medium" });
 
     // The room's own roster says who it seated: a human guest, not an error.
@@ -129,11 +130,11 @@ describe("guest access — every mode plays without an account", () => {
   it("private room: a guest creates one and two guests race in it", async () => {
     const res = await SELF.fetch("https://guest.test/api/rooms", { method: "POST" });
     expect(res.status).toBe(200);
-    const { roomId } = await res.json();
+    const { roomId, admissionPass } = await res.json();
 
-    const host = await connect("race-room", roomId, "host");
+    const host = await connect("race-room", roomId, "host", admissionPass);
     await host.hello(crypto.randomUUID(), null, "guest-host-device");
-    const guest = await connect("race-room", roomId, "guest");
+    const guest = await connect("race-room", roomId, "guest", admissionPass);
     await guest.hello(crypto.randomUUID(), null, "guest-join-device");
 
     host.send({ type: "start-race" });
