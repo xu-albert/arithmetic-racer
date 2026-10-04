@@ -444,41 +444,76 @@ describe("catch-up caps and stale batches", () => {
 });
 
 describe("catch-up in a Quick Match", () => {
-  it("a seat spliced during the outage still gets an ack, so the drain pause lifts", async () => {
-    const alice = makeConn("alice");
-    const bob = makeConn("bob");
-    const conns = [alice, bob];
+  async function withQuickMatch(conns, fn) {
     const stub = env.PublicRaceRoom.get(env.PublicRaceRoom.idFromName("m-cu-" + crypto.randomUUID()));
     await runInDurableObject(stub, async (room) => {
       if (!room.state) await room.onStart();
       room.getConnections = () => connectionIterator(conns);
       room.broadcast = (s) => { for (const c of conns) c.send(s); };
       room.releaseLobby = async () => {};
+      await fn(room);
+    });
+  }
+
+  it("a seat dropped during the outage reclaims its held row and still gets an ack", async () => {
+    const alice = makeConn("alice");
+    const bob = makeConn("bob");
+    const conns = [alice, bob];
+    await withQuickMatch(conns, async (room) => {
       const aliceRacerId = await join(room, alice, "Alice");
       await join(room, bob, "Bob");
       room.state.state = "racing";
       room.state.raceStartedAt = Date.now() - 5000;
       const raceStartedAt = room.state.raceStartedAt;
 
-      // Alice's reconnect grace ran out mid-race with Bob still racing: a
-      // public room splices an unfinished seat rather than keeping it dropped.
-      await room.removePlayer(room.playerFor(alice).id);
+      // Alice's reconnect grace ran out mid-race with Bob still racing: the
+      // public room holds her seat as dropped for its DNF row.
+      const pid = room.playerFor(alice).id;
+      await room.removePlayer(pid);
       expect(room.state.state).toBe("racing");
+      expect(room.state.players.find((p) => p.id === pid).dropped).toBe(true);
 
-      // Her reconnect is refused a seat — with no seat left to reclaim it is
-      // a new join into a room past its lobby — and the batch still follows hello.
+      // Her reconnect reclaims that seat — reconnects bypass the past-lobby
+      // gate — and the batch that follows hello grades nothing.
       const alice2 = makeConn("alice-2");
       conns.push(alice2);
       await room.handleHello(alice2, { type: "hello", playerId: aliceRacerId, handle: "Alice" });
-      expect(alice2.lastOf("error")).toMatchObject({ code: "MATCH_OVER" });
+      expect(alice2.lastOf("error")).toBeNull();
       await room.handleCatchUp(alice2, {
         type: "catch-up", batchId: 1, raceStartedAt, entries: [{ index: 0, value: "1" }],
       });
 
-      expect(alice2.lastOf("catch-up-ack")).toMatchObject({
+      expect(alice2.lastOf("catch-up-ack")).toMatchObject({ applied: 0, skipped: 1, finalScore: 0 });
+      expect(room.playerFor(alice2).dropped).toBe(true);
+      expect(bob.allOf("advance")).toHaveLength(0);
+    });
+  });
+
+  it("a socket refused a seat still gets an ack, so the drain pause lifts", async () => {
+    const alice = makeConn("alice");
+    const bob = makeConn("bob");
+    const conns = [alice, bob];
+    await withQuickMatch(conns, async (room) => {
+      await join(room, alice, "Alice");
+      await join(room, bob, "Bob");
+      room.state.state = "racing";
+      room.state.raceStartedAt = Date.now() - 5000;
+
+      // A racerId the room never seated is a new join into a room past its
+      // lobby: refused, and the batch still follows hello.
+      const stranger = makeConn("stranger");
+      conns.push(stranger);
+      await room.handleHello(stranger, { type: "hello", playerId: crypto.randomUUID(), handle: "Eve" });
+      expect(stranger.lastOf("error")).toMatchObject({ code: "MATCH_OVER" });
+      await room.handleCatchUp(stranger, {
+        type: "catch-up", batchId: 1, raceStartedAt: room.state.raceStartedAt,
+        entries: [{ index: 0, value: "1" }],
+      });
+
+      expect(stranger.lastOf("catch-up-ack")).toMatchObject({
         applied: 0, rejected: "no-seat", finalScore: null, finishMs: null,
       });
-      expect(bob.allOf("advance")).toHaveLength(0);
+      expect(alice.allOf("advance")).toHaveLength(0);
     });
   });
 });
