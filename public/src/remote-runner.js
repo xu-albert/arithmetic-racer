@@ -286,13 +286,24 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       ) changed.push(existing);
     }
 
-    // Finished snapshots deliberately keep the local model intact: bots and
-    // departed seats are stripped from state.players after finishRace, but
-    // their final rows still rank locally.
-    if (rosterCanPrune) {
-      const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
-      for (let i = racers.length - 1; i >= 0; i--) {
-        if (!present.has(racers[i].id)) racers.splice(i, 1);
+    // A seat the snapshot leaves out means something different by phase.
+    // Before the race it has left the room: prune it, and grey the lane a
+    // countdown screen has already drawn in case its `player-left` never
+    // reached this socket. A `finished` snapshot leaves out bots and the seats
+    // that departed mid-race — PublicRaceRoom strips both once their rows are
+    // built — so those keep ranking locally. A human among them who never
+    // crossed the line was dropped by the room, and the one-shot `drop` this
+    // socket missed is owed here, or the podium holds them as still racing.
+    const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
+    for (let i = racers.length - 1; i >= 0; i--) {
+      const r = racers[i];
+      if (present.has(r.id)) continue;
+      if (rosterCanPrune) {
+        racers.splice(i, 1);
+        if (!r.dropped) emit('drop', { laneId: r.id });
+      } else if (roomState === 'finished' && !raceSettled && !r.isBot && r.finishMs == null && !r.dropped) {
+        r.dropped = true;
+        changed.push(r);
       }
     }
     return changed;
