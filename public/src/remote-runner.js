@@ -246,7 +246,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // by a null. Two exceptions: bots — the room parks them at 0 until it
   // finalizes them, so their progress lives only here — and this client's own
   // row while a catch-up batch drains in a `racing` room (see below).
-  function reconcilePlayers(players, roomState) {
+  function reconcilePlayers(players, roomState, roomMode) {
     // Additions to the roster stop when the room stops gathering players for a
     // race this runner has not begun. Past that — a race in flight, a `finished`
     // snapshot carrying somebody who took the invite link after the race ended
@@ -289,11 +289,15 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // A seat the snapshot leaves out means something different by phase.
     // Before the race it has left the room: prune it, and grey the lane a
     // countdown screen has already drawn in case its `player-left` never
-    // reached this socket. A `finished` snapshot leaves out bots and the seats
-    // that departed mid-race — PublicRaceRoom strips both once their rows are
-    // built — so those keep ranking locally. A human among them who never
-    // crossed the line was dropped by the room, and the one-shot `drop` this
-    // socket missed is owed here, or the podium holds them as still racing.
+    // reached this socket. A `finished` snapshot leaves out bots, Quick Match
+    // seats that departed mid-race — PublicRaceRoom strips both once their
+    // rows are built — and anyone who left the results screen, so an absent
+    // seat keeps ranking on its local row. This socket was away across the
+    // race end, though, and another racer's local row predates whatever they
+    // did meanwhile: absence cannot tell a straggler from a finisher who left.
+    // Only this player's own row is evidence. Absent from a Quick Match result
+    // with no finish of their own, they did not finish, and the `drop` this
+    // socket missed is owed here or the podium holds them as still racing.
     const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
     for (let i = racers.length - 1; i >= 0; i--) {
       const r = racers[i];
@@ -301,7 +305,10 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       if (rosterCanPrune) {
         racers.splice(i, 1);
         if (!r.dropped) emit('drop', { laneId: r.id });
-      } else if (roomState === 'finished' && !raceSettled && !r.isBot && r.finishMs == null && !r.dropped) {
+      } else if (
+        r.id === PLAYER_ALIAS && roomState === 'finished' && roomMode === 'public'
+        && !raceSettled && r.finishMs == null && !r.dropped
+      ) {
         r.dropped = true;
         changed.push(r);
       }
@@ -394,7 +401,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // whole world below and announcing again would double every event.
         const wasMounted = startDelivered;
         observeServerClock(msg.state.serverNow);
-        const changed = reconcilePlayers(msg.state.players, msg.state.state);
+        const changed = reconcilePlayers(msg.state.players, msg.state.state, msg.state.mode);
         if (msg.state.state === 'finished' && !raceSettled) {
           changed.push(...adoptFinalBotRows(msg.state.lastRace?.botRows));
         }
