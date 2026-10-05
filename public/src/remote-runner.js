@@ -254,7 +254,9 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // rankRacers would tier it above the player's own dnf row on the podium it
     // draws.
     const rosterCanAdd = !raceStarted && roomState === 'lobby';
-    const rosterCanPrune = !raceStarted && (roomState === 'lobby' || roomState === 'countdown');
+    const rosterCanPrune = roomState === 'racing'
+      ? !raceSettled
+      : !raceStarted && (roomState === 'lobby' || roomState === 'countdown');
     const changed = [];
     for (const p of players ?? []) {
       const aliased = aliasId(p.id, youAre);
@@ -287,12 +289,14 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     }
 
     // A seat the snapshot leaves out means something different by phase.
-    // Before the race it has left the room: prune it, and grey the lane a
-    // countdown screen has already drawn in case its `player-left` never
-    // reached this socket. A `finished` snapshot leaves out bots, Quick Match
-    // seats that departed mid-race — PublicRaceRoom strips both once their
-    // rows are built — and anyone who left the results screen, so an absent
-    // seat keeps ranking on its local row. This socket was away across the
+    // Before the race it has left the room. So it has in a `racing` snapshot:
+    // both rooms hold every seat that departs mid-race, so a seat missing there
+    // was removed before the race began and this socket missed its
+    // `player-left`. Either way it comes off the roster (see removeSeat). A
+    // `finished` snapshot leaves out bots, Quick Match seats that departed
+    // mid-race — PublicRaceRoom strips both once their rows are built — and
+    // anyone who left the results screen, so an absent seat keeps ranking on
+    // its local row. This socket was away across the
     // race end, though, and another racer's local row predates whatever they
     // did meanwhile: absence cannot tell a straggler from a finisher who left.
     // Only this player's own row is evidence. Absent from a Quick Match result
@@ -303,8 +307,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       const r = racers[i];
       if (present.has(r.id)) continue;
       if (rosterCanPrune) {
-        racers.splice(i, 1);
-        if (!r.dropped) emit('drop', { laneId: r.id });
+        if (removeSeat(r)) changed.push(r);
       } else if (
         r.id === PLAYER_ALIAS && roomState === 'finished' && roomMode === 'public'
         && !raceSettled && r.finishMs == null && !r.dropped
@@ -314,6 +317,23 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
       }
     }
     return changed;
+  }
+
+  // A seat the room removed before this race began owns no row in it, so it
+  // comes off the roster rather than ranking as a racer still out there, and
+  // the lane a countdown screen already drew greys. This player's own row
+  // stays, dropped instead — deliverStart reads it to decide whether to hand
+  // out a start, and the race screen holds it — so that one is the caller's
+  // to paint: returns true when it newly dropped.
+  function removeSeat(r) {
+    if (r.id === PLAYER_ALIAS) {
+      if (r.dropped) return false;
+      r.dropped = true;
+      return true;
+    }
+    racers.splice(racers.indexOf(r), 1);
+    if (!r.dropped) emit('drop', { laneId: r.id });
+    return false;
   }
 
   // The room's own final rows for the bots, off a `finished` snapshot. The
@@ -518,16 +538,14 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         break;
       }
       case 'player-left': {
-        // Only a countdown departure has anything to paint: the room splices
-        // that seat and the snapshot after it prunes the racer, but the race
-        // screen has already drawn its lane. A departure mid-race arrives as
-        // `drop`, and one after the race is somebody leaving the results
-        // screen, which must not relabel the row they finished the race with.
+        // Only a departure before the race changes this roster: the room
+        // splices that seat, so it comes off here rather than waiting for the
+        // next snapshot to prune it. A departure mid-race arrives as `drop`,
+        // and one after the race is somebody leaving the results screen, which
+        // must not relabel the row they finished the race with.
         if (raceStarted) break;
         const r = findRacer(msg.playerId);
-        if (!r) break;
-        r.dropped = true;
-        emit('drop', { laneId: r.id });
+        if (r && removeSeat(r)) emit('drop', { laneId: r.id });
         break;
       }
       case 'finish': {
