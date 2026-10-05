@@ -118,6 +118,26 @@ describe('racer bootstrap from the initial state', () => {
     assert.equal(bot.tier, 'fast');
     assert.equal(bot.handle, 'Hp-3');
   });
+
+  test('a countdown snapshot does not add a new seat to the mounted roster', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 1 }),
+      youAre: ME,
+    });
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'countdown',
+        countdownN: 0,
+        players: [player('p-1'), player(ME), player('p-3')],
+      }),
+    });
+
+    assert.equal(runner.racers.some((r) => r.id === 'p-3'), false);
+  });
 });
 
 describe('race-start and countdown', () => {
@@ -806,6 +826,303 @@ describe('bot timelines (Quick Match)', () => {
 });
 
 describe('drop, finish and rankings', () => {
+  test('a countdown player-left greys the lane the race screen already drew', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 2 }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({ type: 'player-left', playerId: 'p-1' });
+
+    assert.deepEqual(events, [{ event: 'drop', data: { laneId: 'p-1' } }]);
+    assert.deepEqual(runner.racers.map((r) => r.id), ['player']);
+  });
+
+  test('a countdown departure that lands in the same alarm as the GO frame stays off the podium', () => {
+    // The grace expiry and the last countdown tick share one wake-up, so this
+    // socket hears `player-left`, then `race-start`, then the racing snapshot.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 0 }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({ type: 'player-left', playerId: 'p-1' });
+    startRace(client);
+    client.receive({
+      type: 'state',
+      state: lobbyState({ state: 'racing', problemSequence: SEQ, raceStartedAt: 10_000, players: [player(ME)] }),
+    });
+    client.receive({
+      type: 'finish',
+      rankings: [{ id: ME, score: SEQ.length, finishMs: 3_000, dropped: false, dnf: false }],
+    });
+
+    assert.deepEqual(events.filter((e) => e.event === 'drop'), [{ event: 'drop', data: { laneId: 'p-1' } }]);
+    assert.deepEqual(events.at(-1).data.rankings.map((r) => r.id), ['player']);
+  });
+
+  test('a racing snapshot prunes a countdown departure whose player-left and race-start this socket missed', () => {
+    // Quick Match: p-1's grace runs out during the countdown, so the room
+    // splices the seat and broadcasts `player-left`. This socket blips across
+    // that moment and the GO frame, and its reconnect lands on a `racing`
+    // snapshot that no longer lists p-1. Every seat that departs mid-race is
+    // held, so a seat missing here left before the race began.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({
+        mode: 'public',
+        state: 'countdown',
+        countdownN: 2,
+        players: [player('p-1'), player(ME), player('p-3')],
+      }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        mode: 'public',
+        state: 'racing',
+        problemSequence: SEQ,
+        raceStartedAt: 10_000,
+        players: [player(ME), player('p-3', { score: 1 })],
+      }),
+    });
+
+    assert.deepEqual(runner.racers.map((r) => r.id), ['player', 'p-3']);
+    assert.ok(events.some((e) => e.event === 'drop' && e.data.laneId === 'p-1'), 'the lane already drawn greys');
+    assert.ok(events.some((e) => e.event === 'start'), 'this player still races');
+
+    client.receive({
+      type: 'finish',
+      rankings: [
+        { id: 'p-3', score: SEQ.length, finishMs: 4_000, dropped: false, dnf: false },
+        { id: ME, score: 1, finishMs: null, dropped: false, dnf: true },
+      ],
+    });
+
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-3', 'player'], 'no phantom waiting above the dnf');
+  });
+
+  test("this player's own seat missing from a racing snapshot stays on screen, dropped, with no start", () => {
+    // The race screen holds this player's row, and the start it is owed is
+    // decided from it — so the seat greys out rather than leaving the roster.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 1, problemSequence: SEQ }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({ state: 'racing', problemSequence: SEQ, raceStartedAt: 10_000, players: [player('p-1')] }),
+    });
+
+    assert.equal(runner.racers.find((r) => r.id === 'player').dropped, true);
+    assert.equal(events.some((e) => e.event === 'start'), false);
+    assert.deepEqual(events, [{ event: 'drop', data: { laneId: 'player' } }]);
+  });
+
+  test('a countdown snapshot prunes a seat the room no longer lists', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 2 }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({ type: 'player-left', playerId: 'p-1' });
+    client.receive({
+      type: 'state',
+      state: lobbyState({ state: 'countdown', countdownN: 1, players: [player(ME)] }),
+    });
+
+    assert.equal(runner.racers.some((r) => r.id === 'p-1'), false);
+    assert.deepEqual(runner.getRankings().map((r) => r.id), ['player']);
+    assert.deepEqual(events.filter((e) => e.event === 'drop'), [{ event: 'drop', data: { laneId: 'p-1' } }]);
+  });
+
+  test('a countdown snapshot greys the lane of a departure whose player-left this socket missed', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ state: 'countdown', countdownN: 2 }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({ state: 'countdown', countdownN: 1, players: [player(ME)] }),
+    });
+
+    assert.equal(runner.racers.some((r) => r.id === 'p-1'), false);
+    assert.deepEqual(events.filter((e) => e.event === 'drop'), [{ event: 'drop', data: { laneId: 'p-1' } }]);
+  });
+
+  test("this player's own seat, pruned from a Quick Match result after departing mid-race, settles as dropped below a real dnf", () => {
+    // This player answers one problem and the socket goes away. Their grace
+    // runs out mid-race, the room drops the seat, p-3 finishes and the race
+    // ends with p-1 a dnf — and the departed seat is pruned. Both `drop` and
+    // `finish` went out while this socket was gone, so the reconnect lands on
+    // a `finished` snapshot that no longer lists this player at all.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ mode: 'public', players: [player('p-1'), player(ME), player('p-3')] }),
+      youAre: ME,
+    });
+    startRace(client);
+    runner.submitAnswer('2');
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        mode: 'public',
+        state: 'finished',
+        players: [
+          player('p-1', { dnf: true }),
+          player('p-3', { score: SEQ.length, finishMs: 4_000 }),
+        ],
+        lastRace: { raceLength: SEQ.length, botRows: [] },
+      }),
+    });
+
+    const me = runner.racers.find((r) => r.id === 'player');
+    assert.equal(me.dropped, true);
+    assert.equal(me.score, 1);
+    assert.ok(events.some((e) => e.event === 'drop' && e.data.laneId === 'player'), 'the lane is greyed');
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-3', 'p-1', 'player']);
+  });
+
+  test('a private-room finished snapshot without this player leaves their own row alone', () => {
+    // A private room never prunes a departed seat, so this player missing
+    // from its result means their seat left after the race ended.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ players: [player(ME), player('p-3')] }),
+      youAre: ME,
+    });
+    startRace(client);
+    runner.submitAnswer('2');
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'finished',
+        players: [player('p-3', { score: SEQ.length, finishMs: 4_000 })],
+      }),
+    });
+
+    assert.equal(runner.racers.find((r) => r.id === 'player').dropped, false);
+    assert.equal(events.some((e) => e.event === 'drop'), false);
+  });
+
+  test('a private-room finisher who left after the race is not relabelled or ranked below this player', () => {
+    // Alice (this player, host, joined first) is at 1/3 when her socket goes
+    // away; the room holds her seat as dropped. Bob, last seen here at 2/3,
+    // finishes and ends the race, then closes his tab and is spliced from the
+    // finished room. The reconnect lands on a `finished` snapshot listing only
+    // Alice. Bob's absence says nothing about how he did.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ players: [player(ME), player('p-3')] }),
+      youAre: ME,
+    });
+    startRace(client);
+    runner.submitAnswer('2');
+    client.receive({ type: 'advance', playerId: 'p-3', score: 2, finishMs: null });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'finished',
+        players: [player(ME, { score: 1, dropped: true })],
+      }),
+    });
+
+    const bob = runner.racers.find((r) => r.id === 'p-3');
+    assert.equal(bob.dropped, false);
+    assert.equal(events.some((e) => e.event === 'drop' && e.data.laneId === 'p-3'), false);
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-3', 'player']);
+  });
+
+  test('a Quick Match racer who finished after this socket went away and then left is not demoted below its dnf', () => {
+    // This socket goes away with p-3 one problem in. p-3 finishes, the race
+    // ends with this player a dnf, and p-3 takes Find Another Match — their
+    // seat leaves the finished room. The reconnect's `finished` snapshot
+    // lists only this player.
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ mode: 'public', players: [player(ME), player('p-3')] }),
+      youAre: ME,
+    });
+    startRace(client);
+    client.receive({ type: 'advance', playerId: 'p-3', score: 1, finishMs: null });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        mode: 'public',
+        state: 'finished',
+        players: [player(ME, { dnf: true })],
+        lastRace: { raceLength: SEQ.length, botRows: [] },
+      }),
+    });
+
+    const p3 = runner.racers.find((r) => r.id === 'p-3');
+    assert.equal(p3.dropped, false);
+    assert.equal(events.some((e) => e.event === 'drop' && e.data.laneId === 'p-3'), false);
+    const settled = events.at(-1);
+    assert.equal(settled.event, 'finish');
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-3', 'player']);
+  });
+
+  test('a player-left after the race ended leaves the final rows alone', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
+    startRace(client);
+    client.receive({
+      type: 'finish',
+      rankings: [
+        { id: ME, score: 3, finishMs: 3000, dropped: false, dnf: false },
+        { id: 'p-1', score: 1, finishMs: null, dropped: false, dnf: true },
+      ],
+    });
+    const events = record(runner);
+
+    client.receive({ type: 'player-left', playerId: 'p-1' });
+
+    assert.deepEqual(events, []);
+    const p1 = runner.racers.find((r) => r.id === 'p-1');
+    assert.equal(p1.dropped, false);
+    assert.equal(p1.dnf, true);
+  });
+
   test('a drop marks the racer and is relayed', () => {
     const client = fakeRoomClient();
     const runner = createRemoteRunner({ roomClient: client, initialState: lobbyState(), youAre: ME });
@@ -995,4 +1312,3 @@ describe('quit and stop', () => {
     assert.deepEqual(events, []);
   });
 });
-

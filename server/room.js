@@ -954,8 +954,8 @@ export class RaceRoom extends Server {
    */
   async handleCatchUp(connection, msg) {
     const player = this.playerFor(connection);
-    // A socket whose hello was refused (its seat was spliced during the
-    // outage) is paused on this batch all the same.
+    // A socket whose hello was refused (no seat to reclaim, so it was a new
+    // join into a room past its lobby) is paused on this batch all the same.
     if (!player) {
       this.sendCatchUpAck(connection, null, { rejected: 'no-seat' });
       return;
