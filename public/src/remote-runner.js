@@ -296,9 +296,9 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // `finished` snapshot leaves out bots, Quick Match seats that departed
     // mid-race — PublicRaceRoom strips both once their rows are built — and
     // anyone who left the results screen, so an absent seat keeps ranking on
-    // its local row. This socket was away across the
-    // race end, though, and another racer's local row predates whatever they
-    // did meanwhile: absence cannot tell a straggler from a finisher who left.
+    // its local row. This socket was away across the race end, though, and
+    // another racer's local row predates whatever they did meanwhile: absence
+    // cannot tell a straggler from a finisher who left.
     // Only this player's own row is evidence. Absent from a Quick Match result
     // with no finish of their own, they did not finish, and the `drop` this
     // socket missed is owed here or the podium holds them as still racing.
