@@ -303,6 +303,24 @@ export function publicPlayer(p) {
 }
 
 /**
+ * Every human seat's final row, as `finish` ranks it, for finishRace() to pin
+ * on `lastRace` beside Quick Match's botRows.
+ *
+ * A socket that was away across the race end missed the `finish`, and every
+ * `drop` with it, and settles from the `finished` snapshot instead. That
+ * snapshot's player list need not hold the seats whose rows it missed:
+ * PublicRaceRoom strips the ones that departed mid-race as it ends the race,
+ * and either room splices a seat that leaves the results — a racer who quit
+ * and closed the tab, whose grace ran out after the race ended, included.
+ * Without the row the reconnecting client can only rank such a seat on what
+ * it last saw, which reads as still racing. Pinned rather than inferred,
+ * because absence alone cannot tell a straggler from a finisher who left.
+ */
+export function finalHumanRows(players) {
+  return players.filter((p) => !p.isBot).map(publicPlayer);
+}
+
+/**
  * True when `connection` is the socket that most recently claimed this seat.
  *
  * A seat has exactly one current owner, re-stamped by every accepted `hello`.
@@ -1142,7 +1160,11 @@ export class RaceRoom extends Server {
     // Pin what this race was, before the host is free to reconfigure for the
     // next one. Taken before the `finish` broadcast, so nothing a client sends
     // in reply to it can reach the room first.
-    this.state.lastRace = { difficulty: this.state.difficulty, raceLength: this.state.raceLength };
+    this.state.lastRace = {
+      difficulty: this.state.difficulty,
+      raceLength: this.state.raceLength,
+      humanRows: finalHumanRows(this.state.players),
+    };
     // Not a succession point: every live transition (reconnect, fresh join,
     // mid-race departure, splice) already hands the flag on. This migrates a
     // room the previous build persisted mid-race, whose departed host seat

@@ -246,7 +246,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // by a null. Two exceptions: bots — the room parks them at 0 until it
   // finalizes them, so their progress lives only here — and this client's own
   // row while a catch-up batch drains in a `racing` room (see below).
-  function reconcilePlayers(players, roomState, roomMode) {
+  function reconcilePlayers(players, roomState, roomMode, pinnedHumanRows) {
     // Additions to the roster stop when the room stops gathering players for a
     // race this runner has not begun. Past that — a race in flight, a `finished`
     // snapshot carrying somebody who took the invite link after the race ended
@@ -296,12 +296,16 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // `finished` snapshot leaves out bots, Quick Match seats that departed
     // mid-race — PublicRaceRoom strips both once their rows are built — and
     // anyone who left the results screen, so an absent seat keeps ranking on
-    // its local row. This socket was away across the race end, though, and
-    // another racer's local row predates whatever they did meanwhile: absence
-    // cannot tell a straggler from a finisher who left.
-    // Only this player's own row is evidence. Absent from a Quick Match result
-    // with no finish of their own, they did not finish, and the `drop` this
-    // socket missed is owed here or the podium holds them as still racing.
+    // its local row here. This socket was away across the race end, though,
+    // and another racer's local row predates whatever they did meanwhile:
+    // absence cannot tell a straggler from a finisher who left. The room's own
+    // final rows, pinned on `lastRace`, settle every one of them right after
+    // this (see adoptFinalRows).
+    // A room that predates those rows leaves only this player's own row as
+    // evidence. Absent from such a Quick Match result with no finish of their
+    // own, they did not finish, and the `drop` this socket missed is owed here
+    // or the podium holds them as still racing. Where the pinned rows exist
+    // they say so themselves, dnf or dropped, so this guess stands down.
     const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
     for (let i = racers.length - 1; i >= 0; i--) {
       const r = racers[i];
@@ -310,7 +314,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         if (removeSeat(r)) changed.push(r);
       } else if (
         r.id === PLAYER_ALIAS && roomState === 'finished' && roomMode === 'public'
-        && !raceSettled && r.finishMs == null && !r.dropped
+        && !pinnedHumanRows && !raceSettled && r.finishMs == null && !r.dropped
       ) {
         r.dropped = true;
         changed.push(r);
@@ -336,27 +340,32 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     return false;
   }
 
-  // The room's own final rows for the bots, off a `finished` snapshot. The
-  // room strips bots from `state.players` as it ends a Quick Match, so these
-  // ride on `lastRace` instead; they are what the `finish` broadcast ranked,
-  // and they replace whatever the local ticker made of the timelines while
-  // this socket was away — a bot it carried over the line after the race had
-  // already ended included. Applied verbatim, as the `finish` path does.
-  function adoptFinalBotRows(rows) {
+  // The room's own final rows, off a `finished` snapshot. They ride on
+  // `lastRace` because the snapshot's player list need not hold them:
+  // `botRows` for the bots, which the room strips as it ends a Quick Match,
+  // and `humanRows` for every human seat, since one may have departed mid-race
+  // or left the results since (see finalHumanRows in server/room.js). They
+  // are what the `finish` broadcast ranked, and they replace whatever this
+  // socket last knew of those seats — a bot the local ticker carried over the
+  // line after the race had already ended, or a racer still on the 4/10 this
+  // socket saw before both it and they went away, whose `drop` it missed.
+  // Applied verbatim, as the `finish` path does. A room that predates
+  // `humanRows` simply has none to offer.
+  function adoptFinalRows(rows, { bots }) {
     const changed = [];
     for (const row of rows ?? []) {
-      const bot = findRacer(row.id);
-      if (!bot?.isBot) continue;
-      const before = { score: bot.score, finishMs: bot.finishMs, dropped: bot.dropped };
-      bot.score = row.score ?? 0;
-      bot.finishMs = row.finishMs ?? null;
-      bot.dropped = !!row.dropped;
-      bot.dnf = !!row.dnf;
+      const racer = findRacer(row.id);
+      if (!racer || racer.isBot !== bots) continue;
+      const before = { score: racer.score, finishMs: racer.finishMs, dropped: racer.dropped };
+      racer.score = row.score ?? 0;
+      racer.finishMs = row.finishMs ?? null;
+      racer.dropped = !!row.dropped;
+      racer.dnf = !!row.dnf;
       if (
-        bot.score !== before.score
-        || bot.finishMs !== before.finishMs
-        || bot.dropped !== before.dropped
-      ) changed.push(bot);
+        racer.score !== before.score
+        || racer.finishMs !== before.finishMs
+        || racer.dropped !== before.dropped
+      ) changed.push(racer);
     }
     return changed;
   }
@@ -379,7 +388,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   //
   // On the `finish` path that loop is a no-op — the payload has already said
   // so — and on the snapshot path it is too, whenever the snapshot carries the
-  // room's final bot rows (see adoptFinalBotRows). It still matters against a
+  // room's final bot rows (see adoptFinalRows). It still matters against a
   // room that predates those rows: there a bot the local ticker carried over
   // the line while the socket was down keeps its client-side finish, because
   // nothing else here can contradict it.
@@ -421,9 +430,11 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // whole world below and announcing again would double every event.
         const wasMounted = startDelivered;
         observeServerClock(msg.state.serverNow);
-        const changed = reconcilePlayers(msg.state.players, msg.state.state, msg.state.mode);
+        const pinnedHumanRows = msg.state.state === 'finished' ? msg.state.lastRace?.humanRows : null;
+        const changed = reconcilePlayers(msg.state.players, msg.state.state, msg.state.mode, pinnedHumanRows);
         if (msg.state.state === 'finished' && !raceSettled) {
-          changed.push(...adoptFinalBotRows(msg.state.lastRace?.botRows));
+          changed.push(...adoptFinalRows(msg.state.lastRace?.botRows, { bots: true }));
+          changed.push(...adoptFinalRows(pinnedHumanRows, { bots: false }));
         }
         if (msg.state.problemSequence?.length) sequence = msg.state.problemSequence;
         // Replay countdown if we joined mid-countdown and haven't seen a countdown event yet.
