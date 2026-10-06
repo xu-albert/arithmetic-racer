@@ -426,8 +426,11 @@ export class PublicRaceRoom extends RaceRoom {
    * The backstop release a hello triggers. Any socket can send hellos, so it
    * reaches the difficulty's router at most once per LOBBY_RELEASE_RETRY_MS
    * per room: a release started inside that window has already cleared the
-   * pointer, is still clearing it, or armed the alarm's retry. In memory on
-   * purpose — an evicted room forgetting it costs one extra call.
+   * pointer, is still clearing it, or armed the alarm's retry. The one
+   * release that does none of those — the attempt that exhausts the retries —
+   * lifts the window (see releaseLobby), so the next refused hello is the
+   * backstop at once. In memory on purpose — an evicted room forgetting it
+   * costs one extra call.
    */
   async releaseLobbyFromHello() {
     const now = Date.now();
@@ -458,6 +461,9 @@ export class PublicRaceRoom extends RaceRoom {
         logError(KINDS.LOBBY_RELEASE_FAILED, 'lobby release retries exhausted', {
           roomId: this.name, difficulty: this.state.difficulty, phase: 'release_give_up',
         });
+        // Nothing is armed now, so a hello throttled behind this attempt
+        // would reach neither the router nor the alarm.
+        this.lastHelloReleaseAt = null;
         if (this.state.pendingLobbyRelease) {
           this.state.pendingLobbyRelease = null;
           await this.persist();

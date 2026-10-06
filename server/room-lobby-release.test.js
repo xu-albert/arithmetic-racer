@@ -16,7 +16,7 @@
 // handlers called directly, real bindings via cloudflare:test. The router
 // outage is a Proxy on room.env whose LobbyRouter binding throws on release.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 
 import { LOBBY_RELEASE_RETRY_MS, LOBBY_RELEASE_MAX_ATTEMPTS } from "./public-room.js";
@@ -161,13 +161,16 @@ describe("PublicRaceRoom.releaseLobby — bounded retry", () => {
       await room.releaseLobby();
       expect(room.state.pendingLobbyRelease.attempts).toBe(1);
       router.restore();
+      const healed = spyLobbyRouter(room);
 
       room.state.pendingLobbyRelease.nextAttemptAt = Date.now() - 1;
       await room.onAlarm();
 
+      // The retry really reached the router — clearing the pending state
+      // without a call would be dropping the release, not retrying it.
+      expect(healed.calls).toEqual([room.name]);
       expect(room.state.pendingLobbyRelease).toBeNull();
-      // The retry really reached the router: it answers a release for this
-      // room's name without error (idempotent whether or not it points here).
+      healed.restore();
     });
   });
 
@@ -319,6 +322,9 @@ describe("PublicRaceRoom.handleHello — dead-end seating", () => {
         room.state.raceStartedAt = 1000;
         if (phase === "finished") room.finishRace(1100);
         expect(room.state.state).toBe(phase);
+        // Owed from an earlier failure, so the held release has something to
+        // clear once it lands — evidence it ran to completion in the background.
+        room.state.pendingLobbyRelease = { attempts: 2, nextAttemptAt: Date.now() + LOBBY_RELEASE_RETRY_MS };
 
         const router = holdLobbyRouter(room);
         const connA2 = makeConn("A2");
@@ -331,10 +337,10 @@ describe("PublicRaceRoom.handleHello — dead-end seating", () => {
         expect(connA2.lastOf("error")).toBeNull();
         // ...and the backstop release was issued all the same.
         expect(router.calls).toEqual([room.name]);
+        expect(room.state.pendingLobbyRelease).not.toBeNull();
 
         router.open();
-        await new Promise((r) => setTimeout(r, 0));
-        expect(room.state.pendingLobbyRelease).toBeNull();
+        await vi.waitFor(() => expect(room.state.pendingLobbyRelease).toBeNull());
         router.restore();
       });
     });
@@ -361,6 +367,37 @@ describe("PublicRaceRoom.handleHello — dead-end seating", () => {
       expect(refused).toEqual(Array(5).fill("MATCH_OVER"));
       expect(connA2.lastOf("hello-ack")).toBeTruthy();
       expect(router.calls).toEqual([room.name]);
+      router.restore();
+    });
+  });
+
+  it("a refused hello whose release exhausts the retries does not throttle the next one", async () => {
+    await withRoom("lr-giveup-hello-" + crypto.randomUUID(), async (room) => {
+      await join(room, makeConn("A"), "A");
+      room.state.state = "racing";
+      room.state.raceStartedAt = Date.now();
+      const router = breakLobbyRouter(room);
+      for (let i = 0; i < LOBBY_RELEASE_MAX_ATTEMPTS - 1; i++) await room.releaseLobby();
+      expect(room.state.pendingLobbyRelease.attempts).toBe(LOBBY_RELEASE_MAX_ATTEMPTS - 1);
+
+      // This refused hello's release is the last attempt: it gives up and
+      // arms nothing, so the alarm will not retry it.
+      await join(room, makeConn("x0"), "x0");
+      expect(router.calls.length).toBe(LOBBY_RELEASE_MAX_ATTEMPTS);
+      expect(room.state.pendingLobbyRelease).toBeNull();
+
+      // The next refused hello, well inside LOBBY_RELEASE_RETRY_MS, is then
+      // the only thing left that can unpin the lane — it must reach the router.
+      const conn1 = makeConn("x1");
+      await join(room, conn1, "x1");
+      expect(conn1.lastOf("error")?.code).toBe("MATCH_OVER");
+      expect(router.calls.length).toBe(LOBBY_RELEASE_MAX_ATTEMPTS + 1);
+
+      // Its failure starts a fresh retry cycle, which re-arms the throttle:
+      // the hello after it is held back again.
+      expect(room.state.pendingLobbyRelease.attempts).toBe(1);
+      await join(room, makeConn("x2"), "x2");
+      expect(router.calls.length).toBe(LOBBY_RELEASE_MAX_ATTEMPTS + 1);
       router.restore();
     });
   });
