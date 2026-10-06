@@ -246,7 +246,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
   // by a null. Two exceptions: bots — the room parks them at 0 until it
   // finalizes them, so their progress lives only here — and this client's own
   // row while a catch-up batch drains in a `racing` room (see below).
-  function reconcilePlayers(players, roomState, roomMode, pinnedHumanRows) {
+  function reconcilePlayers(players, roomState, roomMode) {
     // Additions to the roster stop when the room stops gathering players for a
     // race this runner has not begun. Past that — a race in flight, a `finished`
     // snapshot carrying somebody who took the invite link after the race ended
@@ -304,8 +304,8 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // A room that predates those rows leaves only this player's own row as
     // evidence. Absent from such a Quick Match result with no finish of their
     // own, they did not finish, and the `drop` this socket missed is owed here
-    // or the podium holds them as still racing. Where the pinned rows exist
-    // they say so themselves, dnf or dropped, so this guess stands down.
+    // or the podium holds them as still racing. Where the pinned rows exist,
+    // this player's pinned row, adopted right after, overrides the guess.
     const present = new Set((players ?? []).map((p) => aliasId(p.id, youAre)));
     for (let i = racers.length - 1; i >= 0; i--) {
       const r = racers[i];
@@ -314,7 +314,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         if (removeSeat(r)) changed.push(r);
       } else if (
         r.id === PLAYER_ALIAS && roomState === 'finished' && roomMode === 'public'
-        && !pinnedHumanRows && !raceSettled && r.finishMs == null && !r.dropped
+        && !raceSettled && r.finishMs == null && !r.dropped
       ) {
         r.dropped = true;
         changed.push(r);
@@ -430,11 +430,10 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         // whole world below and announcing again would double every event.
         const wasMounted = startDelivered;
         observeServerClock(msg.state.serverNow);
-        const pinnedHumanRows = msg.state.state === 'finished' ? msg.state.lastRace?.humanRows : null;
-        const changed = reconcilePlayers(msg.state.players, msg.state.state, msg.state.mode, pinnedHumanRows);
+        const changed = reconcilePlayers(msg.state.players, msg.state.state, msg.state.mode);
         if (msg.state.state === 'finished' && !raceSettled) {
           changed.push(...adoptFinalRows(msg.state.lastRace?.botRows, { bots: true }));
-          changed.push(...adoptFinalRows(pinnedHumanRows, { bots: false }));
+          changed.push(...adoptFinalRows(msg.state.lastRace?.humanRows, { bots: false }));
         }
         if (msg.state.problemSequence?.length) sequence = msg.state.problemSequence;
         // Replay countdown if we joined mid-countdown and haven't seen a countdown event yet.

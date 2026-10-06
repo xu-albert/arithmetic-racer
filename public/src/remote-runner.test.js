@@ -1190,7 +1190,8 @@ describe('drop, finish and rankings', () => {
   test("this player's own seat, absent from a Quick Match result that pins it, takes the pinned row", () => {
     // Away across the race end and then past their grace: a dnf when the room
     // pinned the rows, spliced from the finished room since. The pinned row
-    // says dnf, so the absent-own-seat guess for older rooms stands down.
+    // says dnf, and adopted right after it overrides the absent-own-seat guess
+    // for older rooms.
     const { client, runner } = twoDropoutRunner({ mode: 'public' });
 
     client.receive({
