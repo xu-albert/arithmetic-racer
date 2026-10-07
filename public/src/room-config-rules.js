@@ -35,3 +35,22 @@ export function isConfigurableState(roomState) {
 export function canEditConfig({ roomState, isCreator }) {
   return Boolean(isCreator) && isConfigurableState(roomState);
 }
+
+/** Race length bounds a host may set, in problems; the room enforces them. */
+export const MIN_RACE_LENGTH = 5;
+export const MAX_RACE_LENGTH = 50;
+
+/** What a set-config with a bad length is told, and what the lobby shows. */
+export const RACE_LENGTH_HINT = `Race length must be a whole number from ${MIN_RACE_LENGTH} to ${MAX_RACE_LENGTH}.`;
+
+/**
+ * The race length typed into the host's box, or null when the room would
+ * refuse it. Whole numbers only: "3.7" or "12abc" are not quietly truncated
+ * into something the host never typed.
+ */
+export function parseRaceLength(raw) {
+  const text = String(raw ?? '').trim();
+  if (!/^\d+$/.test(text)) return null;
+  const len = Number(text);
+  return len >= MIN_RACE_LENGTH && len <= MAX_RACE_LENGTH ? len : null;
+}

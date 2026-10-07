@@ -5,7 +5,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./public",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    // An unknown path gets public/404.html (with a 404 status) instead of an
+    // empty body.
+    "not_found_handling": "404-page"
   },
   // Ships Worker logs to Cloudflare's Observability backend so `kind`-tagged
   // lines from worker/logger.js are queryable. Sampling is 1 (keep everything)
@@ -136,7 +139,8 @@
       "compatibility_flags": ["nodejs_compat"],
       "assets": {
         "directory": "./public",
-        "binding": "ASSETS"
+        "binding": "ASSETS",
+        "not_found_handling": "404-page"
       },
       // As of wrangler 4.88, observability is inherited from the top level;
       // this block is repeated only for explicitness.

@@ -8,14 +8,17 @@
 import { getAuth } from "./auth.js";
 
 let TEST_USER_ID_OVERRIDE = null;
+let TEST_USERNAME_OVERRIDE = null;
 
 /**
- * Inject a user_id for tests. Pass null to clear.
- * Has no effect in real requests because tests run inside vitest-pool-workers
- * with an isolated module graph; production code paths never call this.
+ * Inject a user_id (and optionally that user's username) for tests. Pass null
+ * to clear. Has no effect in real requests because tests run inside
+ * vitest-pool-workers with an isolated module graph; production code paths
+ * never call this.
  */
-export function _setTestUserId(id) {
+export function _setTestUserId(id, username = null) {
   TEST_USER_ID_OVERRIDE = id;
+  TEST_USERNAME_OVERRIDE = id === null ? null : username;
 }
 
 // Cache the auth instance per-isolate. better-auth construction is non-trivial
@@ -24,10 +27,25 @@ export function _setTestUserId(id) {
 let _auth = null;
 
 export async function readUserId(request, env) {
-  if (TEST_USER_ID_OVERRIDE !== null) return TEST_USER_ID_OVERRIDE;
+  return (await readSessionUser(request, env))?.id ?? null;
+}
+
+/**
+ * The signed-in user's id and username, or null for a guest. `username` is
+ * null until an OAuth signup has picked one. One session lookup serves both,
+ * for the room upgrade that stamps each on its own header.
+ *
+ * @returns {Promise<{ id: string, username: string|null } | null>}
+ */
+export async function readSessionUser(request, env) {
+  if (TEST_USER_ID_OVERRIDE !== null) {
+    return { id: TEST_USER_ID_OVERRIDE, username: TEST_USERNAME_OVERRIDE };
+  }
 
   if (!_auth) _auth = getAuth(env);
 
   const session = await _auth.api.getSession({ headers: request.headers });
-  return session?.user?.id ?? null;
+  const id = session?.user?.id;
+  if (!id) return null;
+  return { id, username: session.user.username || null };
 }

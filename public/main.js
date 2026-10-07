@@ -18,7 +18,7 @@ import { mountProfile } from './src/profile.js';
 import { mountLeaderboard } from './src/leaderboard.js';
 import { postRaceResult } from './src/stats-api.js';
 import { soloResultPayload } from './src/solo-result.js';
-import { getOrCreateDeviceId, getOrCreateAnonHandle } from './src/identity.js';
+import { getOrCreateDeviceId, getGuestHandle } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
 import { expiredScreen } from './src/room-expiry.js';
@@ -119,11 +119,11 @@ function startQuickplay() {
     cleanupRace = null;
   }
 
-  // Lane label: logged-in username wins. Anon players get the persistent
-  // localStorage handle PLUS "(Guest)" so the race screen consistently
-  // signals "you're not signed in" — mirrors the multiplayer room badge.
+  // Lane label: logged-in username wins. Anon players get the same guest
+  // name they race under in rooms PLUS "(Guest)" so the race screen
+  // consistently signals "you're not signed in" — mirrors the room badge.
   const isLoggedIn = !!currentUsername;
-  const baseName = currentUsername || getOrCreateAnonHandle();
+  const baseName = currentUsername || getGuestHandle();
   const playerHandle = isLoggedIn ? baseName : `${baseName} (Guest)`;
   const taken = new Set([baseName]);
 

@@ -271,9 +271,9 @@ describe('quit and stop', () => {
     assert.equal(me.dropped, true);
     assert.equal(me.finishMs, null);
     assert.equal(runner.getState(), 'finished');
-    // The still-racing bot is marked dnf; quitter and dnf share the bottom
-    // tier, so the original lane order holds between them.
-    assert.deepEqual(events.at(-1).data.rankings.map((r) => [r.id, r.dropped, r.dnf]), [['player', true, false], ['bot-0', false, true]]);
+    // The still-racing bot is marked dnf: it stayed to the end, so it
+    // outranks the player who quit rather than keeping lane order.
+    assert.deepEqual(events.at(-1).data.rankings.map((r) => [r.id, r.dropped, r.dnf]), [['bot-0', false, true], ['player', true, false]]);
   });
 
   test('quit is a no-op outside racing or after finishing', () => {

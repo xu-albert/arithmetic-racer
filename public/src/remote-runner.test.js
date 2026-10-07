@@ -1149,7 +1149,8 @@ describe('drop, finish and rankings', () => {
       settled.data.rankings.every((r) => r.dropped || r.dnf || r.finishMs != null),
       'nobody is left on the podium as still racing',
     );
-    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-1', 'player']);
+    // Out: this player stayed to the end (dnf at 6), Alice left at 4.
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['player', 'p-1']);
   });
 
   test('a private-room dropout who left the results, and a finisher who left them too, settle from the pinned rows', () => {
@@ -1184,7 +1185,8 @@ describe('drop, finish and rankings', () => {
     assert.equal(runner.racers.find((r) => r.id === 'p-3').finishMs, 9_000);
     const settled = events.at(-1);
     assert.equal(settled.event, 'finish');
-    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-3', 'p-1', 'player']);
+    // Out: this player stayed to the end (dnf at 6), Alice left at 4.
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-3', 'player', 'p-1']);
   });
 
   test("this player's own seat, absent from a Quick Match result that pins it, takes the pinned row", () => {
@@ -1361,8 +1363,9 @@ describe('drop, finish and rankings', () => {
     });
     assert.equal(events.length, 1);
     assert.equal(events[0].event, 'finish');
-    assert.deepEqual(events[0].data.rankings.map((r) => r.id), ['player', 'p-4', 'p-1', 'p-3']);
-    assert.deepEqual(runner.getRankings().map((r) => r.id), ['player', 'p-4', 'p-1', 'p-3']);
+    // Out: the dnf (stayed to the end) above the dropout.
+    assert.deepEqual(events[0].data.rankings.map((r) => r.id), ['player', 'p-4', 'p-3', 'p-1']);
+    assert.deepEqual(runner.getRankings().map((r) => r.id), ['player', 'p-4', 'p-3', 'p-1']);
     const me = runner.racers.find((r) => r.id === 'player');
     assert.equal(me.finishMs, 3000);
     assert.equal(runner.racers.find((r) => r.id === 'p-3').dnf, true);

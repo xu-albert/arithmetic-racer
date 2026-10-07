@@ -24,6 +24,14 @@ export const INVITE_EXPIRED_REASON = 'invite';
 export const INVITE_INVALID_REASON = 'invalid-invite';
 
 /**
+ * `reason` the lobby gives the expired screen when a private room refuses this
+ * page a new seat because every one is taken (ROOM_FULL). Not a server
+ * message: the room only sends the error, and the lobby turns it into this
+ * screen so the refused visitor is not left on a lobby they have no seat in.
+ */
+export const ROOM_FULL_REASON = 'room-full';
+
+/**
  * Which copy and which way out the expired screen shows for `msg` in a room of
  * `mode`. A Quick Match has no invite to have expired and no room of its own to
  * create, so whatever the reason it gets its own copy and the Find Another
@@ -34,7 +42,7 @@ export const INVITE_INVALID_REASON = 'invalid-invite';
  */
 export function expiredScreen(msg, mode) {
   if (mode === 'public') return { copy: 'quick-match', exit: 'find-match' };
-  const known = [INVITE_EXPIRED_REASON, INVITE_INVALID_REASON].includes(msg?.reason);
+  const known = [INVITE_EXPIRED_REASON, INVITE_INVALID_REASON, ROOM_FULL_REASON].includes(msg?.reason);
   return { copy: known ? msg.reason : 'idle', exit: 'new-room' };
 }
 

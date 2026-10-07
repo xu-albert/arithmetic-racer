@@ -512,6 +512,34 @@ describe("private room — grading and consequences", () => {
     });
   });
 
+  it("passing on a finish under the passive floor says the race will not count", async () => {
+    // The pass proves a person; the 200 ms/problem floor still makes the row
+    // impossibly_fast, so "your race counts" would be a promise the board breaks.
+    const host = makeConn("host");
+    const guest = makeConn("guest");
+    await withRoom([host, guest], async (room) => {
+      await join(room, host, "Host");
+      await join(room, guest, "Guest");
+      await room.handleStartRace(host);
+      await runCountdown(room);
+      room.state.raceStartedAt = Date.now() - 8000;
+      await raceToFinish(room, [guest]);
+      // ~100 ms/problem: inside the trigger zone and under the floor.
+      room.state.raceStartedAt = Date.now() - 1000;
+      await raceToFinish(room, [host]);
+
+      const challenge = challengeFor(room, host);
+      await answerCaptcha(room, host, challenge, challenge.count);
+
+      expect(host.lastOf("captcha-result")).toEqual({
+        type: "captcha-result", verified: true, counts: false, reason: "impossibly_fast",
+      });
+      const hostRow = (await rowsForRoom(room)).find((r) => r.finish_time_ms < 4000);
+      expect(hostRow.suspect).toBe(1);
+      expect(hostRow.suspect_reason).toBe("impossibly_fast");
+    });
+  });
+
   it("a wrong answer records the race unverified (suspect, captcha_failed)", async () => {
     const host = makeConn("host");
     const guest = makeConn("guest");

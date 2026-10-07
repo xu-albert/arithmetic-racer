@@ -12,11 +12,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   EXPIRED_ROOM_STATE,
   ROOM_EXPIRED_TYPE,
   INVITE_EXPIRED_REASON,
   INVITE_INVALID_REASON,
+  ROOM_FULL_REASON,
   expiredScreen,
   isRoomExpiredMessage,
   createExpiryLatch,
@@ -136,9 +138,24 @@ test("a private room's screen follows the reason and offers a new room", () => {
     privateScreen({ type: ROOM_EXPIRED_TYPE, reason: INVITE_INVALID_REASON }),
     { copy: INVITE_INVALID_REASON, exit: "new-room" },
   );
+  assert.deepEqual(
+    privateScreen({ type: ROOM_EXPIRED_TYPE, reason: ROOM_FULL_REASON }),
+    { copy: ROOM_FULL_REASON, exit: "new-room" },
+  );
   // The tombstone snapshot carries no reason: it is the idle winddown.
   assert.deepEqual(
     privateScreen({ type: "state", state: { state: EXPIRED_ROOM_STATE } }),
     { copy: "idle", exit: "new-room" },
   );
+});
+
+test("every copy expiredScreen can pick has a heading and text on the page", () => {
+  // main.js shows the [data-expired-copy] elements matching the pick and hides
+  // the rest, so a copy with no markup renders an empty screen.
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const copies = ["idle", INVITE_EXPIRED_REASON, INVITE_INVALID_REASON, ROOM_FULL_REASON, "quick-match"];
+  for (const copy of copies) {
+    assert.match(html, new RegExp(`<h2[^>]*data-expired-copy="${copy}"`), `${copy} heading`);
+    assert.match(html, new RegExp(`<p[^>]*data-expired-copy="${copy}"`), `${copy} text`);
+  }
 });

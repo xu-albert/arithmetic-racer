@@ -22,8 +22,13 @@ function tick(ms = 5) {
  * WS upgrade through the Worker entry, then hello, then read the userId the
  * room stamped on the seat from the header the Worker forwarded.
  */
-async function seatedUserId(pathname, { header, sessionUserId }) {
-  _setTestUserId(sessionUserId ?? null);
+async function seatedUserId(pathname, opts) {
+  return (await seated(pathname, opts)).userId;
+}
+
+/** The same upgrade and hello, returning the seat's userId and handle. */
+async function seated(pathname, { header, usernameHeader, sessionUserId, sessionUsername }) {
+  _setTestUserId(sessionUserId ?? null, sessionUsername ?? null);
   try {
     // Public rooms derive difficulty from an e-/m-/h- name prefix (lobby-router
     // mints them); a name without the prefix gets BAD_ROOM_ID at hello.
@@ -37,6 +42,7 @@ async function seatedUserId(pathname, { header, sessionUserId }) {
       headers: {
         Upgrade: "websocket",
         ...(header ? { "x-arithmetic-user-id": header } : {}),
+        ...(usernameHeader ? { "x-arithmetic-username": usernameHeader } : {}),
       },
     });
     expect(res.status).toBe(101);
@@ -58,7 +64,9 @@ async function seatedUserId(pathname, { header, sessionUserId }) {
     while (Date.now() < deadline) {
       seat = await runInDurableObject(stub, async (room) => {
         if (!room.state) await room.onStart();
-        return room.state.players.length > 0 ? room.state.players[0].userId : undefined;
+        if (room.state.players.length === 0) return undefined;
+        const [p] = room.state.players;
+        return { userId: p.userId, handle: p.handle };
       });
       if (seat !== undefined) break;
       await tick();
@@ -114,5 +122,53 @@ describe("party-route identity stamping", () => {
       header: "forged-user-without-session",
       sessionUserId: "real-session-user",
     })).toBe("real-session-user");
+  });
+});
+
+describe("party-route username stamping", () => {
+  // The room seats a signed-in racer under the username it reads from this
+  // header, so a forged one would let a guest race as somebody's account name.
+  it("strips a forged username header from a guest's upgrade", async () => {
+    const seat = await seated("/parties/race-room/<name>", { usernameHeader: "SomeoneElse" });
+    expect(seat.userId).toBeNull();
+    expect(seat.handle).toBe("GateTest");
+  });
+
+  it("strips a forged username header on a duplicate-slash public route", async () => {
+    const seat = await seated("/parties//public-race-room/<name>", { usernameHeader: "SomeoneElse" });
+    expect(seat.handle).toBe("GateTest");
+  });
+
+  it("seats a signed-in racer under the session's username, not a forged one", async () => {
+    const seat = await seated("/parties/race-room/<name>", {
+      usernameHeader: "SomeoneElse",
+      sessionUserId: "real-session-user",
+      sessionUsername: "RealRacer",
+    });
+    expect(seat).toEqual({ userId: "real-session-user", handle: "RealRacer" });
+  });
+
+  it("a signed-in account with no username yet keeps the guest handle", async () => {
+    const seat = await seated("/parties/race-room/<name>", {
+      usernameHeader: "SomeoneElse",
+      sessionUserId: "oauth-user-mid-signup",
+    });
+    expect(seat).toEqual({ userId: "oauth-user-mid-signup", handle: "GateTest" });
+  });
+});
+
+describe("static asset fallback", () => {
+  it("answers an unknown path with the 404 page, not an empty body", async () => {
+    const res = await SELF.fetch("https://gate.test/some/missing/page");
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    expect(body).toContain("Page not found");
+    expect(body).toContain('href="/"');
+  });
+
+  it("still serves real pages as themselves", async () => {
+    const res = await SELF.fetch("https://gate.test/privacy.html");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Privacy");
   });
 });

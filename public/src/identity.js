@@ -51,9 +51,9 @@ export function getDeviceId(storage) {
 }
 
 /**
- * The persistent guest display name for solo races — rooms instead use the
- * server-issued racerHandle above. Signed-in players race under their
- * username; this is what a guest's own lane is labelled with.
+ * The persistent guest display name, minted for whichever mode a guest plays
+ * first. Signed-in players race under their username instead, in solo and in
+ * rooms alike. Prefer getGuestHandle(), which follows a room's renames.
  */
 export function getOrCreateAnonHandle() {
   let h = localStorage.getItem(KEY_ANON_HANDLE);
@@ -62,4 +62,14 @@ export function getOrCreateAnonHandle() {
     localStorage.setItem(KEY_ANON_HANDLE, h);
   }
   return h;
+}
+
+/**
+ * The one name a guest races under, solo and in rooms: the room handle when a
+ * room has issued one (it may have renamed this guest, or been renamed by
+ * them), else the persistent anonHandle. A room's hello offers it as the
+ * handle to seat, so a guest who starts solo keeps that name in a room.
+ */
+export function getGuestHandle() {
+  return getStoredHandle() ?? getOrCreateAnonHandle();
 }
