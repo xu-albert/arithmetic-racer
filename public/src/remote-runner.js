@@ -298,9 +298,11 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     // anyone who left the results screen, so an absent seat keeps ranking on
     // its local row here. This socket was away across the race end, though,
     // and another racer's local row predates whatever they did meanwhile:
-    // absence cannot tell a straggler from a finisher who left. The room's own
-    // final rows, pinned on `lastRace`, settle every one of them right after
-    // this (see adoptFinalRows).
+    // absence cannot tell a straggler from a finisher who left, nor either one
+    // from a seat removed before the race. The room's own final rows, pinned
+    // on `lastRace`, tell them apart right after this: a seat they carry takes
+    // its pinned row (see adoptFinalRows), and one they do not never raced
+    // (see removeUnracedSeats).
     // A room that predates those rows leaves only this player's own row as
     // evidence. Absent from such a Quick Match result with no finish of their
     // own, they did not finish, and the `drop` this socket missed is owed here
@@ -370,6 +372,24 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
     return changed;
   }
 
+  // `humanRows` is every human seat the race ended with, mid-race departures
+  // included since both rooms hold those, so a local human seat that neither
+  // it nor the snapshot's player list carries left before the race began and
+  // this socket missed its `player-left`. It comes off the roster as a racing
+  // snapshot takes it off (see removeSeat). A room that predates `humanRows`
+  // cannot say, and leaves such a seat its local row.
+  function removeUnracedSeats(players, humanRows) {
+    const changed = [];
+    if (!humanRows) return changed;
+    const listed = new Set([...(players ?? []), ...humanRows].map((p) => aliasId(p.id, youAre)));
+    for (let i = racers.length - 1; i >= 0; i--) {
+      const r = racers[i];
+      if (r.isBot || listed.has(r.id)) continue;
+      if (removeSeat(r)) changed.push(r);
+    }
+    return changed;
+  }
+
   function announce(changed) {
     for (const r of changed) {
       emit('advance', { laneId: r.id, score: r.score, finishMs: r.finishMs });
@@ -434,6 +454,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         if (msg.state.state === 'finished' && !raceSettled) {
           changed.push(...adoptFinalRows(msg.state.lastRace?.botRows, { bots: true }));
           changed.push(...adoptFinalRows(msg.state.lastRace?.humanRows, { bots: false }));
+          changed.push(...removeUnracedSeats(msg.state.players, msg.state.lastRace?.humanRows));
         }
         if (msg.state.problemSequence?.length) sequence = msg.state.problemSequence;
         // Replay countdown if we joined mid-countdown and haven't seen a countdown event yet.
