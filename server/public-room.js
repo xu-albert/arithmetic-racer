@@ -7,7 +7,7 @@
 //   - Auto-start timer fires the race after a configurable countdown.
 //   - Remaining seats filled with bots; bot timelines are precomputed (no per-tick alarms).
 
-import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS, COUNTDOWN_SECONDS, rankPlayers, publicPlayer } from './room.js';
+import { RaceRoom, freshState as baseFreshState, IDLE_CLEANUP_MS, COUNTDOWN_SECONDS, rankPlayers, publicPlayer, finalHumanRows } from './room.js';
 import { MAX_PLAYERS, computeAutoStartDeadline } from '../public/src/auto-start.js';
 import { pickBotTiers } from '../public/src/bot.js';
 import { computeBotTimelines, scoreBotAt } from '../public/src/bot-timeline.js';
@@ -314,6 +314,9 @@ export class PublicRaceRoom extends RaceRoom {
       // into the `finished` snapshot would otherwise have only its own replay
       // of the timelines to put them on the podium with.
       botRows: bots.map(publicPlayer),
+      // The seats removePlayer held past their departure leave the same way,
+      // and every human's row rides here for that reason (see finalHumanRows).
+      humanRows: finalHumanRows(this.state.players),
     };
     const rankings = rankPlayers(this.state.players);
     // Mirror the base RaceRoom: strip identity (deviceId/userId, and the

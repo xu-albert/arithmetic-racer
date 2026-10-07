@@ -588,3 +588,103 @@ describe("public quickmatch — the same deadline, bots unaffected", () => {
     });
   });
 });
+
+// A socket that is away across the race end misses `finish` and every `drop`
+// with it, and settles from the `finished` snapshot. The seats it most needs
+// to hear about are the ones that snapshot's player list may no longer hold —
+// a Quick Match seat that departed mid-race is stripped as the race ends, and
+// a seat that leaves the results is spliced in either room — so the race end
+// pins every human's final row on `lastRace`, beside Quick Match's botRows.
+describe("the race end pins every human's final row on lastRace", () => {
+  function expectNoSecrets(rows) {
+    for (const row of rows) {
+      for (const key of ["racerId", "deviceId", "userId", "connId", "departed", "resultHeld", "attempts"]) {
+        expect(row).not.toHaveProperty(key);
+      }
+    }
+  }
+
+  it("public quickmatch: a racer whose tab closed at 4/10 is on the snapshot a second dropout reconnects into", async () => {
+    const alice = makeConn("alice");
+    const bob = makeConn("bob");
+    const conns = [alice, bob];
+    await withPublicRoom(conns, async (room, { settled }) => {
+      const aliceId = await join(room, alice, "Alice", { difficulty: "medium" });
+      const bobId = await join(room, bob, "Bob", { difficulty: "medium" });
+      room.state.autoStartDeadline = Date.now() - 1;
+      await room.onAlarm();
+      await runCountdown(room);
+      room.state.raceStartedAt = Date.now() - 8000;
+      for (let i = 0; i < 4; i++) await answerCorrectly(room, alice);
+      for (let i = 0; i < 6; i++) await answerCorrectly(room, bob);
+      const aliceSeat = playerOf(room, aliceId).id;
+      const bobSeat = playerOf(room, bobId).id;
+
+      // Alice's tab closes and her grace runs out mid-race; Bob's socket goes
+      // too, around the same moment, and the race ends while he is away.
+      await expireReconnectGrace(room, alice);
+      await room.onClose(bob);
+      await expireRaceDeadline(room);
+      expect(room.state.state).toBe("finished");
+      await settled();
+
+      // Bob reconnects into the finished room. Alice's seat was stripped as
+      // the race ended, so only the pinned rows can say how she finished.
+      const bob2 = makeConn("bob-again");
+      conns.push(bob2);
+      await room.handleHello(bob2, { type: "hello", playerId: bobId, handle: "Bob", deviceId: "dev-Bob" });
+      const snapshot = bob2.lastOf("state").state;
+      expect(snapshot.state).toBe("finished");
+      expect(snapshot.players.map((p) => p.id)).not.toContain(aliceSeat);
+      const rows = Object.fromEntries(snapshot.lastRace.humanRows.map((r) => [r.id, r]));
+      expect(Object.keys(rows).sort()).toEqual([aliceSeat, bobSeat].sort());
+      expect(rows[aliceSeat]).toMatchObject({ handle: "Alice", score: 4, finishMs: null, dropped: true });
+      expect(rows[bobSeat]).toMatchObject({ handle: "Bob", score: 6, finishMs: null, dropped: false, dnf: true });
+      expect(snapshot.lastRace.humanRows.some((r) => r.isBot)).toBe(false);
+      expectNoSecrets(snapshot.lastRace.humanRows);
+
+      // Pinned in storage, not only in memory: a DO that is evicted and wakes
+      // into the finished room serves the same rows.
+      const stored = await room.ctx.storage.get("state");
+      expect(stored.lastRace.humanRows.find((r) => r.id === aliceSeat)).toMatchObject({ score: 4, dropped: true });
+    });
+  });
+
+  it("private room: a dropout who came back and left the results is still on the snapshot the other dropout reconnects into", async () => {
+    const alice = makeConn("alice");
+    const bob = makeConn("bob");
+    const conns = [alice, bob];
+    await withPrivateRoom(conns, async (room) => {
+      const aliceId = await join(room, alice, "Alice");
+      const bobId = await join(room, bob, "Bob");
+      await room.handleStartRace(alice);
+      await runCountdown(room);
+      room.state.raceStartedAt = Date.now() - 8000;
+      for (let i = 0; i < 4; i++) await answerCorrectly(room, alice);
+      for (let i = 0; i < 6; i++) await answerCorrectly(room, bob);
+      const aliceSeat = playerOf(room, aliceId).id;
+
+      await expireReconnectGrace(room, alice);
+      await room.onClose(bob);
+      await expireRaceDeadline(room);
+      expect(room.state.state).toBe("finished");
+
+      // Alice comes back to the results, then leaves them: a private room
+      // splices a seat that leaves once the race is over.
+      const alice2 = makeConn("alice-again");
+      conns.push(alice2);
+      await room.handleHello(alice2, { type: "hello", playerId: aliceId, handle: "Alice", deviceId: "dev-Alice" });
+      await room.handleQuit(alice2);
+      expect(playerOf(room, aliceId)).toBeNull();
+
+      const bob2 = makeConn("bob-again");
+      conns.push(bob2);
+      await room.handleHello(bob2, { type: "hello", playerId: bobId, handle: "Bob", deviceId: "dev-Bob" });
+      const snapshot = bob2.lastOf("state").state;
+      expect(snapshot.players.map((p) => p.id)).not.toContain(aliceSeat);
+      expect(snapshot.lastRace.humanRows.find((r) => r.id === aliceSeat))
+        .toMatchObject({ handle: "Alice", score: 4, finishMs: null, dropped: true });
+      expectNoSecrets(snapshot.lastRace.humanRows);
+    });
+  });
+});
