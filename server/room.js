@@ -173,7 +173,9 @@ export function freshState(id) {
     // its raceLength. Both live fields can move while that race's results are
     // still on screen and still being written (the host may reconfigure
     // between races), so the finished scoreboard reads its denominator here
-    // and every persisted row reads its tier and length here.
+    // and every persisted row reads its tier and length here. It also carries
+    // the race's final rows for a socket that missed `finish` (see
+    // finalHumanRows).
     lastRace: null,
     players: [],
     problemSequence: [],
