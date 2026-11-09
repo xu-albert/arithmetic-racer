@@ -21,7 +21,7 @@ import { soloResultPayload } from './src/solo-result.js';
 import { getOrCreateDeviceId, getGuestHandle } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
-import { expiredScreen } from './src/room-expiry.js';
+import { renderExpiredScreen } from './src/room-expiry-view.js';
 
 // Cache of the logged-in user's username — set by the `session-ready`
 // event dispatched by header.js after its /api/me fetch. Saves a duplicate
@@ -179,13 +179,7 @@ function handleRoomExpired(msg, mode) {
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
   document.getElementById('invite-modal')?.classList.add('hidden');
-  const { copy, exit } = expiredScreen(msg, mode);
-  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-copy]') ?? []) {
-    el.classList.toggle('hidden', el.dataset.expiredCopy !== copy);
-  }
-  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-exit]') ?? []) {
-    el.classList.toggle('hidden', el.dataset.expiredExit !== exit);
-  }
+  renderExpiredScreen(screens['room-expired'], msg, mode);
   showScreen('room-expired');
   // The switch can happen while the player is staring at the race screen, so
   // move focus rather than leaving a screen reader on a lane that just vanished.
@@ -227,7 +221,7 @@ function enterRoom(roomId, { mode, difficulty, admissionPass } = {}) {
 // the fresh cookie. Expiry clears lobbyHandle, so it reconnects nothing.
 document.addEventListener('auth-changed', (e) => {
   const reason = e.detail?.reason;
-  if (reason !== 'signin' && reason !== 'signup' && reason !== 'signout') return;
+  if (!['signin', 'signup', 'signout', 'pick-username', 'rename'].includes(reason)) return;
   lobbyHandle?.client.reconnect();
 });
 

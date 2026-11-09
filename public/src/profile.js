@@ -549,7 +549,7 @@ export function mountProfile(host) {
     try {
       await setUsername(next);
       setStatus("ok", "Saved");
-      document.dispatchEvent(new Event("auth-changed"));
+      document.dispatchEvent(new CustomEvent("auth-changed", { detail: { reason: "rename" } }));
       closeRename();
       // Refresh local view so the new name shows immediately.
       $("#profile-username-display").textContent = next;

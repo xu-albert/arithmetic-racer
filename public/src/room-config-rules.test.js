@@ -2,7 +2,7 @@ import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CONFIGURABLE_STATES, isConfigurableState, canEditConfig,
-  parseRaceLength, RACE_LENGTH_HINT, MIN_RACE_LENGTH, MAX_RACE_LENGTH,
+  parseRaceLength, RACE_LENGTH_HINT,
 } from './room-config-rules.js';
 
 test('config is editable in lobby and between races', () => {
@@ -47,8 +47,8 @@ test('CONFIGURABLE_STATES is frozen so callers cannot widen the rule', () => {
 describe('parseRaceLength', () => {
   test('takes a whole number inside the bounds the room enforces', () => {
     assert.equal(parseRaceLength('10'), 10);
-    assert.equal(parseRaceLength(' 5 '), MIN_RACE_LENGTH);
-    assert.equal(parseRaceLength('50'), MAX_RACE_LENGTH);
+    assert.equal(parseRaceLength(' 5 '), 5);
+    assert.equal(parseRaceLength('50'), 50);
   });
 
   test('refuses what the room would refuse, rather than sending it', () => {
@@ -59,7 +59,7 @@ describe('parseRaceLength', () => {
     }
   });
 
-  test('the hint names the same bounds', () => {
-    assert.match(RACE_LENGTH_HINT, new RegExp(`${MIN_RACE_LENGTH} to ${MAX_RACE_LENGTH}`));
+  test('the hint gives hosts the specified 5–50 range', () => {
+    assert.equal(RACE_LENGTH_HINT, 'Race length must be a whole number from 5 to 50.');
   });
 });
