@@ -762,10 +762,10 @@ export class RaceRoom extends Server {
       if (username) {
         existing.handle = username;
         existing.handleFromAccount = true;
-      } else if (typeof msg.handle === 'string' && isValidHandle(msg.handle)) {
+      } else if (typeof msg.handle === 'string' && isValidHandle(msg.handle) && !others.has(msg.handle.trim())) {
         existing.handle = msg.handle.trim();
         existing.handleFromAccount = false;
-      } else if (existing.handleFromAccount) {
+      } else if (existing.handleFromAccount || others.has(existing.handle)) {
         existing.handle = generateHandle(Math.random, others);
         existing.handleFromAccount = false;
       }

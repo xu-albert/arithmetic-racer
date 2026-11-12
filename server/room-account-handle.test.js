@@ -133,6 +133,21 @@ describe("a private room seats a signed-in racer under their username", () => {
       expect(seat.handleFromAccount).toBe(false);
     });
   });
+
+  it("a signed-out reconnect whose stored guest handle was taken in the meantime gets a fresh one", async () => {
+    await privateRoom(async (room) => {
+      const racerId = await hello(room, makeConn(SIGNED_IN), { handle: "ZestyHare" });
+      await hello(room, makeConn(), { handle: "ZestyHare" });
+
+      const signedOut = makeConn();
+      await hello(room, signedOut, { racerId, handle: "ZestyHare" });
+      const seat = seatOf(room, racerId);
+      expect(seat.handle).not.toBe("ZestyHare");
+      expect(seat.handle).not.toBe("RealRacer");
+      expect(seat.handleFromAccount).toBe(false);
+      expect(ackOf(signedOut)).toMatchObject({ handle: seat.handle, handleFromAccount: false });
+    });
+  });
 });
 
 describe("Quick Match", () => {
