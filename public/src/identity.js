@@ -3,9 +3,10 @@
 // so it must never be rendered, logged, or sent anywhere but that message.
 //
 // Every localStorage identity the app carries lives here — racerId (room
-// credential), racerHandle (room display name), deviceId (anonymous race
-// attribution and the signup claim), anonHandle (solo guest display name) —
-// so no caller reads or writes those keys directly.
+// credential), racerHandle (room-issued guest handle), deviceId (anonymous
+// race attribution and the signup claim), anonHandle (fallback guest handle
+// before a room issues one; getGuestHandle() unifies the two for solo and
+// rooms) — so no caller reads or writes those keys directly.
 import { generateHandle } from './handles.js';
 
 const KEY_ID = 'racerId';

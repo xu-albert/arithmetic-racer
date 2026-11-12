@@ -208,12 +208,14 @@ function enterRoom(roomId, { mode, difficulty, admissionPass } = {}) {
 }
 
 // A room learns who you are once, at the WebSocket upgrade: the Worker stamps
-// the session's user id onto it (server/server.js) and the DO reads it in
-// onConnect. An email sign-in or sign-out with the room socket already open
-// therefore changes nothing until the next connect — race results would keep
-// landing as anonymous guest rows, which the one-time history claim (run at
-// signup) never revisits. Reconnecting the room's socket in place picks up the
-// new session: handleHello's reconnect branch re-stamps the seat's identity,
+// the session's user id and username onto it (server/server.js) and the DO
+// reads them in onConnect. Signing in, signing out, picking a username, or
+// renaming with the room socket already open therefore changes nothing until
+// the next connect — race results after sign-in would keep landing as
+// anonymous guest rows, which the one-time history claim (run at signup) never
+// revisits, and the seat's handle would stay on its old guest or account name.
+// Reconnecting the room's socket in place picks up the new session:
+// handleHello's reconnect branch re-stamps the seat's identity and handle,
 // and the lobby, a race in progress and the captcha overlay — all still
 // subscribed to the same client — take the snapshot exactly as they do after a
 // network drop, without leaving the screen the player is on.

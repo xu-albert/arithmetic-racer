@@ -1,9 +1,11 @@
-// Session helper. Reads the current user_id from the session cookie via
-// better-auth, with a test override so unit tests can inject a user without
-// going through a real signup/sign-in dance.
+// Session helper. Reads the current user_id (and username) from the session
+// cookie via better-auth, with a test override so unit tests can inject a user
+// without going through a real signup/sign-in dance.
 //
-// Route handlers and the Worker entry import readUserId from here. Test files
-// import _setTestUserId to inject a known user id.
+// Route handlers import readUserId from here; the Worker entry imports
+// readSessionUser so a room upgrade reads id and username in one session
+// lookup. Test files import _setTestUserId to inject a known user id and
+// optional username.
 
 import { getAuth } from "./auth.js";
 

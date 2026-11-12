@@ -756,7 +756,8 @@ export class RaceRoom extends Server {
       existing.userId = currentConnState.userId ?? null;
       // The handle follows the identity just refreshed: a seat that signed in
       // takes its username, one that signed out goes back to the guest handle
-      // the client sent (or a fresh one when it had none).
+      // the client sent when free (or a fresh one when it had none or another
+      // seat took it).
       const others = new Set(this.state.players.filter((p) => p !== existing).map((p) => p.handle));
       const username = accountHandle(currentConnState, others);
       if (username) {
