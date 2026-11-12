@@ -1,13 +1,15 @@
 import { Server } from 'partyserver';
 import { generateHandle } from '../public/src/handles.js';
 import { generateSequence, validateAnswer, DIFFICULTIES } from '../public/src/game.js';
-import { isConfigurableState } from '../public/src/room-config-rules.js';
+import {
+  isConfigurableState, MIN_RACE_LENGTH, MAX_RACE_LENGTH, RACE_LENGTH_HINT,
+} from '../public/src/room-config-rules.js';
 import {
   EXPIRED_ROOM_STATE, ROOM_EXPIRED_TYPE, INVITE_EXPIRED_REASON, INVITE_INVALID_REASON,
 } from '../public/src/room-expiry.js';
 import { CATCHUP_MAX_ENTRIES_PER_PROBLEM } from '../public/src/catch-up-rules.js';
 import { insertRaceResult, MAX_DEVICE_ID_LENGTH } from '../worker/race-result-store.js';
-import { CAPTCHA_PROBLEM_COUNT } from '../worker/plausibility.js';
+import { CAPTCHA_PROBLEM_COUNT, assessPlausibility } from '../worker/plausibility.js';
 import { containsProfanity } from '../worker/username-validator.js';
 import { logError, KINDS } from '../worker/logger.js';
 import { buildRaceResultPayload } from './room-stats.js';
@@ -159,8 +161,13 @@ export const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{
 // MAX_PLAYERS (6) before delegating here, so this never binds them.
 export const PRIVATE_ROOM_MAX_PLAYERS = 10;
 export const MAX_HANDLE_LEN = 24;
-export const MIN_RACE_LENGTH = 5;
-export const MAX_RACE_LENGTH = 50;
+
+// Stamped by the Worker (server/server.js) beside x-arithmetic-user-id on every
+// room upgrade from a signed-in session with a username; deleted otherwise, so
+// a client can never supply it.
+export const USERNAME_HEADER = 'x-arithmetic-username';
+// Shared with the lobby's race-length box (room-config-rules.js).
+export { MIN_RACE_LENGTH, MAX_RACE_LENGTH };
 
 export function freshState(id) {
   return {
@@ -335,16 +342,33 @@ export function ownsSeat(player, connection) {
   return owner === connection?.id;
 }
 
-// Tier 1 finished ASC by finishMs; tier 2 still-racing DESC by score; tier 3 dropped/dnf.
+/**
+ * The handle a signed-in seat races under: its account's username, from the
+ * connection state onConnect stamped from the Worker's trusted header. Null
+ * for a guest, for an account with no username yet, and when another seat in
+ * the room already holds that name (a guest may have picked it first) — the
+ * caller then falls back to the guest rules, as before.
+ *
+ * @param {{ userId?: string|null, username?: string|null }} connState
+ * @param {Set<string>} taken - handles held by the room's other seats
+ */
+export function accountHandle(connState, taken) {
+  const name = connState?.userId ? connState.username : null;
+  if (typeof name !== 'string' || !isValidHandle(name)) return null;
+  const trimmed = name.trim();
+  return taken.has(trimmed) ? null : trimmed;
+}
+
+// Tier 1 finished ASC by finishMs; then still racing, dnf, dropped, each DESC by score.
+// Same rule as public/src/rankings.js rankRacers.
 export function rankPlayers(players) {
-  const tier = (r) => (r.dropped || r.dnf ? 3 : r.finishMs != null ? 1 : 2);
+  const tier = (r) => (r.dropped ? 4 : r.dnf ? 3 : r.finishMs != null ? 1 : 2);
   return [...players].sort((a, b) => {
     const ta = tier(a);
     const tb = tier(b);
     if (ta !== tb) return ta - tb;
     if (ta === 1) return a.finishMs - b.finishMs;
-    if (ta === 2) return b.score - a.score;
-    return 0;
+    return b.score - a.score;
   });
 }
 
@@ -474,11 +498,13 @@ export class RaceRoom extends Server {
     // entry. Client-supplied values are stripped/overwritten there, so this
     // is trustworthy. Null for anon users.
     const userId = ctx?.request?.headers?.get('x-arithmetic-user-id') ?? null;
+    // The same trust: what a signed-in seat is named (see accountHandle()).
+    const username = userId ? ctx?.request?.headers?.get(USERNAME_HEADER) ?? null : null;
     // Whether this socket carried a pass signed for this room, of any age —
     // the Worker's verdict, stamped like the user id. Only a new seat needs one.
     const admission = ctx?.request?.headers?.get(ADMISSION_HEADER);
     const hasAdmissionPass = admission === 'fresh' || admission === 'stale';
-    connection.setState({ ...(connection.state ?? {}), userId, hasAdmissionPass });
+    connection.setState({ ...(connection.state ?? {}), userId, username, hasAdmissionPass });
 
     // Don't add player yet — wait for `hello`.
     connection.send(JSON.stringify({ type: 'state', state: this.publicState(), youAre: null }));
@@ -728,12 +754,25 @@ export class RaceRoom extends Server {
       // Refresh identity from this connection (cookie may have changed).
       if (isValidDeviceId(msg.deviceId)) existing.deviceId = msg.deviceId;
       existing.userId = currentConnState.userId ?? null;
-      // Optionally update handle if client sent a non-null one.
-      if (typeof msg.handle === 'string' && isValidHandle(msg.handle)) {
+      // The handle follows the identity just refreshed: a seat that signed in
+      // takes its username, one that signed out goes back to the guest handle
+      // the client sent when free (or a fresh one when it had none or another
+      // seat took it).
+      const others = new Set(this.state.players.filter((p) => p !== existing).map((p) => p.handle));
+      const username = accountHandle(currentConnState, others);
+      if (username) {
+        existing.handle = username;
+        existing.handleFromAccount = true;
+      } else if (typeof msg.handle === 'string' && isValidHandle(msg.handle) && !others.has(msg.handle.trim())) {
         existing.handle = msg.handle.trim();
+        existing.handleFromAccount = false;
+      } else if (existing.handleFromAccount || others.has(existing.handle)) {
+        existing.handle = generateHandle(Math.random, others);
+        existing.handleFromAccount = false;
       }
       connection.send(JSON.stringify({
         type: 'hello-ack', playerId: existing.id, handle: existing.handle,
+        handleFromAccount: !!existing.handleFromAccount,
       }));
       // A challenge can be pending across a disconnect (the race ended, the
       // socket dropped before the captcha was answered). The new socket would
@@ -769,16 +808,20 @@ export class RaceRoom extends Server {
         `This room is full (${PRIVATE_ROOM_MAX_PLAYERS}/${PRIVATE_ROOM_MAX_PLAYERS}).`);
     }
 
+    const currentConnState = connection.state ?? {};
     const taken = new Set(this.state.players.map((p) => p.handle));
-    let handle;
-    if (typeof msg.handle === 'string' && isValidHandle(msg.handle) && !taken.has(msg.handle.trim())) {
-      handle = msg.handle.trim();
-    } else {
-      handle = generateHandle(Math.random, taken);
+    // A signed-in racer races under their username, the name the leaderboard
+    // and the recent-finishes feed will show for this race. Guests keep the
+    // handle they asked for, or a random one.
+    let handle = accountHandle(currentConnState, taken);
+    const handleFromAccount = handle != null;
+    if (!handleFromAccount) {
+      handle = typeof msg.handle === 'string' && isValidHandle(msg.handle) && !taken.has(msg.handle.trim())
+        ? msg.handle.trim()
+        : generateHandle(Math.random, taken);
     }
 
-    const isCreator = this.state.players.length === 0;
-    const currentConnState = connection.state ?? {};
+    const isCreator = this.assignsHost() && this.state.players.length === 0;
     const player = {
       // Wire identity: ephemeral, per-room, safe to broadcast.
       id: nextBroadcastId(this.state),
@@ -788,6 +831,10 @@ export class RaceRoom extends Server {
       // socket whose close opens the reconnect grace.
       connId: connection.id,
       handle,
+      // True while `handle` is the account's username: the seat cannot rename
+      // itself (handleSetHandle), and the client does not keep the name as
+      // its guest handle. Public, so the lobby knows not to offer the edit.
+      handleFromAccount,
       isCreator,
       joinedAt: Date.now(),
       score: 0,
@@ -818,7 +865,7 @@ export class RaceRoom extends Server {
     this.ensureLiveCreator();
 
     connection.setState({ ...currentConnState, playerId: player.id, racerId });
-    connection.send(JSON.stringify({ type: 'hello-ack', playerId: player.id, handle }));
+    connection.send(JSON.stringify({ type: 'hello-ack', playerId: player.id, handle, handleFromAccount }));
     this.broadcast(JSON.stringify({ type: 'player-joined', player: publicPlayer(player) }));
     await this.persist();
     this.broadcastState();
@@ -835,8 +882,13 @@ export class RaceRoom extends Server {
     if (containsProfanity(msg.handle)) {
       return this.sendError(connection, 'INVALID_INPUT', 'Please choose a different handle');
     }
+    // A signed-in seat is named by its account, so the car, the podium and
+    // the leaderboard row all read the same.
+    if (player.handleFromAccount) {
+      return this.sendError(connection, 'INVALID_INPUT', 'Signed-in racers race under their username');
+    }
     if (!isValidHandle(msg.handle)) {
-      return this.sendError(connection, 'INVALID_INPUT', 'Handle must be 1–24 chars, no control chars');
+      return this.sendError(connection, 'INVALID_INPUT', 'Handles can be 1 to 24 characters, with no line breaks');
     }
     const trimmed = msg.handle.trim();
     if (this.state.players.some((p) => p.id !== player.id && p.handle === trimmed)) {
@@ -864,7 +916,7 @@ export class RaceRoom extends Server {
     }
     const len = Number(msg.raceLength);
     if (!Number.isInteger(len) || len < MIN_RACE_LENGTH || len > MAX_RACE_LENGTH) {
-      return this.sendError(connection, 'INVALID_INPUT', `raceLength must be int in [${MIN_RACE_LENGTH}, ${MAX_RACE_LENGTH}]`);
+      return this.sendError(connection, 'INVALID_INPUT', RACE_LENGTH_HINT);
     }
     this.state.difficulty = msg.difficulty;
     this.state.raceLength = len;
@@ -1273,7 +1325,13 @@ export class RaceRoom extends Server {
     const raceAt = Date.now();
     const player = this.state.players.find((p) => p.id === playerId);
     if (outcome === 'pass') {
-      this.sendToSeat(player, JSON.stringify({ type: 'captcha-result', verified: true }));
+      // Passing proves a person, not a possible time: insertRaceResult still
+      // applies the passive bounds, so a finish under the 200 ms/problem floor
+      // stays suspect. Say so rather than promise a race that will not count.
+      const { suspect, reason } = assessPlausibility(challenge.payload);
+      this.sendToSeat(player, JSON.stringify({
+        type: 'captcha-result', verified: true, ...(suspect ? { counts: false, reason } : {}),
+      }));
       this.queueRaceResult({ playerId, payload: challenge.payload, raceAt });
     } else {
       const reason = `captcha_${outcome}`;
@@ -1472,6 +1530,16 @@ export class RaceRoom extends Server {
   }
 
   /**
+   * Whether this room makes its first joiner the host. A private room does;
+   * PublicRaceRoom has no host and overrides this, so the flag is never set
+   * there — clearing it after the fact left the first joiner's own state
+   * broadcast carrying a host badge and live config controls.
+   */
+  assignsHost() {
+    return true;
+  }
+
+  /**
    * Hand the host flag on when the seat holding it is no longer in the room.
    *
    * Start, config and rematch all gate on isCreator, so a room whose host seat
@@ -1492,7 +1560,7 @@ export class RaceRoom extends Server {
    * Succession is otherwise final: a reconnecting ex-host comes back as an
    * ordinary player whenever someone present already holds the flag.
    *
-   * Public rooms never mint a creator (PublicRaceRoom.handleHello clears it),
+   * Public rooms never mint a creator (PublicRaceRoom.assignsHost is false),
    * so the first check keeps this a no-op there.
    */
   ensureLiveCreator(departedSeat = null) {

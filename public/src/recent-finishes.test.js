@@ -130,8 +130,10 @@ test("formatPpm keeps one decimal", () => {
 test("formatPoints distinguishes unscored from zero", () => {
   // 0 is a score a racer can earn (finished, nothing correct); null means the
   // race was never scored. They must not render the same way.
-  assert.equal(formatPoints(0), "0");
-  assert.equal(formatPoints(6.6667), "7");
+  assert.equal(formatPoints(0), "0.0");
+  assert.equal(formatPoints(6.6667), "6.7");
+  // A real finish worth under half a point used to round to "0 pts".
+  assert.equal(formatPoints(0.36), "0.4");
   assert.equal(formatPoints(null), null);
   assert.equal(formatPoints(undefined), null);
 });
@@ -169,7 +171,7 @@ test("toFeedRows maps a payload to display rows", () => {
     isGuest: false,
     difficulty: "hard",
     ppm: "24.5",
-    points: "8",
+    points: "8.2",
     ago: "just now",
   });
 });
@@ -264,7 +266,7 @@ test("feedSignature covers every field the row puts on screen", () => {
   // silently refuses to paint, so each one is pinned.
   const base = {
     name: "ana", isGuest: false, difficulty: "easy",
-    ppm: "20.0", points: "7", ago: "just now",
+    ppm: "20.0", points: "7.0", ago: "just now",
   };
   const sig = feedSignature([base]);
   assert.equal(feedSignature([{ ...base }]), sig);

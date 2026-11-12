@@ -50,13 +50,13 @@ Single-digit `+` and `−`. Operands 0-9. Subtraction never goes negative.
 ```
 
 ### Medium
-Two-digit `+` and `−` (10-99 each side), and two-digit × single-digit (10-99 × 2-9).
+Two-digit `+` and `−` (10-99 each side), and times-table `×` (2-12 × 2-9).
 
 ```
 96 - 42  = 54
 84 - 59  = 25
-40 × 9   = 360
-17 × 5   = 85
+12 × 9   = 108
+7 × 5    = 35
 ```
 
 ### Hard

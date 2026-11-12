@@ -1,6 +1,9 @@
-import test from 'node:test';
+import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { CONFIGURABLE_STATES, isConfigurableState, canEditConfig } from './room-config-rules.js';
+import {
+  CONFIGURABLE_STATES, isConfigurableState, canEditConfig,
+  parseRaceLength, RACE_LENGTH_HINT,
+} from './room-config-rules.js';
 
 test('config is editable in lobby and between races', () => {
   assert.equal(isConfigurableState('lobby'), true);
@@ -39,4 +42,24 @@ test('canEditConfig — nobody changes config mid-race, host included', () => {
 
 test('CONFIGURABLE_STATES is frozen so callers cannot widen the rule', () => {
   assert.throws(() => CONFIGURABLE_STATES.push('racing'), TypeError);
+});
+
+describe('parseRaceLength', () => {
+  test('takes a whole number inside the bounds the room enforces', () => {
+    assert.equal(parseRaceLength('10'), 10);
+    assert.equal(parseRaceLength(' 5 '), 5);
+    assert.equal(parseRaceLength('50'), 50);
+  });
+
+  test('refuses what the room would refuse, rather than sending it', () => {
+    // A refused set-config gets no state broadcast back, so a value sent
+    // anyway sat in the host's box while the room kept its old length.
+    for (const raw of ['4', '51', '-10', 'abc', '3.7', '12abc', '', null, undefined]) {
+      assert.equal(parseRaceLength(raw), null, String(raw));
+    }
+  });
+
+  test('the hint gives hosts the specified 5–50 range', () => {
+    assert.equal(RACE_LENGTH_HINT, 'Race length must be a whole number from 5 to 50.');
+  });
 });

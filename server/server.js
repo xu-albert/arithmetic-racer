@@ -13,7 +13,7 @@ import { routePartykitRequest } from "partyserver";
 import { handleRaceResult } from "../worker/routes/race-result.js";
 import { handleGetMe, handleGetMyRaces, handlePostUsername, handleByDevice } from "../worker/routes/me.js";
 import { getAuth } from "../worker/auth.js";
-import { readUserId } from "../worker/session.js";
+import { readSessionUser } from "../worker/session.js";
 import { handleMatchmakeJoin } from "../worker/routes/matchmake.js";
 import { handleAdminIndex, handleAdminUser, handleAdminContactHandled } from "../worker/routes/admin.js";
 import { handleContact } from "../worker/routes/contact.js";
@@ -21,7 +21,7 @@ import { handleRecentFinishes } from "../worker/routes/recent-finishes.js";
 import { handleLeaderboard } from "../worker/routes/leaderboard.js";
 import { handleCreateRoom } from "../worker/routes/rooms.js";
 import { checkAdmissionPass, ADMISSION_HEADER } from "./admission-pass.js";
-import { refuseAdmission } from "./room.js";
+import { refuseAdmission, USERNAME_HEADER } from "./room.js";
 import { INVITE_INVALID_REASON } from "../public/src/room-expiry.js";
 import { allowRequest, clientIpBucket } from "../worker/rate-limit.js";
 
@@ -147,10 +147,16 @@ export default {
       normalizedPathname.startsWith("/parties/race-room/")
       || normalizedPathname.startsWith("/parties/public-race-room/")
     ) {
-      const userId = await readUserId(request, env);
+      const user = await readSessionUser(request, env);
       const headers = new Headers(request.headers);
-      if (userId) headers.set(USER_ID_HEADER, userId);
+      if (user) headers.set(USER_ID_HEADER, user.id);
       else headers.delete(USER_ID_HEADER);
+      // The account's username, which the room races a signed-in player
+      // under. Same trust rule as the id: only ever the session's own value.
+      // Usernames are ASCII by construction (worker/username-validator.js);
+      // the check keeps a header that cannot be set from failing the upgrade.
+      if (user?.username && /^[\x20-\x7e]+$/.test(user.username)) headers.set(USERNAME_HEADER, user.username);
+      else headers.delete(USERNAME_HEADER);
       upgradeRequest = new Request(request.url, {
         method: request.method,
         headers,

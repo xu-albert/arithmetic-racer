@@ -260,3 +260,26 @@ describe('an in-place reconnect', () => {
     assert.equal(handoffs.length, 1, 'the mounted runner takes the snapshot');
   });
 });
+
+test('the lobby offers a rename only to a guest seat, never to one named by its account', () => {
+  // The room seats a signed-in racer under their username and refuses a
+  // rename (server/room.js handleSetHandle), so offering the edit would hand
+  // back an input whose every commit fails.
+  sockets.length = 0;
+  const els = installDom();
+  attachLobby({
+    roomId: 'rename-room',
+    screens: { 'lobby-room': fakeEl(), race: fakeEl(), results: fakeEl() },
+    onRaceStart: () => {},
+    deviceId: 'rename-device',
+  });
+  const ws = sockets.at(-1);
+  const seat = (extra) => ({ id: ME, isCreator: true, score: 0, finishMs: null, dropped: false, dnf: false, ...extra });
+  const handleSpan = () => els.get('room-players').children[0].children[0];
+
+  ws.push({ type: 'state', state: racingState({ state: 'lobby', players: [seat({ handle: 'RealRacer', isGuest: false, handleFromAccount: true })] }), youAre: ME });
+  assert.equal(handleSpan().className, 'player-handle');
+
+  ws.push({ type: 'state', state: racingState({ state: 'lobby', players: [seat({ handle: 'ZestyHare', isGuest: true })] }), youAre: ME });
+  assert.equal(handleSpan().className, 'player-handle editable');
+});

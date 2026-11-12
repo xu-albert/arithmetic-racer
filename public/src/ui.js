@@ -26,6 +26,9 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     const handleEl = document.createElement('span');
     handleEl.className = 'lane-handle';
     handleEl.textContent = racer.handle;
+    // A long handle is ellipsized to fit the lane's gutter; the tooltip keeps
+    // the whole name reachable.
+    handleEl.title = racer.handle;
 
     const car = document.createElement('div');
     car.className = 'car' + (racer.id === 'player' ? ' you' : '');
