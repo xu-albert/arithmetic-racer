@@ -22,6 +22,7 @@ import { getOrCreateDeviceId, getGuestHandle } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
 import { renderExpiredScreen } from './src/room-expiry-view.js';
+import { createScreenNav } from './src/screen-nav.js';
 
 // Cache of the logged-in user's username — set by the `session-ready`
 // event dispatched by header.js after its /api/me fetch. Saves a duplicate
@@ -65,10 +66,6 @@ mountProfile(document.getElementById('profile'));
 // lobby being visible.
 mountRecentFinishes();
 
-document.addEventListener('open-profile', () => {
-  showScreen('profile');
-});
-
 // ---- Screens & lobby state ---------------------------------------------
 
 const screens = {
@@ -94,15 +91,38 @@ let lobbyHandle = null;
 let cleanupCaptcha = null;
 // Set only on the lobby route — see the initial-routing block below.
 let leaderboardHandle = null;
+let lobbyWired = false;
 
-function showScreen(name) {
-  for (const [key, el] of Object.entries(screens)) {
-    el.classList.toggle('hidden', key !== name);
-  }
+function ensureLobbyWired() {
+  if (lobbyWired) return;
+  lobbyWired = true;
+  lobbyDiffButtons.forEach((btn) => {
+    btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
+  });
+  quickplayBtn.addEventListener('click', startQuickplay);
+  setDifficulty('easy');
+  // Mounted only on this route: a `?room=` deep link never shows the lobby, so
+  // fetching boards there would be a request for a screen nobody will see.
+  //
+  // The board opens on Medium — the tier Find a Match sits on beside it — and
+  // deliberately does not follow `selectedDifficulty`, which is the Solo vs
+  // Bots picker and belongs to a mode that never reaches a board.
+  leaderboardHandle = mountLeaderboard(document.getElementById('leaderboard'), {
+    difficulty: 'medium',
+  });
+}
+
+const nav = createScreenNav({
+  screens,
   // The "who's racing" strip polls only while the lobby is on-screen, so it
   // needs to hear about coming back to a lobby that has been away.
-  if (name === 'lobby') document.dispatchEvent(new Event('lobby-shown'));
-}
+  onLobbyShown: () => document.dispatchEvent(new Event('lobby-shown')),
+  onEnsureLobbyWired: ensureLobbyWired,
+});
+const { showScreen } = nav;
+
+document.addEventListener('open-profile', () => nav.openProfile());
+document.addEventListener('close-profile', () => nav.closeProfile());
 
 function setDifficulty(diff) {
   selectedDifficulty = diff;
@@ -244,20 +264,7 @@ const initialAdmissionPass = params.get('admission') ?? undefined;
 if (initialRoomId) {
   enterRoom(initialRoomId, { mode: initialMode, difficulty: initialDifficulty, admissionPass: initialAdmissionPass });
 } else {
-  lobbyDiffButtons.forEach((btn) => {
-    btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
-  });
-  quickplayBtn.addEventListener('click', startQuickplay);
-  setDifficulty('easy');
-  // Mounted only on this route: a `?room=` deep link never shows the lobby, so
-  // fetching boards there would be a request for a screen nobody will see.
-  //
-  // The board opens on Medium — the tier Find a Match sits on beside it — and
-  // deliberately does not follow `selectedDifficulty`, which is the Solo vs
-  // Bots picker and belongs to a mode that never reaches a board.
-  leaderboardHandle = mountLeaderboard(document.getElementById('leaderboard'), {
-    difficulty: 'medium',
-  });
+  ensureLobbyWired();
   showScreen('lobby');
 }
 

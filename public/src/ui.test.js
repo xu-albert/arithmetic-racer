@@ -728,4 +728,25 @@ describe('the catch-up drain pause', () => {
     assert.equal(screen.banner.classList.contains('hidden'), false, 'and the banner paints');
     screen.cleanup();
   });
+
+  test('rename event updates the matching lane handle text and title mid-race', () => {
+    const client = socketClient();
+    const state = racingState();
+    const screen = openRaceScreen(state, ME, client);
+    const lane = screen.laneFor('player');
+    const handleEl = lane.children.find((c) => c.className === 'lane-handle');
+    assert.equal(handleEl.textContent, 'Hp-2');
+
+    client.receive({
+      type: 'state',
+      state: {
+        ...state,
+        players: state.players.map((p) => (p.id === ME ? { ...p, handle: 'TurboAlice', isGuest: false } : p)),
+      },
+    });
+
+    assert.equal(handleEl.textContent, 'TurboAlice');
+    assert.equal(handleEl.title, 'TurboAlice');
+    screen.cleanup();
+  });
 });

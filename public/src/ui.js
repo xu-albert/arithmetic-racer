@@ -18,6 +18,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
   track.innerHTML = '';
   const carEls = new Map();
   const laneEls = new Map();
+  const handleEls = new Map();
   for (const racer of runner.racers) {
     const lane = document.createElement('div');
     lane.className = 'lane';
@@ -41,6 +42,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
     track.append(lane);
     carEls.set(racer.id, car);
     laneEls.set(racer.id, lane);
+    handleEls.set(racer.id, handleEl);
   }
 
   problemQueue.innerHTML = '';
@@ -251,6 +253,12 @@ export function attachRaceUI({ runner, raceLength, screens }) {
       if (data.laneId === 'player') { input.disabled = true; input.value = ''; }
       paintFinishBanner();
       if (podium.childElementCount > 0) renderPodium();
+    } else if (event === 'rename') {
+      const handleEl = handleEls.get(data.laneId);
+      if (handleEl) {
+        handleEl.textContent = data.handle;
+        handleEl.title = data.handle;
+      }
     } else if (event === 'catchup-start') {
       catchupPill.classList.remove('hidden');
       input.disabled = true;

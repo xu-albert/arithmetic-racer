@@ -1522,4 +1522,28 @@ describe('quit and stop', () => {
     runner.submitAnswer('2');
     assert.deepEqual(events, []);
   });
+
+  test('emits rename when a state snapshot updates a mounted racer handle', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ players: [player(ME, { handle: 'OldName', isGuest: false }), player('p-1', { handle: 'GuestOne', isGuest: true })] }),
+      youAre: ME,
+    });
+    startRace(client, 10_000);
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'racing',
+        raceStartedAt: 10_000,
+        players: [player(ME, { handle: 'NewName', isGuest: false }), player('p-1', { handle: 'GuestOne', isGuest: true })],
+      }),
+    });
+
+    assert.deepEqual(events.filter((e) => e.event === 'rename'), [
+      { event: 'rename', data: { laneId: 'player', handle: 'NewName' } },
+    ]);
+  });
 });
