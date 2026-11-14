@@ -1546,4 +1546,31 @@ describe('quit and stop', () => {
       { event: 'rename', data: { laneId: 'player', handle: 'NewName' } },
     ]);
   });
+
+  test('emits rename during countdown before start is delivered', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({
+        state: 'countdown',
+        countdownN: 3,
+        players: [player(ME, { handle: 'OldName', isGuest: false })],
+      }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'countdown',
+        countdownN: 2,
+        players: [player(ME, { handle: 'CountdownName', isGuest: false })],
+      }),
+    });
+
+    assert.deepEqual(events.filter((e) => e.event === 'rename'), [
+      { event: 'rename', data: { laneId: 'player', handle: 'CountdownName' } },
+    ]);
+  });
 });

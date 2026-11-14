@@ -259,6 +259,7 @@ export function attachRaceUI({ runner, raceLength, screens }) {
         handleEl.textContent = data.handle;
         handleEl.title = data.handle;
       }
+      if (podium.childElementCount > 0) renderPodium();
     } else if (event === 'catchup-start') {
       catchupPill.classList.remove('hidden');
       input.disabled = true;

@@ -749,4 +749,29 @@ describe('the catch-up drain pause', () => {
     assert.equal(handleEl.title, 'TurboAlice');
     screen.cleanup();
   });
+
+  test('rename event after finish repaints #podium with the new handle', () => {
+    const client = socketClient();
+    const state = racingState();
+    const screen = openRaceScreen(state, ME, client);
+
+    client.receive({
+      type: 'finish',
+      rankings: state.players.map((p) => ({ ...p, score: 3, finishMs: 5000, dropped: false })),
+    });
+    assert.ok(screen.podium.children.some((li) => li.textContent.includes('Hp-2 (you)')));
+
+    client.receive({
+      type: 'state',
+      state: {
+        ...state,
+        state: 'finished',
+        players: state.players.map((p) => (p.id === ME ? { ...p, handle: 'PodiumAlice', isGuest: false, score: 3, finishMs: 5000 } : p)),
+      },
+    });
+
+    assert.ok(screen.podium.children.some((li) => li.textContent.includes('PodiumAlice (you)')));
+    assert.ok(!screen.podium.children.some((li) => li.textContent.includes('Hp-2 (you)')));
+    screen.cleanup();
+  });
 });

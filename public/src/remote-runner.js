@@ -291,7 +291,7 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         || existing.finishMs !== before.finishMs
         || existing.dropped !== before.dropped
       ) changed.push(existing);
-      if (existing.handle !== before.handle && startDelivered) {
+      if (existing.handle !== before.handle && (roomState !== 'racing' || startDelivered)) {
         emit('rename', { laneId: existing.id, handle: existing.handle });
       }
     }
