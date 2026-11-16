@@ -108,6 +108,7 @@ class FakePartySocket {
 mock.module('partysocket', { defaultExport: FakePartySocket });
 
 const { attachLobby } = await import('./lobby.js');
+const { expiredScreen, ROOM_FULL_REASON } = await import('./room-expiry.js');
 
 const ROOM_URL = '?room=m-old-room&mode=public&difficulty=easy';
 
@@ -116,12 +117,13 @@ async function flush(times = 5) {
   for (let i = 0; i < times; i++) await new Promise((r) => setImmediate(r));
 }
 
-function open({ mode = 'public', difficulty = 'easy', onRaceStart } = {}) {
+function open({ mode = 'public', difficulty = 'easy', onRaceStart, onRoomExpired } = {}) {
   const els = installDom({ search: ROOM_URL });
   attachLobby({
     roomId: 'm-old-room',
     screens: { 'lobby-room': fakeEl(), race: fakeEl(), results: fakeEl() },
     onRaceStart,
+    onRoomExpired,
     mode,
     difficulty,
     deviceId: 'dev-1',
@@ -238,12 +240,41 @@ describe('quick-match dead-end refusals point the player at a fresh match', () =
     assert.equal(handoffs.length, 1);
   });
 
-  test('private rooms keep the plain toast and their socket', async () => {
-    const { ws, els } = open({ mode: null });
-    ws.push({ type: 'error', code: 'ROOM_FULL', message: 'This room is full (10/10).' });
+  test('a private room\'s other errors keep the plain toast and their socket', async () => {
+    const expiries = [];
+    const { ws, els } = open({ mode: null, onRoomExpired: (m) => expiries.push(m) });
+    ws.push({ type: 'error', code: 'NOT_CREATOR', message: 'Only the host can start the race' });
     await flush();
 
-    assertStaysPut(els, 'This room is full (10/10).');
+    assertStaysPut(els, 'Only the host can start the race');
     assert.notEqual(ws.closed, true);
+    assert.equal(expiries.length, 0);
+  });
+});
+
+describe('a private room that is full sends the visitor to the room-full screen', () => {
+  beforeEach(() => {
+    sockets.length = 0;
+  });
+
+  // Ten seats taken: the 11th page used to get a 3-second toast and then sit
+  // on that roster for good — no seat, Start disabled, "Waiting for the host".
+  test('ROOM_FULL leaves the lobby: socket closed, room-full screen, nothing more painted', async () => {
+    const expiries = [];
+    const { ws, els } = open({ mode: null, onRoomExpired: (m) => expiries.push(m) });
+    const tenSeats = Array.from({ length: 10 }, (_, i) => ({ id: `p-${i + 1}`, handle: `S${i}`, score: 0, finishMs: null }));
+    const lobby = { ...FINISHED, state: 'lobby', lastRace: null, players: tenSeats };
+    ws.push({ type: 'state', state: lobby, youAre: null });
+
+    ws.push({ type: 'error', code: 'ROOM_FULL', message: 'This room is full (10/10).' });
+    ws.push({ type: 'state', state: lobby, youAre: null });
+    await flush();
+
+    assert.equal(ws.closed, true);
+    assert.equal(expiries.length, 1);
+    assert.equal(expiries[0].reason, ROOM_FULL_REASON);
+    assert.deepEqual(expiredScreen(expiries[0], undefined), { copy: ROOM_FULL_REASON, exit: 'new-room' });
+    assert.equal(fetches.length, 0);
+    assert.equal(assigns.length, 0);
   });
 });

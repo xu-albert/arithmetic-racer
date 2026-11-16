@@ -1,9 +1,9 @@
 // identity.js is the single home of every localStorage identity the app
-// carries (CLI-08): the racerId reconnect secret, the room handle, the
-// deviceId behind anonymous attribution and the signup claim, and the solo
-// guest handle. These tests pin the key names (other modules, the room DO's
-// `hello` contract, and stored user data all depend on them) and the
-// get-or-create semantics.
+// carries (CLI-08): the racerId reconnect secret, the room-issued guest
+// handle, the deviceId behind anonymous attribution and the signup claim, and
+// the fallback anonHandle (unified for guests by getGuestHandle()). These
+// tests pin the key names (other modules, the room DO's `hello` contract, and
+// stored user data all depend on them) and the get-or-create semantics.
 
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";

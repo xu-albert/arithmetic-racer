@@ -1,6 +1,6 @@
 import { createRoomClient } from './room-client.js';
-import { canEditConfig } from './room-config-rules.js';
-import { createExpiryLatch } from './room-expiry.js';
+import { canEditConfig, parseRaceLength, RACE_LENGTH_HINT } from './room-config-rules.js';
+import { createExpiryLatch, ROOM_EXPIRED_TYPE, ROOM_FULL_REASON } from './room-expiry.js';
 
 const DIFFS = ['easy', 'medium', 'hard'];
 
@@ -109,11 +109,13 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
       li.className = 'player-row';
       li.dataset.playerId = p.id;
       const isMe = p.id === youAre;
+      // A signed-in seat is named by its account; the room refuses a rename.
+      const canRename = isMe && !p.handleFromAccount;
 
       const handleSpan = document.createElement('span');
-      handleSpan.className = 'player-handle' + (isMe ? ' editable' : '');
+      handleSpan.className = 'player-handle' + (canRename ? ' editable' : '');
       handleSpan.textContent = p.handle;
-      if (isMe) handleSpan.title = 'Click to edit your handle';
+      if (canRename) handleSpan.title = 'Click to edit your handle';
       li.append(handleSpan);
 
       if (isMe) {
@@ -146,7 +148,7 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
         li.append(statusSpan);
       }
 
-      if (isMe) handleSpan.addEventListener('click', () => beginHandleEdit(handleSpan, p.handle));
+      if (canRename) handleSpan.addEventListener('click', () => beginHandleEdit(handleSpan, p.handle));
       playersList.append(li);
     }
 
@@ -289,14 +291,21 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
   diffBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
       if (btn.disabled) return;
-      const len = parseInt(lengthInput.value, 10) || currentState.raceLength;
+      const len = parseRaceLength(lengthInput.value) ?? currentState.raceLength;
       client.send({ type: 'set-config', difficulty: btn.dataset.difficulty, raceLength: len });
     });
   });
+  // A length the room would refuse never leaves the page: the room answers a
+  // refusal with no state broadcast, so the box would go on showing a number
+  // that is not the room's. Put the room's length back and say why.
   lengthInput.addEventListener('change', () => {
     if (lengthInput.disabled) return;
-    const len = parseInt(lengthInput.value, 10);
-    if (!Number.isFinite(len)) return;
+    const len = parseRaceLength(lengthInput.value);
+    if (len == null) {
+      lengthInput.value = String(currentState.raceLength);
+      showError(RACE_LENGTH_HINT);
+      return;
+    }
     client.send({ type: 'set-config', difficulty: currentState.difficulty, raceLength: len });
   });
   startBtn.addEventListener('click', () => {
@@ -404,6 +413,15 @@ export function attachLobby({ roomId, screens, onRaceStart, onRoomExpired, mode,
         showToast(`Host set the race to ${diff} · ${msg.raceLength} problems`, 'info');
       }
     } else if (msg.type === 'error') {
+      // A private room refuses only a new seat as full (a reconnect is
+      // cap-exempt), so this page holds no seat and the roster it is showing
+      // is one it cannot join. Leave for the room-full screen, through the
+      // same latch as an expiry, rather than strand the visitor on that lobby
+      // once a toast fades.
+      if (!isPublic && msg.code === 'ROOM_FULL') {
+        handleExpiry({ type: ROOM_EXPIRED_TYPE, reason: ROOM_FULL_REASON });
+        return;
+      }
       showError(msg.message || msg.code);
       if (isPublic && !raceStartHandled && (msg.code === 'MATCH_OVER' || msg.code === 'ROOM_FULL')) showRefused();
     }

@@ -331,18 +331,15 @@ export function mountProfile(host) {
   const $ = (sel) => host.querySelector(sel);
 
   // ---- screen visibility ----
+  // Sibling screen visibility is owned by main.js via `open-profile` /
+  // `close-profile` so returning from Profile restores whichever screen was
+  // active (e.g. `#lobby-room`, `#race`, `#results`) instead of `#lobby`.
   function showProfile() {
-    // Hide siblings that look like screens; we only know the conventional ids.
-    for (const id of ["lobby", "race", "results"]) {
-      const el = document.getElementById(id);
-      if (el) el.classList.add("hidden");
-    }
     host.classList.remove("hidden");
   }
   function hideProfile() {
     host.classList.add("hidden");
-    const lobby = document.getElementById("lobby");
-    if (lobby) lobby.classList.remove("hidden");
+    document.dispatchEvent(new CustomEvent("close-profile"));
   }
 
   // ---- render ----
@@ -549,7 +546,7 @@ export function mountProfile(host) {
     try {
       await setUsername(next);
       setStatus("ok", "Saved");
-      document.dispatchEvent(new Event("auth-changed"));
+      document.dispatchEvent(new CustomEvent("auth-changed", { detail: { reason: "rename" } }));
       closeRename();
       // Refresh local view so the new name shows immediately.
       $("#profile-username-display").textContent = next;

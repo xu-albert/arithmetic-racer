@@ -44,6 +44,11 @@ export class PublicRaceRoom extends RaceRoom {
     return false;
   }
 
+  /** No host in a Quick Match: auto-start, fixed config, no rematch. */
+  assignsHost() {
+    return false;
+  }
+
   async handleHello(connection, msg) {
     // Source of truth for difficulty is the room name (prefixed by LobbyRouter).
     // The client's msg.difficulty is sanity-checked but never used to write state.
@@ -111,8 +116,8 @@ export class PublicRaceRoom extends RaceRoom {
     // Delegate to base: handle generation, player insertion, broadcast, persist.
     await super.handleHello(connection, msg);
 
-    // Clear isCreator — public rooms have no host concept (manual start /
-    // config / rematch are all disabled), and the base RaceRoom marks the
+    // Public rooms have no host concept (manual start / config / rematch are
+    // all disabled): assignsHost() keeps the base handler from marking the
     // first joiner isCreator. deviceId/userId are NOT re-stamped here: the
     // base handler already sets a validated deviceId from the message and
     // userId from connection state (cookie-derived, unspoofable). Reading
@@ -124,7 +129,6 @@ export class PublicRaceRoom extends RaceRoom {
     // rejected hello still resets the auto-start deadline, and a client
     // repeating one holds a lone player in the lobby forever (bug_002).
     if (!player) return;
-    player.isCreator = false;
 
     if (this.state.state !== 'lobby') return;
 

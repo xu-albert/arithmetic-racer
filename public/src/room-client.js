@@ -1,5 +1,5 @@
 import PartySocket from 'partysocket';
-import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDeviceId } from './identity.js';
+import { getOrCreateRacerId, getGuestHandle, setStoredHandle, getOrCreateDeviceId } from './identity.js';
 
 /**
  * @param {object} opts
@@ -8,8 +8,9 @@ import { getOrCreateRacerId, getStoredHandle, setStoredHandle, getOrCreateDevice
  * @param {string} [opts.difficulty]  - included in hello for public mode
  * @param {string} [opts.deviceId]    - included in hello for public mode
  * @param {string} [opts.admissionPass] - short-lived server-issued room pass
+ * @param {EventTarget} [opts.page] - where pagehide/pageshow fire; the window
  */
-export function createRoomClient({ roomId, mode, difficulty, deviceId, admissionPass } = {}) {
+export function createRoomClient({ roomId, mode, difficulty, deviceId, admissionPass, page = globalThis } = {}) {
   const party = mode === 'public' ? 'public-race-room' : 'race-room';
 
   // Checked by the Worker on every connection, a reconnect included.
@@ -35,7 +36,9 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId, admission
       // The racerId doubles as the reconnect credential: presenting it is what
       // proves this browser owns its seat in the room. Client → server only.
       playerId: getOrCreateRacerId(),
-      handle: getStoredHandle(),
+      // The guest name to seat under. A signed-in socket is seated under its
+      // username instead, which the room reads from the session, not from here.
+      handle: getGuestHandle(),
       // deviceId is stamped onto every hello so DOs (private + public) can
       // attribute race_results. Fall back to the local helper if the caller
       // didn't pass one through the constructor.
@@ -51,13 +54,38 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId, admission
     try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.type === 'hello-ack') {
       if (typeof msg.playerId === 'string') myPlayerId = msg.playerId;
-      if (msg.handle) setStoredHandle(msg.handle);
+      // A username is the account's name, not this browser's guest handle:
+      // keeping it would carry it into rooms after signing out.
+      if (msg.handle && !msg.handleFromAccount) setStoredHandle(msg.handle);
     }
     if (msg.type === 'handle-changed') {
       if (myPlayerId != null && msg.playerId === myPlayerId) setStoredHandle(msg.handle);
     }
     for (const l of listeners) l(msg);
   });
+
+  // Back/forward cache. Following a link or typing an address freezes this
+  // page with its socket still open, so the room never sees a close: the seat
+  // stays connected, its grace never starts, and a racer who left is never
+  // dropped. Close on the way into the cache, which the room treats like any
+  // dropped connection, and reconnect on the way back out, which reclaims the
+  // seat (and drains a race's catch-up batch) exactly as after a network drop.
+  // A page that is really unloading (persisted false) closes its socket anyway.
+  // `closedByCaller` keeps a room this page deliberately left closed.
+  let closedByCaller = false;
+  let frozen = false;
+  function onPageHide(e) {
+    if (!e.persisted || closedByCaller) return;
+    frozen = true;
+    ws.close();
+  }
+  function onPageShow(e) {
+    if (!e.persisted || !frozen || closedByCaller) return;
+    frozen = false;
+    ws.reconnect();
+  }
+  page?.addEventListener?.('pagehide', onPageHide);
+  page?.addEventListener?.('pageshow', onPageShow);
 
   return {
     on(handler) {
@@ -72,6 +100,9 @@ export function createRoomClient({ roomId, mode, difficulty, deviceId, admission
       ws.send(JSON.stringify(msg));
     },
     close() {
+      closedByCaller = true;
+      page?.removeEventListener?.('pagehide', onPageHide);
+      page?.removeEventListener?.('pageshow', onPageShow);
       ws.close();
     },
     // A fresh upgrade on the same client: the open handler above says hello

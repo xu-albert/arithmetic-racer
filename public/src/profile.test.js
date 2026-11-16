@@ -381,3 +381,44 @@ test("the finish-rate tile is a dash for a racer who has only raced solo", async
   assert.equal(host.querySelector("#t-finish").textContent, "—");
   assert.equal(host.querySelector("#t-total").textContent, "3");
 });
+
+test("clicking .profile__back hides Profile and dispatches close-profile without touching #lobby", async () => {
+  const listeners = new Map();
+  const dispatched = [];
+  const clickHandlers = [];
+  const lobbyClasses = new Set(["hidden"]);
+  const lobbyEl = {
+    classList: {
+      add: (...c) => c.forEach((x) => lobbyClasses.add(x)),
+      remove: (...c) => c.forEach((x) => lobbyClasses.delete(x)),
+      contains: (c) => lobbyClasses.has(c),
+    },
+  };
+  globalThis.document = {
+    addEventListener: (type, fn) => listeners.set(type, fn),
+    dispatchEvent: (ev) => { dispatched.push(ev.type); return true; },
+    getElementById: (id) => (id === "lobby" ? lobbyEl : null),
+  };
+  globalThis.CustomEvent = class { constructor(type) { this.type = type; } };
+  globalThis.Element = class {};
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ME });
+
+  const host = fakeEl();
+  host.addEventListener = (type, fn) => { if (type === "click") clickHandlers.push(fn); };
+  mountProfile(host);
+  listeners.get("open-profile")();
+  assert.equal(host.classList.contains("hidden"), false);
+
+  const backTarget = new globalThis.Element();
+  backTarget.closest = (sel) => (sel === ".profile__back" ? backTarget : null);
+  backTarget.dataset = {};
+  let prevented = false;
+  for (const fn of clickHandlers) {
+    fn({ target: backTarget, preventDefault: () => { prevented = true; } });
+  }
+
+  assert.equal(prevented, true);
+  assert.equal(host.classList.contains("hidden"), true);
+  assert.deepEqual(dispatched, ["close-profile"]);
+  assert.equal(lobbyEl.classList.contains("hidden"), true, "profile.js must not unhide #lobby");
+});

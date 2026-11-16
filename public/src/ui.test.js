@@ -728,4 +728,50 @@ describe('the catch-up drain pause', () => {
     assert.equal(screen.banner.classList.contains('hidden'), false, 'and the banner paints');
     screen.cleanup();
   });
+
+  test('rename event updates the matching lane handle text and title mid-race', () => {
+    const client = socketClient();
+    const state = racingState();
+    const screen = openRaceScreen(state, ME, client);
+    const lane = screen.laneFor('player');
+    const handleEl = lane.children.find((c) => c.className === 'lane-handle');
+    assert.equal(handleEl.textContent, 'Hp-2');
+
+    client.receive({
+      type: 'state',
+      state: {
+        ...state,
+        players: state.players.map((p) => (p.id === ME ? { ...p, handle: 'TurboAlice', isGuest: false } : p)),
+      },
+    });
+
+    assert.equal(handleEl.textContent, 'TurboAlice');
+    assert.equal(handleEl.title, 'TurboAlice');
+    screen.cleanup();
+  });
+
+  test('rename event after finish repaints #podium with the new handle', () => {
+    const client = socketClient();
+    const state = racingState();
+    const screen = openRaceScreen(state, ME, client);
+
+    client.receive({
+      type: 'finish',
+      rankings: state.players.map((p) => ({ ...p, score: 3, finishMs: 5000, dropped: false })),
+    });
+    assert.ok(screen.podium.children.some((li) => li.textContent.includes('Hp-2 (you)')));
+
+    client.receive({
+      type: 'state',
+      state: {
+        ...state,
+        state: 'finished',
+        players: state.players.map((p) => (p.id === ME ? { ...p, handle: 'PodiumAlice', isGuest: false, score: 3, finishMs: 5000 } : p)),
+      },
+    });
+
+    assert.ok(screen.podium.children.some((li) => li.textContent.includes('PodiumAlice (you)')));
+    assert.ok(!screen.podium.children.some((li) => li.textContent.includes('Hp-2 (you)')));
+    screen.cleanup();
+  });
 });

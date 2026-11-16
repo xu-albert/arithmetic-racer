@@ -179,4 +179,11 @@ describe('verdict wording', () => {
     assert.doesNotMatch(superseded, /failed|timed out/);
     assert.match(verdictMessage({ verified: true }), /counts/);
   });
+
+  test('a pass on a finish the room still will not count does not promise that it counts', () => {
+    const msg = verdictMessage({ verified: true, counts: false, reason: 'impossibly_fast' });
+    assert.match(msg, /^Verified/);
+    assert.match(msg, /won't appear on leaderboards/);
+    assert.doesNotMatch(msg, /your race counts/);
+  });
 });

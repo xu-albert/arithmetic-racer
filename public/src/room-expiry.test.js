@@ -17,6 +17,7 @@ import {
   ROOM_EXPIRED_TYPE,
   INVITE_EXPIRED_REASON,
   INVITE_INVALID_REASON,
+  ROOM_FULL_REASON,
   expiredScreen,
   isRoomExpiredMessage,
   createExpiryLatch,
@@ -135,6 +136,10 @@ test("a private room's screen follows the reason and offers a new room", () => {
   assert.deepEqual(
     privateScreen({ type: ROOM_EXPIRED_TYPE, reason: INVITE_INVALID_REASON }),
     { copy: INVITE_INVALID_REASON, exit: "new-room" },
+  );
+  assert.deepEqual(
+    privateScreen({ type: ROOM_EXPIRED_TYPE, reason: ROOM_FULL_REASON }),
+    { copy: ROOM_FULL_REASON, exit: "new-room" },
   );
   // The tombstone snapshot carries no reason: it is the idle winddown.
   assert.deepEqual(

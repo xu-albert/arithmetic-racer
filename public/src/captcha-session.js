@@ -19,7 +19,9 @@ export const NOTICE_MS = 2500;
 const UNCONFIRMED = 'Verification couldn\'t be confirmed for this race.';
 
 /** What the player is told about a verdict the server sent. */
-export function verdictMessage({ verified, reason }) {
+export function verdictMessage({ verified, counts, reason }) {
+  // `counts: false` is a pass on a finish the passive bounds still reject.
+  if (verified && counts === false) return 'Verified — but that finish was too fast to count, so it won\'t appear on leaderboards.';
   if (verified) return 'Verified — your race counts.';
   if (reason === 'captcha_timeout') return 'Verification timed out — this race won\'t appear on leaderboards.';
   if (reason === 'captcha_superseded') {

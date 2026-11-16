@@ -18,10 +18,11 @@ import { mountProfile } from './src/profile.js';
 import { mountLeaderboard } from './src/leaderboard.js';
 import { postRaceResult } from './src/stats-api.js';
 import { soloResultPayload } from './src/solo-result.js';
-import { getOrCreateDeviceId, getOrCreateAnonHandle } from './src/identity.js';
+import { getOrCreateDeviceId, getGuestHandle } from './src/identity.js';
 import { joinMatchmaking } from './src/matchmake-api.js';
 import { mountRecentFinishes } from './src/recent-finishes.js';
-import { expiredScreen } from './src/room-expiry.js';
+import { renderExpiredScreen } from './src/room-expiry-view.js';
+import { createScreenNav } from './src/screen-nav.js';
 
 // Cache of the logged-in user's username — set by the `session-ready`
 // event dispatched by header.js after its /api/me fetch. Saves a duplicate
@@ -65,10 +66,6 @@ mountProfile(document.getElementById('profile'));
 // lobby being visible.
 mountRecentFinishes();
 
-document.addEventListener('open-profile', () => {
-  showScreen('profile');
-});
-
 // ---- Screens & lobby state ---------------------------------------------
 
 const screens = {
@@ -94,15 +91,38 @@ let lobbyHandle = null;
 let cleanupCaptcha = null;
 // Set only on the lobby route — see the initial-routing block below.
 let leaderboardHandle = null;
+let lobbyWired = false;
 
-function showScreen(name) {
-  for (const [key, el] of Object.entries(screens)) {
-    el.classList.toggle('hidden', key !== name);
-  }
+function ensureLobbyWired() {
+  if (lobbyWired) return;
+  lobbyWired = true;
+  lobbyDiffButtons.forEach((btn) => {
+    btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
+  });
+  quickplayBtn.addEventListener('click', startQuickplay);
+  setDifficulty('easy');
+  // Mounted only on this route: a `?room=` deep link never shows the lobby, so
+  // fetching boards there would be a request for a screen nobody will see.
+  //
+  // The board opens on Medium — the tier Find a Match sits on beside it — and
+  // deliberately does not follow `selectedDifficulty`, which is the Solo vs
+  // Bots picker and belongs to a mode that never reaches a board.
+  leaderboardHandle = mountLeaderboard(document.getElementById('leaderboard'), {
+    difficulty: 'medium',
+  });
+}
+
+const nav = createScreenNav({
+  screens,
   // The "who's racing" strip polls only while the lobby is on-screen, so it
   // needs to hear about coming back to a lobby that has been away.
-  if (name === 'lobby') document.dispatchEvent(new Event('lobby-shown'));
-}
+  onLobbyShown: () => document.dispatchEvent(new Event('lobby-shown')),
+  onEnsureLobbyWired: ensureLobbyWired,
+});
+const { showScreen } = nav;
+
+document.addEventListener('open-profile', () => nav.openProfile());
+document.addEventListener('close-profile', () => nav.closeProfile());
 
 function setDifficulty(diff) {
   selectedDifficulty = diff;
@@ -119,11 +139,11 @@ function startQuickplay() {
     cleanupRace = null;
   }
 
-  // Lane label: logged-in username wins. Anon players get the persistent
-  // localStorage handle PLUS "(Guest)" so the race screen consistently
-  // signals "you're not signed in" — mirrors the multiplayer room badge.
+  // Lane label: logged-in username wins. Anon players get the same guest
+  // name they race under in rooms PLUS "(Guest)" so the race screen
+  // consistently signals "you're not signed in" — mirrors the room badge.
   const isLoggedIn = !!currentUsername;
-  const baseName = currentUsername || getOrCreateAnonHandle();
+  const baseName = currentUsername || getGuestHandle();
   const playerHandle = isLoggedIn ? baseName : `${baseName} (Guest)`;
   const taken = new Set([baseName]);
 
@@ -179,13 +199,7 @@ function handleRoomExpired(msg, mode) {
   if (cleanupCaptcha) { cleanupCaptcha(); cleanupCaptcha = null; }
   if (lobbyHandle) { lobbyHandle.detach(); lobbyHandle = null; }
   document.getElementById('invite-modal')?.classList.add('hidden');
-  const { copy, exit } = expiredScreen(msg, mode);
-  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-copy]') ?? []) {
-    el.classList.toggle('hidden', el.dataset.expiredCopy !== copy);
-  }
-  for (const el of screens['room-expired']?.querySelectorAll('[data-expired-exit]') ?? []) {
-    el.classList.toggle('hidden', el.dataset.expiredExit !== exit);
-  }
+  renderExpiredScreen(screens['room-expired'], msg, mode);
   showScreen('room-expired');
   // The switch can happen while the player is staring at the race screen, so
   // move focus rather than leaving a screen reader on a lane that just vanished.
@@ -214,12 +228,14 @@ function enterRoom(roomId, { mode, difficulty, admissionPass } = {}) {
 }
 
 // A room learns who you are once, at the WebSocket upgrade: the Worker stamps
-// the session's user id onto it (server/server.js) and the DO reads it in
-// onConnect. An email sign-in or sign-out with the room socket already open
-// therefore changes nothing until the next connect — race results would keep
-// landing as anonymous guest rows, which the one-time history claim (run at
-// signup) never revisits. Reconnecting the room's socket in place picks up the
-// new session: handleHello's reconnect branch re-stamps the seat's identity,
+// the session's user id and username onto it (server/server.js) and the DO
+// reads them in onConnect. Signing in, signing out, picking a username, or
+// renaming with the room socket already open therefore changes nothing until
+// the next connect — race results after sign-in would keep landing as
+// anonymous guest rows, which the one-time history claim (run at signup) never
+// revisits, and the seat's handle would stay on its old guest or account name.
+// Reconnecting the room's socket in place picks up the new session:
+// handleHello's reconnect branch re-stamps the seat's identity and handle,
 // and the lobby, a race in progress and the captcha overlay — all still
 // subscribed to the same client — take the snapshot exactly as they do after a
 // network drop, without leaving the screen the player is on.
@@ -227,7 +243,7 @@ function enterRoom(roomId, { mode, difficulty, admissionPass } = {}) {
 // the fresh cookie. Expiry clears lobbyHandle, so it reconnects nothing.
 document.addEventListener('auth-changed', (e) => {
   const reason = e.detail?.reason;
-  if (reason !== 'signin' && reason !== 'signup' && reason !== 'signout') return;
+  if (!['signin', 'signup', 'signout', 'pick-username', 'rename'].includes(reason)) return;
   lobbyHandle?.client.reconnect();
 });
 
@@ -248,20 +264,7 @@ const initialAdmissionPass = params.get('admission') ?? undefined;
 if (initialRoomId) {
   enterRoom(initialRoomId, { mode: initialMode, difficulty: initialDifficulty, admissionPass: initialAdmissionPass });
 } else {
-  lobbyDiffButtons.forEach((btn) => {
-    btn.addEventListener('click', () => setDifficulty(btn.dataset.difficulty));
-  });
-  quickplayBtn.addEventListener('click', startQuickplay);
-  setDifficulty('easy');
-  // Mounted only on this route: a `?room=` deep link never shows the lobby, so
-  // fetching boards there would be a request for a screen nobody will see.
-  //
-  // The board opens on Medium — the tier Find a Match sits on beside it — and
-  // deliberately does not follow `selectedDifficulty`, which is the Solo vs
-  // Bots picker and belongs to a mode that never reaches a board.
-  leaderboardHandle = mountLeaderboard(document.getElementById('leaderboard'), {
-    difficulty: 'medium',
-  });
+  ensureLobbyWired();
   showScreen('lobby');
 }
 

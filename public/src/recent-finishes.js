@@ -19,6 +19,8 @@
 // hidden. A background tab polling a database forever is the failure mode this
 // avoids.
 
+import { fmtPoints } from "./race-format.js";
+
 export const POLL_INTERVAL_MS = 20_000;
 export const TICK_INTERVAL_MS = 5_000;
 
@@ -54,13 +56,14 @@ export function formatPpm(ppm) {
  * Points for display, or null when the race is unscored.
  *
  * Null and 0 are different things — 0 is a score a racer can earn — so an
- * unscored race omits the number rather than printing "0 pts". Rounded to a
- * whole point: stored points are REAL so sums stay exact, and rounding is
- * exactly this layer's job (worker/race-score.js).
+ * unscored race omits the number rather than printing "0 pts". Formatted by
+ * the same fmtPoints the board and the profile use: one decimal, because a
+ * single race lands around 0.4–5 points, and rounding to whole points showed
+ * a 0.36-point finish as "0 pts" and a 1-point one as "1 pts".
  */
 export function formatPoints(points) {
   if (typeof points !== "number" || !Number.isFinite(points)) return null;
-  return String(Math.round(points));
+  return fmtPoints(points);
 }
 
 /**

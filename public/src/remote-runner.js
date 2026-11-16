@@ -265,7 +265,12 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         if (rosterCanAdd) racers.push(toRacer(p, youAre));
         continue;
       }
-      const before = { score: existing.score, finishMs: existing.finishMs, dropped: existing.dropped };
+      const before = {
+        score: existing.score,
+        finishMs: existing.finishMs,
+        dropped: existing.dropped,
+        handle: existing.handle,
+      };
       existing.handle = displayHandle(p.handle, !!p.isGuest);
       if (existing.isBot) {
         if (p.finishMs != null) existing.finishMs = p.finishMs;
@@ -286,6 +291,9 @@ export function createRemoteRunner({ roomClient, initialState, youAre, onLocalQu
         || existing.finishMs !== before.finishMs
         || existing.dropped !== before.dropped
       ) changed.push(existing);
+      if (existing.handle !== before.handle) {
+        emit('rename', { laneId: existing.id, handle: existing.handle });
+      }
     }
 
     // A seat the snapshot leaves out means something different by phase.

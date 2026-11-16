@@ -293,7 +293,7 @@ describe('reconnecting into a race already in progress', () => {
     // The socket dropped over the GO frame, so `race-start` never arrived.
     client.receive({
       type: 'state',
-      state: racingState({ players: [player('p-1'), player(ME, { score: 2 })] }),
+      state: racingState({ players: [player('p-1'), player(ME, { isGuest: true, score: 2 })] }),
     });
     assert.equal(runner.getState(), 'racing');
     assert.deepEqual(events, [
@@ -1149,7 +1149,8 @@ describe('drop, finish and rankings', () => {
       settled.data.rankings.every((r) => r.dropped || r.dnf || r.finishMs != null),
       'nobody is left on the podium as still racing',
     );
-    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-1', 'player']);
+    // Out: this player stayed to the end (dnf at 6), Alice left at 4.
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['player', 'p-1']);
   });
 
   test('a private-room dropout who left the results, and a finisher who left them too, settle from the pinned rows', () => {
@@ -1184,7 +1185,8 @@ describe('drop, finish and rankings', () => {
     assert.equal(runner.racers.find((r) => r.id === 'p-3').finishMs, 9_000);
     const settled = events.at(-1);
     assert.equal(settled.event, 'finish');
-    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-3', 'p-1', 'player']);
+    // Out: this player stayed to the end (dnf at 6), Alice left at 4.
+    assert.deepEqual(settled.data.rankings.map((r) => r.id), ['p-3', 'player', 'p-1']);
   });
 
   test("this player's own seat, absent from a Quick Match result that pins it, takes the pinned row", () => {
@@ -1361,8 +1363,9 @@ describe('drop, finish and rankings', () => {
     });
     assert.equal(events.length, 1);
     assert.equal(events[0].event, 'finish');
-    assert.deepEqual(events[0].data.rankings.map((r) => r.id), ['player', 'p-4', 'p-1', 'p-3']);
-    assert.deepEqual(runner.getRankings().map((r) => r.id), ['player', 'p-4', 'p-1', 'p-3']);
+    // Out: the dnf (stayed to the end) above the dropout.
+    assert.deepEqual(events[0].data.rankings.map((r) => r.id), ['player', 'p-4', 'p-3', 'p-1']);
+    assert.deepEqual(runner.getRankings().map((r) => r.id), ['player', 'p-4', 'p-3', 'p-1']);
     const me = runner.racers.find((r) => r.id === 'player');
     assert.equal(me.finishMs, 3000);
     assert.equal(runner.racers.find((r) => r.id === 'p-3').dnf, true);
@@ -1518,5 +1521,86 @@ describe('quit and stop', () => {
     client.receive({ type: 'advance', playerId: 'p-1', score: 1, finishMs: null });
     runner.submitAnswer('2');
     assert.deepEqual(events, []);
+  });
+
+  test('emits rename when a state snapshot updates a mounted racer handle', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({ players: [player(ME, { handle: 'OldName', isGuest: false }), player('p-1', { handle: 'GuestOne', isGuest: true })] }),
+      youAre: ME,
+    });
+    startRace(client, 10_000);
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'racing',
+        raceStartedAt: 10_000,
+        players: [player(ME, { handle: 'NewName', isGuest: false }), player('p-1', { handle: 'GuestOne', isGuest: true })],
+      }),
+    });
+
+    assert.deepEqual(events.filter((e) => e.event === 'rename'), [
+      { event: 'rename', data: { laneId: 'player', handle: 'NewName' } },
+    ]);
+  });
+
+  test('emits rename during countdown before start is delivered', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({
+        state: 'countdown',
+        countdownN: 3,
+        players: [player(ME, { handle: 'OldName', isGuest: false })],
+      }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'countdown',
+        countdownN: 2,
+        players: [player(ME, { handle: 'CountdownName', isGuest: false })],
+      }),
+    });
+
+    assert.deepEqual(events.filter((e) => e.event === 'rename'), [
+      { event: 'rename', data: { laneId: 'player', handle: 'CountdownName' } },
+    ]);
+  });
+
+  test('emits rename when a racing snapshot promotes a countdown-mounted runner', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({
+        state: 'countdown',
+        countdownN: 1,
+        problemSequence: SEQ,
+        players: [player(ME, { handle: 'OldName', isGuest: false })],
+      }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'racing',
+        problemSequence: SEQ,
+        raceStartedAt: 10_000,
+        players: [player(ME, { handle: 'PromotedName', isGuest: false })],
+      }),
+    });
+
+    assert.deepEqual(events, [
+      { event: 'rename', data: { laneId: 'player', handle: 'PromotedName' } },
+      { event: 'start', data: { problem: SEQ[0] } },
+    ]);
   });
 });

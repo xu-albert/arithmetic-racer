@@ -178,7 +178,7 @@ describe("handleSetHandle — profanity", () => {
       await room.handleSetHandle(conn, { type: "set-handle", handle: "shit" });
 
       const [error] = conn.sent.filter((m) => m.type === "error");
-      expect(error.message).not.toMatch(/24 chars|control chars/);
+      expect(error.message).not.toMatch(/24 characters|line breaks/);
       expect(error.message).toMatch(/different handle/i);
     });
   });
@@ -197,7 +197,7 @@ describe("handleSetHandle — profanity", () => {
       await room.handleSetHandle(conn, { type: "set-handle", handle: "x".repeat(99) });
 
       const [error] = conn.sent.filter((m) => m.type === "error");
-      expect(error.message).toMatch(/24 chars/);
+      expect(error.message).toMatch(/1 to 24 characters/);
     });
   });
 

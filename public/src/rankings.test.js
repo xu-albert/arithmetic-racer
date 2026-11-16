@@ -14,14 +14,36 @@ test('still-racing racers rank below any finisher, ordered by score', () => {
   assert.deepEqual(out.map((r) => r.id), ['done', 'five', 'two']);
 });
 
-test('dropped and dnf racers sit at the bottom regardless of score or time', () => {
+test('dnf and dropped racers sit at the bottom regardless of score, dnf above dropped', () => {
   const out = rankRacers([
     racer('quit', { score: 9, dropped: true }),
     racer('dnf', { score: 8, dnf: true }),
     racer('racing', { score: 1 }),
     racer('finished', { score: 10, finishMs: 60_000 }),
   ]);
-  assert.deepEqual(out.map((r) => r.id), ['finished', 'racing', 'quit', 'dnf']);
+  assert.deepEqual(out.map((r) => r.id), ['finished', 'racing', 'dnf', 'quit']);
+});
+
+test('racers who are out rank by score, so a solo quitter sits under the bots and the bots are in order', () => {
+  // runner.quit() ends the race and marks every bot dnf alongside the
+  // dropped player, so the whole field lands in the out tier at once.
+  const out = rankRacers([
+    racer('player', { score: 0, dropped: true }),
+    racer('bot-a', { score: 4, dnf: true }),
+    racer('bot-b', { score: 6, dnf: true }),
+    racer('bot-c', { score: 4, dnf: true }),
+  ]);
+  assert.deepEqual(out.map((r) => r.id), ['bot-b', 'bot-a', 'bot-c', 'player']);
+});
+
+test('within the dnf and dropped tiers, a higher score ranks first', () => {
+  const out = rankRacers([
+    racer('dnf-8', { score: 8, dnf: true }),
+    racer('quit-2', { score: 2, dropped: true }),
+    racer('dnf-9', { score: 9, dnf: true }),
+    racer('quit-7', { score: 7, dropped: true }),
+  ]);
+  assert.deepEqual(out.map((r) => r.id), ['dnf-9', 'dnf-8', 'quit-7', 'quit-2']);
 });
 
 test('a dropped racer with a finish time is still out — dropped wins over finishMs', () => {
@@ -35,10 +57,12 @@ test('ties keep arrival order (stable), within every tier', () => {
     racer('b', { finishMs: 5000 }),
     racer('c', { score: 3 }),
     racer('d', { score: 3 }),
-    racer('e', { dropped: true }),
+    racer('e', { dnf: true }),
     racer('f', { dnf: true }),
+    racer('g', { dropped: true }),
+    racer('h', { dropped: true }),
   ]);
-  assert.deepEqual(out.map((r) => r.id), ['a', 'b', 'c', 'd', 'e', 'f']);
+  assert.deepEqual(out.map((r) => r.id), ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']);
 });
 
 test('returns a new array and leaves the input untouched', () => {

@@ -220,7 +220,10 @@ h2 {
 /* ============================================================
    BUTTONS -- skeuomorphic press feel, confident colors
    ============================================================ */
-button {
+/* a.button: a link that navigates but should look like the buttons around it
+   (Quick Match's "Find Another Match", built in lobby.js). */
+button,
+a.button {
   font-family: var(--font);
   font-size: 1rem;
   font-weight: 700;
@@ -240,19 +243,22 @@ button {
     color 140ms var(--ease);
 }
 
-button:hover {
+button:hover,
+a.button:hover {
   transform: translateY(-2px);
   box-shadow:
     0 4px 0 rgba(20, 50, 90, 0.2),
     0 6px 14px rgba(20, 50, 90, 0.18);
 }
 
-button:focus-visible {
+button:focus-visible,
+a.button:focus-visible {
   outline: 3px solid var(--yellow);
   outline-offset: 2px;
 }
 
-button:active {
+button:active,
+a.button:active {
   transform: translateY(0);
   box-shadow:
     0 1px 0 rgba(20, 50, 90, 0.18),
@@ -275,15 +281,22 @@ button:active {
 }
 
 /* primary CTA (Quickplay) -- confident green */
-button.primary {
+button.primary,
+a.button.primary {
   background: var(--green);
   color: #ffffff;
 }
-button.primary:hover {
+button.primary:hover,
+a.button.primary:hover {
   background: var(--green-hover);
 }
-button.primary:active {
+button.primary:active,
+a.button.primary:active {
   background: var(--green-press);
+}
+a.button {
+  display: inline-block;
+  text-decoration: none;
 }
 
 /* selected difficulty -- golden yellow */
@@ -739,6 +752,12 @@ button[aria-pressed="true"]:hover {
   background: rgba(20, 50, 90, 0.55);
   padding: 0.18rem 0.45rem;
   border-radius: 4px;
+  /* The gutter is the lane's padding-left (where the car starts), minus this
+     label's own left offset and a hair of clearance: a 24-character handle
+     ellipsizes inside it rather than running under the car. */
+  max-width: calc(8rem - 0.6rem - 0.3rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ============================================================
@@ -985,18 +1004,21 @@ a.bug-report-link {
   width: 1.8rem;
   text-align: center;
 }
-#podium li:nth-child(1) {
+/* First place's gold and star are for a racer who crossed the line: when the
+   whole field is out (a solo quit marks every bot dnf), the top row stays in
+   the .unfinished styling below. */
+#podium li:nth-child(1):not(.unfinished) {
   background: linear-gradient(180deg, var(--yellow) 0%, #f5c518 100%);
   color: var(--navy);
   box-shadow:
     var(--card-shadow-lift),
     inset 0 -3px 0 rgba(20, 50, 90, 0.12);
 }
-#podium li:nth-child(1)::before {
+#podium li:nth-child(1):not(.unfinished)::before {
   content: "1";
   color: var(--navy);
 }
-#podium li:nth-child(1)::after {
+#podium li:nth-child(1):not(.unfinished)::after {
   content: "★";
   position: absolute;
   right: 1rem;
@@ -1229,7 +1251,10 @@ button:disabled {
   position: fixed;
   top: 1.2rem;
   left: 50%;
-  transform: translateX(-50%) translateY(-120%);
+  /* Hidden fully above the viewport: -120% alone left the box's bottom ~10px
+     below the top edge, a sliver that stayed on screen after every toast. The
+     extra clears the 1.2rem offset and the drop shadow. */
+  transform: translateX(-50%) translateY(calc(-100% - 1.2rem - 1rem));
   background: var(--danger);
   color: #fff;
   font-weight: 700;
@@ -1308,7 +1333,7 @@ button:disabled {
   .queue-item.current { font-size: 2.4rem; }
   .lane { padding-left: 6.5rem; }
   .car { left: calc(6.5rem + var(--progress, 0) * (100% - 6.5rem - 1.8rem - 48px)); }
-  .lane-handle { font-size: 0.85rem; }
+  .lane-handle { font-size: 0.85rem; max-width: calc(6.5rem - 0.6rem - 0.3rem); }
   .difficulty-picker,
   .lobby-actions { padding: 1rem; }
   /* simplify lane dashed line spacing on narrow screens */
