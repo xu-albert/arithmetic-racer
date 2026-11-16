@@ -18,7 +18,7 @@ export function createScreenNav({ screens, onLobbyShown, onEnsureLobbyWired } = 
     // ui.js transitions race -> results directly on screens.race/results, so
     // check which screen element is actually unhidden before falling back.
     for (const [key, el] of Object.entries(screens)) {
-      if (el && !el.classList.contains('hidden')) return key;
+      if (key !== 'profile' && el && !el.classList.contains('hidden')) return key;
     }
     return currentScreen;
   }

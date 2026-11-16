@@ -293,7 +293,7 @@ describe('reconnecting into a race already in progress', () => {
     // The socket dropped over the GO frame, so `race-start` never arrived.
     client.receive({
       type: 'state',
-      state: racingState({ players: [player('p-1'), player(ME, { score: 2 })] }),
+      state: racingState({ players: [player('p-1'), player(ME, { isGuest: true, score: 2 })] }),
     });
     assert.equal(runner.getState(), 'racing');
     assert.deepEqual(events, [
@@ -1571,6 +1571,36 @@ describe('quit and stop', () => {
 
     assert.deepEqual(events.filter((e) => e.event === 'rename'), [
       { event: 'rename', data: { laneId: 'player', handle: 'CountdownName' } },
+    ]);
+  });
+
+  test('emits rename when a racing snapshot promotes a countdown-mounted runner', () => {
+    const client = fakeRoomClient();
+    const runner = createRemoteRunner({
+      roomClient: client,
+      initialState: lobbyState({
+        state: 'countdown',
+        countdownN: 1,
+        problemSequence: SEQ,
+        players: [player(ME, { handle: 'OldName', isGuest: false })],
+      }),
+      youAre: ME,
+    });
+    const events = record(runner);
+
+    client.receive({
+      type: 'state',
+      state: lobbyState({
+        state: 'racing',
+        problemSequence: SEQ,
+        raceStartedAt: 10_000,
+        players: [player(ME, { handle: 'PromotedName', isGuest: false })],
+      }),
+    });
+
+    assert.deepEqual(events, [
+      { event: 'rename', data: { laneId: 'player', handle: 'PromotedName' } },
+      { event: 'start', data: { problem: SEQ[0] } },
     ]);
   });
 });

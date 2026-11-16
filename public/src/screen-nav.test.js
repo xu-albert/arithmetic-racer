@@ -121,4 +121,20 @@ describe('createScreenNav — Profile return-screen tracking', () => {
     assert.equal(screens['lobby-room'].classList.contains('hidden'), false);
     assert.equal(screens.lobby.classList.contains('hidden'), true);
   });
+
+  test('opening Profile when mountProfile already unhid #profile still records a screen listed after profile in screens', () => {
+    const { screens, backLink } = makeScreens('room-expired');
+    const nav = createScreenNav({ screens });
+    nav.showScreen('room-expired');
+
+    // Simulate mountProfile's open-profile listener running before nav.openProfile()
+    screens.profile.classList.remove('hidden');
+    nav.openProfile();
+    assert.equal(backLink.textContent, '← Back');
+    assert.equal(nav.getReturnScreen(), 'room-expired');
+
+    nav.closeProfile();
+    assert.equal(screens['room-expired'].classList.contains('hidden'), false);
+    assert.equal(screens.profile.classList.contains('hidden'), true);
+  });
 });
