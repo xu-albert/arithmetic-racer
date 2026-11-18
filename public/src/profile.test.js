@@ -300,6 +300,77 @@ test("olderRacesCursor is the oldest race_seq on the page, or null at race #1", 
   assert.equal(olderRacesCursor([{ race_seq: "nope" }]), null);
 });
 
+// ---------- skill / experience badges ----------
+
+const BADGE_AGGS = [
+  { difficulty: "easy", races_played: 7, races_finished: 6, avg_ppm: 35.1 },
+  { difficulty: "medium", races_played: 5, races_finished: 5, avg_ppm: 52 },
+  { difficulty: "hard", races_played: 0, races_finished: 0, avg_ppm: null },
+];
+
+test("skillBadge names the tier's band and labels it with the raw PPM and the next band", () => {
+  const { skillBadge } = _internals;
+  assert.deepEqual(skillBadge(BADGE_AGGS, "easy"), {
+    text: "Racer",
+    level: "3",
+    label: "Easy skill band: Racer (level 3 of 6) at 35.1 PPM. 6.9 PPM to Speedster.",
+  });
+  assert.deepEqual(skillBadge(BADGE_AGGS, "medium"), {
+    text: "Lightning",
+    level: "6",
+    label: "Medium skill band: Lightning (level 6 of 6) at 52.0 PPM. Top skill band.",
+  });
+});
+
+test("skillBadge is a dash, not the bottom band, for a tier with no finished race", () => {
+  const { skillBadge } = _internals;
+  assert.deepEqual(skillBadge(BADGE_AGGS, "hard"), {
+    text: "—",
+    level: "",
+    label: "Hard skill band: none yet. Finish a hard race to earn one.",
+  });
+  assert.equal(skillBadge([], "easy").label, "Easy skill band: none yet. Finish an easy race to earn one.");
+  assert.equal(skillBadge(null, "medium").text, "—");
+});
+
+test("skillBadge reads the same number the headline prints", () => {
+  const { skillBadge, headlinePpm, fmtPpm } = _internals;
+  const aggs = [{ difficulty: "easy", races_played: 3, races_finished: 3, avg_ppm: 34.06 }];
+  assert.equal(fmtPpm(headlinePpm(aggs, "easy")), "34.1");
+  assert.equal(
+    skillBadge(aggs, "easy").label,
+    "Easy skill band: Racer (level 3 of 6) at 34.1 PPM. 8.0 PPM to Speedster.",
+  );
+});
+
+test("expBadge reads the Total Races count across every tier", () => {
+  const { expBadge } = _internals;
+  // 7 + 5 + 0 = 12 races: Regular, 13 to Seasoned.
+  assert.deepEqual(expBadge(BADGE_AGGS), {
+    text: "Regular",
+    level: "2",
+    next: "13 races to Seasoned",
+    label: "Experience band: Regular (level 2 of 7), 12 races. 13 races to Seasoned.",
+  });
+  assert.deepEqual(expBadge([{ difficulty: "easy", races_played: 1 }]), {
+    text: "Rookie",
+    level: "1",
+    next: "9 races to Regular",
+    label: "Experience band: Rookie (level 1 of 7), 1 race. 9 races to Regular.",
+  });
+});
+
+test("expBadge with no races points at the first milestone", () => {
+  const { expBadge } = _internals;
+  assert.deepEqual(expBadge([]), {
+    text: "—",
+    level: "",
+    next: "1 race to Rookie",
+    label: "Experience band: none yet, 0 races. 1 race to Rookie.",
+  });
+  assert.equal(expBadge(undefined).text, "—");
+});
+
 // ---------- mountProfile: the stat tiles ----------
 
 // Just enough DOM for mountProfile: every selector resolves to one element the
@@ -307,10 +378,12 @@ test("olderRacesCursor is the oldest race_seq on the page, or null at race #1", 
 function fakeEl() {
   const classes = new Set();
   const found = new Map();
+  const attrs = new Map();
   return {
     textContent: "",
     innerHTML: "",
     hidden: false,
+    title: "",
     dataset: {},
     classList: {
       add: (...c) => c.forEach((x) => classes.add(x)),
@@ -318,7 +391,8 @@ function fakeEl() {
       contains: (c) => classes.has(c),
     },
     addEventListener: () => {},
-    setAttribute: () => {},
+    setAttribute: (name, value) => attrs.set(name, String(value)),
+    getAttribute: (name) => (attrs.has(name) ? attrs.get(name) : null),
     querySelector(sel) {
       if (!found.has(sel)) found.set(sel, fakeEl());
       return found.get(sel);
@@ -421,4 +495,82 @@ test("clicking .profile__back hides Profile and dispatches close-profile without
   assert.equal(host.classList.contains("hidden"), true);
   assert.deepEqual(dispatched, ["close-profile"]);
   assert.equal(lobbyEl.classList.contains("hidden"), true, "profile.js must not unhide #lobby");
+});
+
+// ---------- mountProfile: skill / experience badges ----------
+
+test("each tier's skill badge sits beside its raw PPM, and the experience badge beside the name", async () => {
+  const host = await openProfile({
+    ...ME,
+    aggregates: [
+      { difficulty: "easy", races_played: 7, races_finished: 6, avg_ppm: 35.1, avg_accuracy: 95 },
+      { difficulty: "medium", races_played: 5, races_finished: 5, avg_ppm: 52, avg_accuracy: 90 },
+      { difficulty: "hard", races_played: 0, races_finished: 0, avg_ppm: null, avg_accuracy: 0 },
+    ],
+  });
+  const q = (sel) => host.querySelector(sel);
+
+  // The raw number stays; the band is printed next to it, not instead of it.
+  assert.equal(q("#p-ppm-easy").textContent, "35.1");
+  assert.equal(q("#p-skill-easy").textContent, "Racer");
+  assert.equal(q("#p-skill-easy").dataset.level, "3");
+  assert.equal(q("#p-skill-easy").title, "Easy skill band: Racer (level 3 of 6) at 35.1 PPM. 6.9 PPM to Speedster.");
+  assert.equal(q("#p-skill-easy").getAttribute("aria-label"), q("#p-skill-easy").title);
+
+  assert.equal(q("#p-ppm-medium").textContent, "52.0");
+  assert.equal(q("#p-skill-medium").textContent, "Lightning");
+  assert.equal(q("#p-skill-medium").dataset.level, "6");
+
+  assert.equal(q("#p-ppm-hard").textContent, "—");
+  assert.equal(q("#p-skill-hard").textContent, "—");
+  assert.equal(q("#p-skill-hard").dataset.level, "");
+
+  assert.equal(q("#t-total").textContent, "12");
+  assert.equal(q("#p-exp-name").textContent, "Regular");
+  assert.equal(q("#p-exp").dataset.level, "2");
+  assert.equal(q("#p-exp").getAttribute("aria-label"), "Experience band: Regular (level 2 of 7), 12 races. 13 races to Seasoned.");
+  assert.equal(q("#p-exp-next").textContent, "13 races to Seasoned");
+});
+
+test("the badge markup labels each band with its tier and kind", async () => {
+  const host = await openProfile({ ...ME, aggregates: [] });
+  for (const [d, D] of [["easy", "Easy"], ["medium", "Medium"], ["hard", "Hard"]]) {
+    // Badge directly under that tier's "<Tier> PPM" label, inside the same stat column.
+    const re = new RegExp(
+      `id="p-ppm-${d}">[^<]*</span>\\s*<span class="profile__headline-label">${D} PPM</span>\\s*` +
+        `<span class="profile__band profile__band--skill" id="p-skill-${d}"`
+    );
+    assert.match(host.innerHTML, re, `${d} badge follows its PPM figure`);
+  }
+  assert.match(host.innerHTML, /id="p-exp"[^>]*><span class="profile__band-kind" aria-hidden="true">Exp<\/span><span id="p-exp-name">/);
+});
+
+test("a racer with no races sees dashes and the first milestone, not a bottom band", async () => {
+  const host = await openProfile({ ...ME, aggregates: [] });
+  for (const d of ["easy", "medium", "hard"]) {
+    assert.equal(host.querySelector(`#p-skill-${d}`).textContent, "—");
+  }
+  assert.equal(host.querySelector("#p-exp-name").textContent, "—");
+  assert.equal(host.querySelector("#p-exp-next").textContent, "1 race to Rookie");
+});
+
+test("a signed-out render clears the badges", async () => {
+  // /api/me answers 401 for a signed-out racer, which getMe turns into null.
+  const listeners = new Map();
+  globalThis.document = {
+    addEventListener: (type, fn) => listeners.set(type, fn),
+    dispatchEvent: () => true,
+    getElementById: () => null,
+  };
+  globalThis.fetch = async () => ({ ok: false, status: 401, json: async () => ({}) });
+  const host = fakeEl();
+  mountProfile(host);
+  // Pre-paint a band so the clear is observable.
+  host.querySelector("#p-skill-easy").textContent = "Ace";
+  host.querySelector("#p-exp-name").textContent = "Veteran";
+  listeners.get("open-profile")();
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(host.querySelector("#p-skill-easy").textContent, "—");
+  assert.equal(host.querySelector("#p-exp-name").textContent, "—");
+  assert.equal(host.querySelector("#p-exp-next").textContent, "1 race to Rookie");
 });

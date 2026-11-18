@@ -73,7 +73,7 @@ lint: a stray test file in the wrong directory silently joins the wrong runner (
 
 | Directory | Runner | What's covered |
 | --- | --- | --- |
-| `public/src/*.test.js` | `node --test` | Client logic: `runner.js`/`remote-runner.js` (race loop), `game.js` (problem generation, difficulty), `bot.js`/`bot-timeline.js`, `handles.js`, `header.js`, `profile.js`, `screen-nav.js` (screen switching and Profile return-screen tracking), `room-config-rules.js`, `room-expiry.js`/`room-expiry-view.js` (the expired-screen state and DOM transition), `ui.js` (race screen, over a DOM stub), `lobby.js` (the race-handoff gate, the Quick Match refusal and the private room-full exit, over stubbed PartySocket + DOM), `room-client.js` (the back/forward-cache close and reconnect, and which handle `hello` offers and keeps), `rankings.js`, `seeded-rng.js`, `username-validator-client.js`, `recent-finishes.js`, `leaderboard.js`, `leaderboard-period.js`, `bug-report-context.js`, `auto-start.js`, `captcha-session.js`, `auth.js` (the location-based Google return URL and the error-code copy map), `identity.js` (the localStorage identity keys and their get-or-create semantics), `solo-result.js` (what a solo race reports — nothing for a quit), `catch-up.test.js` (`remote-runner.js`'s reconnect outbox and drain pause), and the one local patch to the vendored partysocket (`partysocket-flush-order.test.js`) |
+| `public/src/*.test.js` | `node --test` | Client logic: `runner.js`/`remote-runner.js` (race loop), `game.js` (problem generation, difficulty), `bot.js`/`bot-timeline.js`, `handles.js`, `header.js`, `profile.js`, `levels.js` (skill and experience bands), `screen-nav.js` (screen switching and Profile return-screen tracking), `room-config-rules.js`, `room-expiry.js`/`room-expiry-view.js` (the expired-screen state and DOM transition), `ui.js` (race screen, over a DOM stub), `lobby.js` (the race-handoff gate, the Quick Match refusal and the private room-full exit, over stubbed PartySocket + DOM), `room-client.js` (the back/forward-cache close and reconnect, and which handle `hello` offers and keeps), `rankings.js`, `seeded-rng.js`, `username-validator-client.js`, `recent-finishes.js`, `leaderboard.js`, `leaderboard-period.js`, `bug-report-context.js`, `auto-start.js`, `captcha-session.js`, `auth.js` (the location-based Google return URL and the error-code copy map), `identity.js` (the localStorage identity keys and their get-or-create semantics), `solo-result.js` (what a solo race reports — nothing for a quit), `catch-up.test.js` (`remote-runner.js`'s reconnect outbox and drain pause), and the one local patch to the vendored partysocket (`partysocket-flush-order.test.js`) |
 | `server/*.test.js` (vitest) | `vitest` | Room DO behavior: `room-identity.test.js`, `public-room.test.js`, `room-config.test.js`, `room-handles.test.js`, `room-winddown.test.js`, `room-allocation.test.js`, `room-captcha.test.js`, `room-captcha-e2e.test.js`, `room-race-deadline.test.js`, `room-answer-persistence.test.js`, `room-catchup.test.js`, `room-result-outbox.test.js`, `room-lifecycle.test.js`, `private-room-ten-players.test.js`, `lobby-router.test.js`, `room-lobby-release.test.js`, `socket-limit.test.js`, `guest-access.test.js` (every mode playable with no session, over real HTTP/WS), `room-account-handle.test.js` (a signed-in seat races under its username), `room-ranking.test.js` (the room's podium order matches the client's); room admission: `admission-pass.test.js` (signing, fresh vs stale), `admission-controls.test.js` (what a room admits with and without a pass, and the per-IP ceilings on `POST /api/rooms` and `/parties/*`) |
 | `server/room-stats.test.js`, `server/captcha.test.js` | `node --test` | Pure PPM/points math and the captcha helpers (trigger rate, seeded problem set, wire projection), no DO — explicitly carved out of vitest |
 | `worker/*.test.js` | `vitest` | Worker-level helpers with D1/binding dependencies: `auth.test.js` (better-auth Google sign-up and account linking, and what a password reset verifies and detaches, driven through the real handler), `claim.test.js` (`runClaim` in `auth.js`), `email.test.js`, `log-throttle.test.js`, `logger.test.js`, `plausibility.test.js`, `race-result-store.test.js`, `race-score.test.js`, `rate-limit.test.js`, `user-agent.test.js`, `username-validator.test.js`, `version.test.js` |
@@ -437,6 +437,20 @@ counts — the history is the racer's own log, so solo races are listed, unlike 
 | H5 | Click **All** | The full history comes back, newest first |
 | H6 | Finish a race, then reopen the profile | The new race is `#N+1` at the top; every older number is unchanged |
 | H7 | Sign out while the profile is open | Table clears to the empty line; **Load older races** is hidden |
+
+### Profile skill and experience bands
+
+Automated coverage: `public/src/levels.test.js` (the per-difficulty skill ladders, their anchoring
+on `HUMAN_AVG_PPM` and the captcha trigger, the experience milestones, and the progress lines)
+and `public/src/profile.test.js` (the badge helpers and what `mountProfile` paints). The bands are
+pure presentation over `/api/me`'s `avg_ppm` and `races_played` — nothing is stored — so the
+manual pass is only about layout.
+
+| # | Scenario | Expected |
+|---|---|---|
+| B1 | Open **Profile** with races on some tiers | Each tier's raw PPM is unchanged, with a band pill under its `<Tier> PPM` label; an **EXP** pill and an `N races to <next band>` line sit under the email. Hovering a pill names the tier, the raw PPM or race count, and the gap to the next band |
+| B2 | Open **Profile** for an account with no races | Every pill reads `—` and the experience line reads `1 race to Rookie` |
+| B3 | Repeat B1 at a phone width (≤600px) | Pills centre with the headline and wrap without horizontal scrolling |
 
 ## 7. Performance and load
 
