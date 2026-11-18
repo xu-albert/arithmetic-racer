@@ -335,9 +335,12 @@ test("skillBadge is a dash, not the bottom band, for a tier with no finished rac
 
 test("skillBadge reads the same number the headline prints", () => {
   const { skillBadge, headlinePpm, fmtPpm } = _internals;
-  for (const d of ["easy", "medium"]) {
-    assert.ok(skillBadge(BADGE_AGGS, d).label.includes(`at ${fmtPpm(headlinePpm(BADGE_AGGS, d))} PPM`));
-  }
+  const aggs = [{ difficulty: "easy", races_played: 3, races_finished: 3, avg_ppm: 34.06 }];
+  assert.equal(fmtPpm(headlinePpm(aggs, "easy")), "34.1");
+  assert.equal(
+    skillBadge(aggs, "easy").label,
+    "Easy skill band: Racer (level 3 of 6) at 34.1 PPM. 8.0 PPM to Speedster.",
+  );
 });
 
 test("expBadge reads the Total Races count across every tier", () => {

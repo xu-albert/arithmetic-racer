@@ -152,6 +152,9 @@ test("expBand is null for a malformed count", () => {
 
 test("skillProgressText names the gap to the next band, rounded up", () => {
   assert.equal(skillProgressText(skillBand(35.1, "easy"), 35.1), "6.9 PPM to Speedster");
+  assert.equal(skillProgressText(skillBand(29.4, "easy"), 29.4), "0.6 PPM to Racer");
+  assert.equal(skillProgressText(skillBand(35.3, "easy"), 35.3), "6.7 PPM to Speedster");
+  assert.equal(skillProgressText(skillBand(19.4, "medium"), 19.4), "0.6 PPM to Racer");
   // 41.99 is 0.01 short: it must not claim "0.0 PPM to".
   assert.equal(skillProgressText(skillBand(41.99, "easy"), 41.99), "0.1 PPM to Speedster");
   assert.equal(skillProgressText(skillBand(80, "easy"), 80), "Top skill band");

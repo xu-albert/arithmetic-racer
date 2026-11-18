@@ -131,7 +131,7 @@ export function expBand(races) {
 export function skillProgressText(band, ppm) {
   if (!band || typeof ppm !== "number" || !Number.isFinite(ppm)) return "";
   if (!band.next) return "Top skill band";
-  const gap = Math.max(0.1, Math.ceil((band.next.minPpm - ppm) * 10) / 10);
+  const gap = Math.max(0.1, Math.ceil(Number(((band.next.minPpm - ppm) * 10).toPrecision(12))) / 10);
   return `${gap.toFixed(1)} PPM to ${band.next.name}`;
 }
 
