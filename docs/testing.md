@@ -438,6 +438,20 @@ counts — the history is the racer's own log, so solo races are listed, unlike 
 | H6 | Finish a race, then reopen the profile | The new race is `#N+1` at the top; every older number is unchanged |
 | H7 | Sign out while the profile is open | Table clears to the empty line; **Load older races** is hidden |
 
+### Profile skill and experience bands
+
+Automated coverage: `public/src/levels.test.js` (the per-difficulty skill ladders, their anchoring
+on `HUMAN_AVG_PPM` and the captcha trigger, the experience milestones, and the progress lines)
+and `public/src/profile.test.js` (the badge helpers and what `mountProfile` paints). The bands are
+pure presentation over `/api/me`'s `avg_ppm` and `races_played` — nothing is stored — so the
+manual pass is only about layout.
+
+| # | Scenario | Expected |
+|---|---|---|
+| B1 | Open **Profile** with races on some tiers | Each tier's raw PPM is unchanged, with a band pill under its `<Tier> PPM` label; an **EXP** pill and an `N races to <next band>` line sit under the email. Hovering a pill names the tier, the raw PPM or race count, and the gap to the next band |
+| B2 | Open **Profile** for an account with no races | Every pill reads `—` and the experience line reads `1 race to Rookie` |
+| B3 | Repeat B1 at a phone width (≤600px) | Pills centre with the headline and wrap without horizontal scrolling |
+
 ## 7. Performance and load
 
 ### Ten-player private-room capability

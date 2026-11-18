@@ -17,6 +17,9 @@ import { validateUsernameSync } from "./username-validator-client.js";
 // is there for the same reason, and matters more: both screens interpolate a
 // username off the wire into innerHTML.
 import { fmtPpm, fmtPoints, fmtRelative, escapeHtml } from "./race-format.js";
+// Skill/experience bands are named readings of avg_ppm and the race count
+// already on this screen — nothing new is fetched or stored for them.
+import { skillBand, expBand, skillProgressText, expProgressText } from "./levels.js";
 
 // ---------- pure helpers ----------
 
@@ -139,6 +142,56 @@ function titleCase(s) {
 const DIFFICULTIES = ["easy", "medium", "hard"];
 
 /**
+ * What one tier's skill badge shows: the band name, its level (for styling),
+ * and the longer label a tooltip and screen reader get, naming the tier, the
+ * raw PPM the band was read from, and the gap to the next band.
+ *
+ * Takes the aggregates rather than a PPM so the badge reads exactly the number
+ * the headline above it prints (headlinePpm) — a badge and a figure that came
+ * from two different reads could disagree.
+ *
+ * @returns {{text: string, level: string, label: string}}
+ */
+function skillBadge(aggregates, difficulty) {
+  const ppm = headlinePpm(aggregates, difficulty);
+  const band = skillBand(ppm, difficulty);
+  const tier = titleCase(difficulty);
+  if (!band) {
+    const article = difficulty === "easy" ? "an" : "a";
+    return { text: "—", level: "", label: `${tier} skill band: none yet. Finish ${article} ${difficulty} race to earn one.` };
+  }
+  return {
+    text: band.name,
+    level: String(band.level),
+    label:
+      `${tier} skill band: ${band.name} (level ${band.level} of ${band.levels}) ` +
+      `at ${fmtPpm(ppm)} PPM. ${skillProgressText(band, ppm)}.`,
+  };
+}
+
+/**
+ * What the experience badge shows, from the same race count as the Total
+ * Races tile. `next` is the visible progress line beside it.
+ *
+ * @returns {{text: string, level: string, next: string, label: string}}
+ */
+function expBadge(aggregates) {
+  const races = computeTotalRaces(aggregates);
+  const band = expBand(races);
+  const next = expProgressText(band, races);
+  const count = `${races} ${races === 1 ? "race" : "races"}`;
+  if (!band) {
+    return { text: "—", level: "", next, label: `Experience band: none yet, ${count}. ${next}.` };
+  }
+  return {
+    text: band.name,
+    level: String(band.level),
+    next,
+    label: `Experience band: ${band.name} (level ${band.level} of ${band.levels}), ${count}. ${next}.`,
+  };
+}
+
+/**
  * Render the race-history table body for one list of RaceListItems.
  *
  * Takes the parsed rows rather than the fetch so it can be tested without a
@@ -222,6 +275,12 @@ const PROFILE_HTML = `
           <button class="profile__edit" type="button">Change your display name</button>
         </h2>
         <p class="profile__email" id="profile-email"></p>
+        <!-- Experience is the one level that spans every tier: it counts
+             races, not speed, so a race is a race whichever tier it was. -->
+        <p class="profile__levels">
+          <span class="profile__band profile__band--exp" role="img" id="p-exp" aria-label="Experience band: none yet"><span class="profile__band-kind" aria-hidden="true">Exp</span><span id="p-exp-name">—</span></span>
+          <span class="profile__levels-next" id="p-exp-next"></span>
+        </p>
       </div>
       <!-- Three tiers, three speeds. There is no combined number here on
            purpose: the difficulties are separate pools and are never blended
@@ -230,16 +289,19 @@ const PROFILE_HTML = `
         <div class="profile__headline-stat">
           <span class="profile__headline-num" id="p-ppm-easy">—</span>
           <span class="profile__headline-label">Easy PPM</span>
+          <span class="profile__band profile__band--skill" id="p-skill-easy" role="img" aria-label="Easy skill band: none yet">—</span>
           <span class="profile__headline-sub" id="p-points-easy">—</span>
         </div>
         <div class="profile__headline-stat">
           <span class="profile__headline-num" id="p-ppm-medium">—</span>
           <span class="profile__headline-label">Medium PPM</span>
+          <span class="profile__band profile__band--skill" id="p-skill-medium" role="img" aria-label="Medium skill band: none yet">—</span>
           <span class="profile__headline-sub" id="p-points-medium">—</span>
         </div>
         <div class="profile__headline-stat">
           <span class="profile__headline-num" id="p-ppm-hard">—</span>
           <span class="profile__headline-label">Hard PPM</span>
+          <span class="profile__band profile__band--skill" id="p-skill-hard" role="img" aria-label="Hard skill band: none yet">—</span>
           <span class="profile__headline-sub" id="p-points-hard">—</span>
         </div>
       </div>
@@ -358,7 +420,27 @@ export function mountProfile(host) {
     $("#t-finish").textContent = "—";
     $("#p-since").textContent = "—";
     $("#p-email-2").textContent = "—";
+    paintBands([]);
     showRecent([]);
+  }
+
+  /** Paint one badge: visible name, level for styling, full label for AT/tooltip. */
+  function paintBadge(el, nameEl, badge) {
+    nameEl.textContent = badge.text;
+    el.dataset.level = badge.level;
+    el.title = badge.label;
+    el.setAttribute("aria-label", badge.label);
+  }
+
+  /** The three skill badges and the experience badge, from one aggregates read. */
+  function paintBands(aggs) {
+    for (const d of DIFFICULTIES) {
+      const el = $(`#p-skill-${d}`);
+      paintBadge(el, el, skillBadge(aggs, d));
+    }
+    const exp = expBadge(aggs);
+    paintBadge($("#p-exp"), $("#p-exp-name"), exp);
+    $("#p-exp-next").textContent = exp.next;
   }
 
   function render(me) {
@@ -387,6 +469,7 @@ export function mountProfile(host) {
     $("#t-total").textContent = String(total);
     $("#t-acc").textContent = fmtPct(computeOverallAccuracy(aggs));
     $("#t-finish").textContent = fmtPct(computeFinishRate(aggs));
+    paintBands(aggs);
 
     // ---- race history ----
     // `recent` is the first unfiltered page and comes free with /api/me. If a
@@ -638,6 +721,8 @@ export const _internals = {
   computeTotalRaces,
   computeOverallAccuracy,
   computeFinishRate,
+  skillBadge,
+  expBadge,
   findAgg,
   errorText,
   escapeHtml,
